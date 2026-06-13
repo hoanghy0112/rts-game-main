@@ -19,6 +19,10 @@ $RECYCLE.BIN/
 .godot/
 .import/
 
+# Keep addon metadata files tracked
+!src/addons/**/*.uid
+!src/addons/**/*.import
+
 # Mono/.NET generated files
 .mono/
 bin/
