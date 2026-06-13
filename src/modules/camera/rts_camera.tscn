@@ -1,0 +1,11 @@
+[gd_scene format=3 uid="uid://dcinyv7uv2phl"]
+
+[ext_resource type="Script" uid="uid://brtr5okla4fsr" path="res://modules/camera/rts_camera.gd" id="1_o7igu"]
+
+[node name="RTSCameraRig" type="Node3D"]
+script = ExtResource("1_o7igu")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_name_in_owner=true]
+current = true
+near = 0.25
+far = 16384.0
