@@ -1,0 +1,156 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing git tag to release, for example v1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: 4.6.3
+  PROJECT_DIR: src
+  GAME_NAME: RTSGame
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Export, sign, smoke, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve release version
+        id: version
+        run: |
+          TAG_NAME="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG_NAME#v}"
+          if ! git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
+            echo "::error::Release tag ${TAG_NAME} does not exist."
+            exit 1
+          fi
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+          include-templates: true
+
+      - name: Cache Godot imports
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_DIR }}/.godot
+          key: godot-import-${{ runner.os }}-${{ env.GODOT_VERSION }}-${{ hashFiles('src/project.godot', 'src/export_presets.cfg', 'src/**/*.import') }}
+          restore-keys: |
+            godot-import-${{ runner.os }}-${{ env.GODOT_VERSION }}-
+
+      - name: Inject release version into exported project
+        run: |
+          cat > "${PROJECT_DIR}/override.cfg" <<VERSION_EOF
+          [application]
+          config/version="${{ steps.version.outputs.version }}"
+          VERSION_EOF
+
+      - name: Import project assets
+        run: godot --headless --path "${PROJECT_DIR}" --import --quit-after 120
+
+      - name: Static GDScript parse checks
+        run: |
+          mapfile -t scripts < <(find "${PROJECT_DIR}" -name '*.gd' -type f | sort)
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No GDScript files found; skipping parser checks."
+            exit 0
+          fi
+          for script in "${scripts[@]}"; do
+            resource_path="res://${script#${PROJECT_DIR}/}"
+            godot --headless --path "${PROJECT_DIR}" --check-only --script "${resource_path}"
+          done
+
+      - name: Export production builds
+        run: |
+          mkdir -p dist/windows dist/linux dist/packages
+          godot --headless --path "${PROJECT_DIR}" --export-release "Windows Desktop" "../dist/windows/${GAME_NAME}.exe"
+          godot --headless --path "${PROJECT_DIR}" --export-release "Linux/X11" "../dist/linux/${GAME_NAME}.x86_64"
+          chmod +x "dist/linux/${GAME_NAME}.x86_64"
+
+      - name: Package production builds
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd dist/windows
+          zip -9 -r "../packages/${GAME_NAME}-${VERSION}-windows-x86_64.zip" .
+          cd ../..
+          tar -C dist/linux -czf "dist/packages/${GAME_NAME}-${VERSION}-linux-x86_64.tar.gz" .
+          cd dist/packages
+          sha256sum * > "${GAME_NAME}-${VERSION}-SHA256SUMS.txt"
+
+      - name: Release smoke checks
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd dist/packages
+          unzip -t "${GAME_NAME}-${VERSION}-windows-x86_64.zip"
+          tar -tzf "${GAME_NAME}-${VERSION}-linux-x86_64.tar.gz" >/dev/null
+          sha256sum -c "${GAME_NAME}-${VERSION}-SHA256SUMS.txt"
+          cd ../..
+          timeout 30s "dist/linux/${GAME_NAME}.x86_64" --headless --quit-after 10
+
+      - name: Require release signing key
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "${RELEASE_GPG_PRIVATE_KEY}" ]; then
+            echo "::error::Configure RELEASE_GPG_PRIVATE_KEY before publishing signed releases."
+            exit 1
+          fi
+
+      - name: Import GPG signing key
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s' "${RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
+
+      - name: Sign release packages
+        env:
+          RELEASE_GPG_KEY_ID: ${{ secrets.RELEASE_GPG_KEY_ID }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          cd dist/packages
+          for file in *; do
+            [ -f "${file}" ] || continue
+            if [ -n "${RELEASE_GPG_KEY_ID}" ]; then
+              gpg --batch --yes --pinentry-mode loopback --passphrase "${RELEASE_GPG_PASSPHRASE}" --local-user "${RELEASE_GPG_KEY_ID}" --armor --detach-sign "${file}"
+            else
+              gpg --batch --yes --pinentry-mode loopback --passphrase "${RELEASE_GPG_PASSPHRASE}" --armor --detach-sign "${file}"
+            fi
+          done
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          NOTES="Godot ${GODOT_VERSION} production builds for ${TAG_NAME}. Includes Windows and Linux packages, SHA256 checksums, and detached GPG signatures."
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" dist/packages/* --clobber
+          else
+            gh release create "${TAG_NAME}" dist/packages/* --verify-tag --title "${GAME_NAME} ${TAG_NAME}" --notes "${NOTES}"
+          fi
