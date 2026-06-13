@@ -1,0 +1,47 @@
+# OS temporary files
+.DS_Store
+.DS_Store?
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.Spotlight-V100/
+.Trashes/
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Godot
+.godot/
+.import/
+
+# Mono/.NET generated files
+.mono/
+bin/
+obj/
+*.csproj.user
+*.sln.docstates
+
+# Build artifacts
+*.export
+*.zip
+*.pck
+*.exe
+*.app
+*.dmg
+*.apk
+*.apk.idsig
+*.aab
+*.x86_64
+*.x86
+*.so
+*.dll
+*.dylib
+*.pdb
+
+# Logs
+*.log
