@@ -1,0 +1,17 @@
+[gd_scene format=3 uid="uid://cj2c506ondag"]
+
+[ext_resource type="PackedScene" uid="uid://b66w2jyio1s8j" path="res://modules/village/house/sketchfab_scene.tscn" id="1_4m5p6"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_collision"]
+size = Vector3(5.72, 1.35, 4.84)
+
+[node name="CartoonHut3DModelPack" type="Node3D" unique_id=1366087437]
+
+[node name="StaticBody3D" type="StaticBody3D" parent="." unique_id=939347941]
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D" unique_id=262783704]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.675, 0)
+shape = SubResource("BoxShape3D_collision")
+
+[node name="Sketchfab_Scene" parent="." unique_id=1507752805 instance=ExtResource("1_4m5p6")]

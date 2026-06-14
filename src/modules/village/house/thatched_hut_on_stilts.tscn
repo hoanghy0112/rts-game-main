@@ -1,0 +1,17 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" uid="uid://cth3myotycl3k" path="res://assets/models/village/house/thatched_hut_on_stilts/model.glb" id="1_hut"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_collision"]
+size = Vector3(5.74, 3.04, 5.74)
+
+[node name="ThatchedHutOnStilts" type="Node3D"]
+
+[node name="Model" parent="." instance=ExtResource("1_hut")]
+transform = Transform3D(3, 0, 0, 0, 3, 0, 0, 0, 3, 0.0048, 1.5282, 0.00375)
+
+[node name="StaticBody3D" type="StaticBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.52, 0)
+shape = SubResource("BoxShape3D_collision")
