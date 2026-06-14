@@ -171,7 +171,9 @@ func _get_point_index(curve_index: int, is_center: bool, is_cp_in: bool, is_cp_o
 
 # TODO - figure out of this new "secondary" bool should be used
 func _get_handle_value(gizmo: EditorNode3DGizmo, index: int, secondary: bool):
-	var river: RiverManager = gizmo.get_node_3d()
+	var river := _get_valid_river(gizmo)
+	if river == null:
+		return null
 	var point_count = river.curve.get_point_count()
 	if _is_center_point(index, point_count):
 		return river.curve.get_point_position(_get_curve_index(index, point_count))
@@ -186,7 +188,9 @@ func _get_handle_value(gizmo: EditorNode3DGizmo, index: int, secondary: bool):
 # Called when handle is moved
 # TODO - figure out how this new "secondary" bool should be used
 func _set_handle(gizmo: EditorNode3DGizmo, index: int, secondary: bool, camera: Camera3D, point: Vector2) -> void:
-	var river: RiverManager = gizmo.get_node_3d()
+	var river := _get_valid_river(gizmo)
+	if river == null or editor_plugin == null:
+		return
 	var space_state = river.get_world_3d().direct_space_state
 
 	var global_transform: Transform3D = river.transform
@@ -316,7 +320,9 @@ func _set_handle(gizmo: EditorNode3DGizmo, index: int, secondary: bool, camera: 
 # Handle Undo / Redo of handle movements
 # TODO - figure out of this new "secondary" bool should be used
 func _commit_handle(gizmo: EditorNode3DGizmo, index: int, secondary: bool, restore, cancel: bool = false) -> void:
-	var river: RiverManager = gizmo.get_node_3d()
+	var river := _get_valid_river(gizmo)
+	if river == null or editor_plugin == null:
+		return
 	var point_count = river.curve.get_point_count()
 
 	var ur = editor_plugin.get_undo_redo()
@@ -356,6 +362,10 @@ func _commit_handle(gizmo: EditorNode3DGizmo, index: int, secondary: bool, resto
 
 
 func _redraw(gizmo: EditorNode3DGizmo) -> void:
+	var river := _get_valid_river(gizmo)
+	if river == null:
+		return
+
 	# Work around for issue where using "get_material" doesn't return a
 	# material when redraw is being called manually from _set_handle()
 	# so I'm caching the materials instead
@@ -365,13 +375,19 @@ func _redraw(gizmo: EditorNode3DGizmo) -> void:
 		_handle_lines_mat = get_material("handle_lines", gizmo)
 	gizmo.clear()
 
-	var river := gizmo.get_node_3d() as RiverManager
-
-	if not river.is_connected("river_changed", Callable(self, "_redraw")):
-		river.river_changed.connect(_redraw.bind(gizmo))
-
 	_draw_path(gizmo, river.curve)
 	_draw_handles(gizmo, river)
+
+
+func _get_valid_river(gizmo: EditorNode3DGizmo) -> RiverManager:
+	if not is_instance_valid(gizmo):
+		return null
+	var river := gizmo.get_node_3d() as RiverManager
+	if not is_instance_valid(river) or river.is_queued_for_deletion():
+		return null
+	if not river.is_inside_tree() or river.curve == null:
+		return null
+	return river
 
 
 func _draw_path(gizmo: EditorNode3DGizmo, curve: Curve3D) -> void:

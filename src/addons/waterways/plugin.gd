@@ -54,18 +54,26 @@ func _enter_tree() -> void:
 
 
 func _on_generate_flowmap_pressed() -> void:
+	if not is_instance_valid(_edited_node) or not _edited_node.has_method("bake_texture"):
+		return
 	_edited_node.bake_texture()
 
 
 func _on_generate_mesh_pressed() -> void:
+	if not is_instance_valid(_edited_node) or not _edited_node.has_method("spawn_mesh"):
+		return
 	_edited_node.spawn_mesh()
 
 
 func _on_debug_view_changed(index : int) -> void:
+	if not is_instance_valid(_edited_node) or not _edited_node.has_method("set_debug_view"):
+		return
 	_edited_node.set_debug_view(index)
 
 
 func _on_generate_system_maps_pressed() -> void:
+	if not is_instance_valid(_edited_node) or not _edited_node.has_method("generate_system_maps"):
+		return
 	_edited_node.generate_system_maps()
 
 
@@ -195,7 +203,7 @@ func _on_option_change(option, value) -> void:
 
 
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
-	if not _edited_node:
+	if not is_instance_valid(_edited_node):
 		return AFTER_GUI_INPUT_PASS
 
 	if _edited_node is RiverManager:

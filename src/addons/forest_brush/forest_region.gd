@@ -152,6 +152,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_editor_gizmo_update_pending = false
 	clear_runtime_instances()
 
 
@@ -370,7 +371,7 @@ func clear_runtime_instances() -> void:
 
 
 func request_editor_gizmo_update() -> void:
-	if not Engine.is_editor_hint() or not is_inside_tree() or not _is_in_active_edited_scene():
+	if not Engine.is_editor_hint() or is_queued_for_deletion() or not is_inside_tree() or not _is_in_active_edited_scene():
 		return
 	if _editor_gizmo_update_pending:
 		return
@@ -381,7 +382,7 @@ func request_editor_gizmo_update() -> void:
 
 func _flush_editor_gizmo_update() -> void:
 	_editor_gizmo_update_pending = false
-	if not Engine.is_editor_hint() or not is_inside_tree() or not _is_in_active_edited_scene():
+	if not Engine.is_editor_hint() or is_queued_for_deletion() or not is_inside_tree() or not _is_in_active_edited_scene():
 		return
 
 	update_gizmos()

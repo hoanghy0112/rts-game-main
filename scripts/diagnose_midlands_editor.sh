@@ -5,6 +5,8 @@ GODOT_BIN="${GODOT_BIN:-/home/hy/Downloads/Godot_v4.6.3-stable_linux.x86_64}"
 SCENE_PATH="${SCENE_PATH:-res://maps/midlands/midlands.tscn}"
 MODE="${MODE:-load}"
 SAVE_COUNT="${SAVE_COUNT:-1}"
+EDIT_TERRAIN="${EDIT_TERRAIN:-0}"
+TERRAIN_EDIT_METHOD="${TERRAIN_EDIT_METHOD:-plugin}"
 HOLD_FRAMES="${HOLD_FRAMES:-${HOLD_SECONDS:-600}}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
 CYCLES="${CYCLES:-1}"
@@ -123,6 +125,8 @@ run_editor_load() {
 			--quit-after "$HOLD_FRAMES"
 			-- "--scene-path=$SCENE_PATH"
 			"--save-count=$SAVE_COUNT"
+			"--edit-terrain=$EDIT_TERRAIN"
+			"--terrain-edit-method=$TERRAIN_EDIT_METHOD"
 		)
 	else
 		godot_args+=(
@@ -175,6 +179,8 @@ echo "Scene: $SCENE_PATH"
 echo "Mode: $MODE"
 if [ "$MODE" = "save" ]; then
 	echo "Saves per editor instance: $SAVE_COUNT"
+	echo "Edit terrain before each save: $EDIT_TERRAIN"
+	echo "Terrain edit method: $TERRAIN_EDIT_METHOD"
 fi
 echo "Cycles per profile: $CYCLES"
 echo "Hold frames per editor load: $HOLD_FRAMES"

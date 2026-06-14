@@ -34,7 +34,9 @@ func _get_handle_name(gizmo: EditorNode3DGizmo, index: int, secondary: bool) -> 
 
 
 func _get_handle_value(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool):
-	var waterfall : WaterfallManager = gizmo.get_node_3d()
+	var waterfall := _get_valid_waterfall(gizmo)
+	if waterfall == null:
+		return null
 	if handle_id == 0:
 		return waterfall.points[0]
 	if handle_id == 1:
@@ -42,7 +44,9 @@ func _get_handle_value(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool
 
 
 func _set_handle(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool, camera: Camera3D, screen_pos: Vector2) -> void:
-	var waterfall : WaterfallManager = gizmo.get_node_3d()
+	var waterfall := _get_valid_waterfall(gizmo)
+	if waterfall == null:
+		return
 	
 	var global_transform : Transform3D = waterfall.transform
 	if waterfall.is_inside_tree():
@@ -65,7 +69,9 @@ func _set_handle(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool, came
 
 
 func _commit_handle(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool, restore, cancel: bool) -> void:
-	var waterfall : WaterfallManager = gizmo.get_node_3d()
+	var waterfall := _get_valid_waterfall(gizmo)
+	if waterfall == null or editor_plugin == null:
+		return
 	
 	var ur := editor_plugin.get_undo_redo()
 	ur.create_action("Change Waterfall Shape")
@@ -82,16 +88,25 @@ func _commit_handle(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool, r
 
 
 func _redraw(gizmo: EditorNode3DGizmo) -> void:
+	var waterfall := _get_valid_waterfall(gizmo)
+	if waterfall == null:
+		return
+
 	gizmo.clear()
-	
-	var waterfall := gizmo.get_node_3d() as WaterfallManager
 	
 	var handles := PackedVector3Array()
 	handles.append(waterfall.points[0])
 	handles.append(waterfall.points[1])
 	
 	gizmo.add_handles(handles, get_material("handles", gizmo), [])
-	
-	if not waterfall.is_connected("waterfall_changed", Callable(self, "_redraw")):
-		waterfall.waterfall_changed.connect(_redraw.bind(gizmo))
-	
+
+
+func _get_valid_waterfall(gizmo: EditorNode3DGizmo) -> WaterfallManager:
+	if not is_instance_valid(gizmo):
+		return null
+	var waterfall := gizmo.get_node_3d() as WaterfallManager
+	if not is_instance_valid(waterfall) or waterfall.is_queued_for_deletion():
+		return null
+	if not waterfall.is_inside_tree() or waterfall.points.size() < 2:
+		return null
+	return waterfall

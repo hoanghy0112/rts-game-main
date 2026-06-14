@@ -120,6 +120,9 @@ var _st : SurfaceTool
 var _mdt : MeshDataTool
 var _debug_material : ShaderMaterial
 var _first_enter_tree := true
+var _exiting_tree := false
+var _river_generation_pending := false
+var _editor_gizmo_update_pending := false
 var _filter_renderer : PackedScene
 # Serialised private variables
 var _material : ShaderMaterial
@@ -415,8 +418,14 @@ func _init() -> void:
 
 
 func _enter_tree() -> void:
+	_exiting_tree = false
 	if Engine.is_editor_hint() and _first_enter_tree:
 		_first_enter_tree = false
+
+	if Engine.is_editor_hint():
+		var gizmo_update_callable := Callable(self, "request_editor_gizmo_update")
+		if not is_connected("river_changed", gizmo_update_callable):
+			connect("river_changed", gizmo_update_callable)
 
 	if not curve:
 		curve = Curve3D.new()
@@ -432,7 +441,7 @@ func _enter_tree() -> void:
 		new_mesh_instance.name = "RiverMeshInstance"
 		add_child(new_mesh_instance)
 		mesh_instance = get_child(0) as MeshInstance3D
-		_generate_river()
+		_request_generate_river()
 	else:
 		mesh_instance = get_child(0) as MeshInstance3D
 		if mesh_instance != null and mesh_instance.mesh != null and mesh_instance.mesh.get_surface_count() > 0:
@@ -440,7 +449,7 @@ func _enter_tree() -> void:
 			if existing_material != null:
 				_material = existing_material
 		elif mesh_instance != null:
-			_generate_river()
+			_request_generate_river()
 
 	if river_style != null:
 		_apply_river_style(river_style, false)
@@ -450,6 +459,16 @@ func _enter_tree() -> void:
 	set_materials("i_distmap", dist_pressure)
 	set_materials("i_flowmap", flow_foam_noise)
 	set_materials("i_texture_foam_noise", load(FOAM_NOISE_PATH) as Texture2D)
+
+
+func _exit_tree() -> void:
+	_exiting_tree = true
+	_river_generation_pending = false
+	_editor_gizmo_update_pending = false
+	var gizmo_update_callable := Callable(self, "request_editor_gizmo_update")
+	if is_connected("river_changed", gizmo_update_callable):
+		disconnect("river_changed", gizmo_update_callable)
+	mesh_instance = null
 
 
 func _get_configuration_warning() -> String:
@@ -480,7 +499,7 @@ func add_point(position : Vector3, index : int, dir : Vector3 = Vector3.ZERO, wi
 		var new_width = width if width != 0.0 else (widths[index] + widths[index + 1]) / 2.0
 		widths.insert(index + 1, new_width) # We set the width to the average of the two surrounding widths
 	emit_signal("river_changed")
-	_generate_river()
+	_request_generate_river()
 
 
 func remove_point(index : int) -> void:
@@ -490,7 +509,7 @@ func remove_point(index : int) -> void:
 	curve.remove_point(index)
 	widths.remove_at(index)
 	emit_signal("river_changed")
-	_generate_river()
+	_request_generate_river()
 
 
 func bake_texture() -> void:
@@ -500,17 +519,17 @@ func bake_texture() -> void:
 
 func set_curve_point_position(index : int, position : Vector3) -> void:
 	curve.set_point_position(index, position)
-	_generate_river()
+	_request_generate_river()
 
 
 func set_curve_point_in(index : int, position : Vector3) -> void:
 	curve.set_point_in(index, position)
-	_generate_river()
+	_request_generate_river()
 
 
 func set_curve_point_out(index : int, position : Vector3) -> void:
 	curve.set_point_out(index, position)
-	_generate_river()
+	_request_generate_river()
 
 
 func set_widths(new_widths) -> void:
@@ -518,7 +537,7 @@ func set_widths(new_widths) -> void:
 	_sync_widths_to_curve()
 	if _first_enter_tree:
 		return
-	_generate_river()
+	_request_generate_river()
 
 
 func set_materials(param : String, value) -> void:
@@ -530,7 +549,7 @@ func set_materials(param : String, value) -> void:
 
 func set_debug_view(index : int) -> void:
 	debug_view = index
-	if mesh_instance == null:
+	if not _is_mesh_instance_ready():
 		return
 	if index == 0:
 		mesh_instance.material_override = null
@@ -544,7 +563,7 @@ func spawn_mesh() -> void:
 	if owner == null:
 		push_warning("Cannot create MeshInstance3D sibling when River is root.")
 		return
-	if mesh_instance == null:
+	if not _is_mesh_instance_ready():
 		return
 	var sibling_mesh := mesh_instance.duplicate(true)
 	get_parent().add_child(sibling_mesh)
@@ -705,8 +724,8 @@ func _apply_river_style(style: RiverStyleData, invalidate_flowmap: bool) -> void
 	if invalidate_flowmap:
 		_invalidate_flowmap()
 
-	if mesh_instance != null and curve != null:
-		_generate_river()
+	if _is_mesh_instance_ready() and curve != null:
+		_request_generate_river()
 
 	notify_property_list_changed()
 	if invalidate_flowmap:
@@ -746,6 +765,44 @@ func _invalidate_flowmap() -> void:
 	update_configuration_warnings()
 
 
+func request_editor_gizmo_update() -> void:
+	if not Engine.is_editor_hint() or _exiting_tree or is_queued_for_deletion():
+		return
+	if not is_inside_tree() or not _is_in_active_edited_scene():
+		return
+	if _editor_gizmo_update_pending:
+		return
+
+	_editor_gizmo_update_pending = true
+	_flush_editor_gizmo_update.call_deferred()
+
+
+func _flush_editor_gizmo_update() -> void:
+	_editor_gizmo_update_pending = false
+	if not Engine.is_editor_hint() or _exiting_tree or is_queued_for_deletion():
+		return
+	if not is_inside_tree() or not _is_in_active_edited_scene():
+		return
+
+	update_gizmos()
+
+
+func _request_generate_river() -> void:
+	if Engine.is_editor_hint():
+		if _river_generation_pending:
+			return
+		_river_generation_pending = true
+		_flush_generate_river.call_deferred()
+		return
+
+	_generate_river()
+
+
+func _flush_generate_river() -> void:
+	_river_generation_pending = false
+	_generate_river()
+
+
 func _sync_widths_to_curve() -> void:
 	var target_count := 2
 	if curve:
@@ -762,7 +819,9 @@ func _sync_widths_to_curve() -> void:
 
 
 func _generate_river() -> void:
-	if curve == null or mesh_instance == null or not is_instance_valid(_material):
+	if not _can_update_editor_visuals():
+		return
+	if curve == null or not _is_mesh_instance_ready() or not is_instance_valid(_material):
 		return
 	_sync_widths_to_curve()
 	var average_width := WaterHelperMethods.sum_array(widths) / float(widths.size() / 2)
@@ -775,6 +834,8 @@ func _generate_river() -> void:
 
 
 func _generate_flowmap(flowmap_resolution : float) -> void:
+	if not _is_mesh_instance_ready():
+		return
 	
 	var image := Image.create(flowmap_resolution, flowmap_resolution, true, Image.FORMAT_RGB8)
 	image.fill(Color(0.0, 0.0, 0.0))
@@ -858,3 +919,38 @@ func _generate_flowmap(flowmap_resolution : float) -> void:
 # Signal Methods
 func properties_changed() -> void:
 	emit_signal("river_changed")
+
+
+func _can_update_editor_visuals() -> bool:
+	if _exiting_tree or is_queued_for_deletion():
+		return false
+	if Engine.is_editor_hint():
+		return is_inside_tree() and _is_in_active_edited_scene()
+	return true
+
+
+func _is_mesh_instance_ready() -> bool:
+	if not is_instance_valid(mesh_instance) or mesh_instance.is_queued_for_deletion():
+		return false
+	if Engine.is_editor_hint():
+		return mesh_instance.is_inside_tree() and _can_update_editor_visuals()
+	return true
+
+
+func _is_in_active_edited_scene() -> bool:
+	if not Engine.is_editor_hint():
+		return true
+	if not is_inside_tree():
+		return false
+	if not Engine.has_singleton(&"EditorInterface"):
+		return true
+
+	var editor_interface := Engine.get_singleton(&"EditorInterface")
+	if editor_interface == null or not editor_interface.has_method("get_edited_scene_root"):
+		return true
+
+	var edited_root := editor_interface.call("get_edited_scene_root") as Node
+	if not is_instance_valid(edited_root):
+		return false
+
+	return self == edited_root or edited_root.is_ancestor_of(self)
