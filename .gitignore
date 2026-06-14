@@ -49,3 +49,6 @@ obj/
 
 # Logs
 *.log
+
+# Tool artifacts
+.playwright-mcp/
