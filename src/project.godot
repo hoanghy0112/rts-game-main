@@ -14,6 +14,10 @@ config/name="RTS Game"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+SettingsManager="*res://globals/settings_manager.gd"
+
 [dotnet]
 
 project/assembly_name="RTS Game"

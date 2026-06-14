@@ -19,12 +19,16 @@ const METHOD_GET_MOVE_SENSITIVITY: StringName = &"get_move_sensitivity"
 
 @export_group("Movement")
 @export var move_speed: float = 40.0
+@export var fast_move_multiplier: float = 3.0
+@export var zoom_move_reference_distance: float = DEFAULT_DISTANCE
+@export var min_zoom_move_scale: float = 0.5
+@export var max_zoom_move_scale: float = 7.0
 @export var move_lerp_speed: float = 12.0
 
 @export_group("Zoom")
 @export var zoom_step: float = 5.0
-@export var min_distance: float = 8.0
-@export var max_distance: float = 80.0
+@export var min_distance: float = 3.0
+@export var max_distance: float = 220.0
 @export var zoom_lerp_speed: float = 14.0
 
 @export_group("Rotation")
@@ -87,11 +91,14 @@ func _handle_keyboard_movement(delta: float) -> void:
 
 	var right := _yaw_right(_desired_yaw)
 	var forward := _yaw_forward(_desired_yaw)
+	var movement_speed := move_speed * _get_move_sensitivity() * _get_zoom_move_scale()
+	if Input.is_key_pressed(KEY_SHIFT):
+		movement_speed *= maxf(fast_move_multiplier, 0.0)
+
 	var target_y := _desired_target_position.y
 	_desired_target_position += (
 		(right * input_vector.x + forward * input_vector.y)
-		* move_speed
-		* _get_move_sensitivity()
+		* movement_speed
 		* delta
 	)
 	_desired_target_position.y = target_y
@@ -215,6 +222,13 @@ func _get_mouse_sensitivity() -> float:
 
 func _get_move_sensitivity() -> float:
 	return _get_settings_sensitivity(METHOD_GET_MOVE_SENSITIVITY)
+
+
+func _get_zoom_move_scale() -> float:
+	var raw_scale := maxf(_current_distance, 0.001) / maxf(zoom_move_reference_distance, 0.001)
+	var lower_limit := minf(min_zoom_move_scale, max_zoom_move_scale)
+	var upper_limit := maxf(min_zoom_move_scale, max_zoom_move_scale)
+	return clampf(raw_scale, lower_limit, upper_limit)
 
 
 func _get_settings_sensitivity(method_name: StringName) -> float:
