@@ -10,3 +10,24 @@ https://ambientcg.com/view?id=Rock030
 
 Cliff:
 https://ambientcg.com/view?id=Rock023
+
+Sandy rocky road:
+https://ambientcg.com/view?id=Ground078
+Packed from 1K-JPG Color+Displacement and NormalGL+Roughness.
+The 1024x512 source channels were tiled vertically to 1024x1024 for Terrain3D.
+
+Village sand:
+https://ambientcg.com/view?id=Ground080
+Packed from 1K-JPG Color+Displacement and NormalGL+Roughness.
+
+House ground:
+https://ambientcg.com/view?id=Ground071
+Packed from 1K-JPG Color+Displacement and NormalGL+Roughness.
+
+Field mud:
+https://ambientcg.com/view?id=Ground095A
+Packed from 1K-JPG Color+Displacement and NormalGL+Roughness.
+
+Forest fallback plants:
+Project-authored procedural low-poly scenes.
+See res://assets/models/forest/ATTRIBUTION.md.

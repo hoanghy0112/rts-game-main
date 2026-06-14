@@ -2,12 +2,18 @@
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_788j8"]
 albedo_color = Color(1, 0, 0, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="SphereMesh" id="SphereMesh_u4ac2"]
 material = SubResource("StandardMaterial3D_788j8")
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_3i52q"]
 albedo_color = Color(1, 0.540167, 0.11, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="BoxMesh" id="BoxMesh_xyuxq"]
 material = SubResource("StandardMaterial3D_3i52q")
@@ -15,6 +21,9 @@ size = Vector3(0.85, 0.85, 0.85)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_p0ha4"]
 albedo_color = Color(0.48, 1, 0.497333, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="PrismMesh" id="PrismMesh_xnm4h"]
 material = SubResource("StandardMaterial3D_p0ha4")
@@ -22,6 +31,9 @@ size = Vector3(1, 1, 0.855)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_4koei"]
 albedo_color = Color(0.45, 0.596667, 1, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_dp7xj"]
 material = SubResource("StandardMaterial3D_4koei")

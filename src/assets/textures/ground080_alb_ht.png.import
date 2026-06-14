@@ -2,8 +2,8 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dmeisc4wdnrvu"
-path.s3tc="res://.godot/imported/gltf_embedded_0@channels=G.jpeg-5d4eb30bb2209c9ec51f9cba7fd25ca9.s3tc.ctex"
+uid="uid://c30s0tjt5e5gn"
+path.bptc="res://.godot/imported/ground080_alb_ht.png-361ea7781609ab6d769563fb686187d1.bptc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
@@ -11,18 +11,18 @@ metadata={
 
 [deps]
 
-source_file="res://assets/models/village/house/thatched_hut_on_stilts/textures/gltf_embedded_0@channels=G.jpeg"
-dest_files=["res://.godot/imported/gltf_embedded_0@channels=G.jpeg-5d4eb30bb2209c9ec51f9cba7fd25ca9.s3tc.ctex"]
+source_file="res://assets/textures/ground080_alb_ht.png"
+dest_files=["res://.godot/imported/ground080_alb_ht.png-361ea7781609ab6d769563fb686187d1.bptc.ctex"]
 
 [params]
 
 compress/mode=2
-compress/high_quality=false
+compress/high_quality=true
 compress/lossy_quality=0.7
 compress/uastc_level=0
 compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
-compress/normal_map=0
+compress/normal_map=2
 compress/channel_pack=0
 mipmaps/generate=true
 mipmaps/limit=-1
@@ -38,4 +38,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

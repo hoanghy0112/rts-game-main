@@ -7,6 +7,9 @@
 vertex_color_use_as_albedo = true
 albedo_color = Color(0.83, 0.83, 0.83, 1)
 albedo_texture = ExtResource("1_mek0c")
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.95
 normal_enabled = true
 normal_texture = ExtResource("2_pp13c")
 uv1_scale = Vector3(0.02, 0.02, 0.02)
