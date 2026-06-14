@@ -12,16 +12,15 @@ sky_material = SubResource("ProceduralSkyMaterial_pfo6c")
 background_mode = 2
 sky = SubResource("Sky_ao8jh")
 tonemap_mode = 3
-sdfgi_enabled = true
+sdfgi_enabled = false
 sdfgi_energy = 0.8
-glow_enabled = true
 fog_mode = 1
 fog_light_color = Color(0.56078434, 0.72156864, 0.8392157, 1)
 fog_density = 0.0937
 fog_depth_curve = 10.196474
 fog_depth_begin = 83.3
 fog_depth_end = 604.2
-volumetric_fog_density = 0.002
+volumetric_fog_density = 0.0
 volumetric_fog_albedo = Color(0.28817517, 0.60483795, 0.7773397, 1)
 volumetric_fog_length = 277.34
 volumetric_fog_detail_spread = 6.0
@@ -30,11 +29,12 @@ volumetric_fog_sky_affect = 0.0
 [node name="EnvironmentRig" type="Node3D" unique_id=1375303899]
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1382714300]
-transform = Transform3D(-0.18586503, 0.699031, -0.6905142, 0.08929903, 0.7118686, 0.6966124, 0.978509, 0.06781362, -0.19473425, 0, 0, 0)
-light_energy = 2.306
+transform = Transform3D(0.70062816, 0.40892902, -0.5847197, 0.31495944, 0.5580782, 0.7676907, 0.6402504, -0.72202885, 0.2622093, 0, 0, 0)
+light_energy = 1.5
+light_specular = 0.0
 light_bake_mode = 0
 shadow_enabled = true
-directional_shadow_max_distance = 590.4
+directional_shadow_max_distance = 220.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1101563664]
 environment = SubResource("Environment_bsx4n")
