@@ -2,7 +2,9 @@
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_tillering"]
 albedo_color = Color(0.28, 0.68, 0.22, 1)
-roughness = 0.86
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="BoxMesh" id="BoxMesh_blade"]
 size = Vector3(0.055, 0.72, 0.055)

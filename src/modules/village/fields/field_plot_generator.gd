@@ -11,16 +11,17 @@ const NEIGHBOR_OFFSETS := [
 var cell_size: float = 4.0
 var origin: Vector3 = Vector3.ZERO
 var generation_seed: int = 0
-var min_plot_width: float = 2.4
-var max_plot_width: float = 5.6
+var min_plot_width: float = 4.8
+var max_plot_width: float = 11.2
 var bund_gap: float = 0.35
 var field_road_gap_width: float = 1.2
-var min_plot_length: float = 4.0
-var max_plot_length: float = 12.0
+var min_plot_length: float = 8.0
+var max_plot_length: float = 24.0
 var sample_step: float = 1.0
 var road_width: float = 3.2
 var road_clearance: float = 1.0
 var horizontal_split_bias: float = 1.0
+var field_shape_variation: float = 0.65
 var generated_road_polylines: Array = []
 var _road_segments: Array[Dictionary] = []
 var _road_segment_buckets: Dictionary = {}
@@ -64,7 +65,7 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 		var safe_max_width := maxf(max_plot_width, safe_min_width)
 		var safe_gap := maxf(maxf(field_road_gap_width, bund_gap), 0.0)
 		var safe_sample_step := maxf(sample_step, minf(cell_size, safe_min_width) * 0.25)
-		var vertical_corridor_centers := _get_vertical_corridor_centers(min_u, max_u, safe_gap)
+		var vertical_corridor_centers := _get_vertical_corridor_centers(min_u, max_u, safe_gap, rng)
 		_append_vertical_corridor_roads(
 			vertical_corridor_centers,
 			component_center,
@@ -80,7 +81,7 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 		var band_min_v := min_v
 
 		while band_min_v <= max_v:
-			var band_width := rng.randf_range(safe_min_width, safe_max_width)
+			var band_width := _pick_high_variance_extent(safe_min_width, safe_max_width, rng)
 			var band_max_v := band_min_v + band_width
 			var band_center_v := (band_min_v + band_max_v) * 0.5
 			var intervals := _get_valid_u_intervals(
@@ -101,7 +102,7 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 				if interval.y - interval.x < min_plot_length:
 					continue
 
-				var split_intervals := _split_plot_interval(interval, safe_gap, vertical_corridor_centers)
+				var split_intervals := _split_plot_interval(interval, safe_gap, vertical_corridor_centers, rng)
 				_append_vertical_split_gap_roads(
 					split_intervals,
 					component_center,
@@ -119,6 +120,7 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 					if not _is_plot_valid(center_2d, row_direction, lateral_direction, plot_length, band_width, field_lookup, road_polylines):
 						continue
 
+					var footprint := _build_plot_footprint(plot_length, band_width)
 					var plot := FieldPlotData.new()
 					plot.configure(
 						_get_plot_id(component_index, row_index, interval_index, segment_index, plot_index),
@@ -126,7 +128,8 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 						Vector3(row_direction.x, 0.0, row_direction.y),
 						Vector3(lateral_direction.x, 0.0, lateral_direction.y),
 						plot_length,
-						band_width
+						band_width,
+						footprint
 					)
 					plots.append(plot)
 					plot_index += 1
@@ -147,23 +150,30 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 	return plots
 
 
-func _get_vertical_corridor_centers(min_u: float, max_u: float, safe_gap: float) -> Array[float]:
+func _get_vertical_corridor_centers(min_u: float, max_u: float, safe_gap: float, rng: RandomNumberGenerator) -> Array[float]:
 	var gap_centers: Array[float] = []
-	var safe_max_length := maxf(max_plot_length, min_plot_length)
 	var component_length := max_u - min_u
-	if safe_gap <= 0.0 or component_length <= safe_max_length + safe_gap:
+	if safe_gap <= 0.0 or component_length < min_plot_length:
 		return gap_centers
 
-	var gap_center := min_u + safe_max_length + safe_gap * 0.5
-	var last_allowed_center := max_u - min_plot_length - safe_gap * 0.5
-	while gap_center <= last_allowed_center + 0.001:
-		gap_centers.append(gap_center)
-		gap_center += safe_max_length + safe_gap
+	var split_intervals := _split_plot_interval_uneven(Vector2(min_u, max_u), safe_gap, rng)
+	if split_intervals.size() < 2:
+		return gap_centers
+
+	for index: int in range(split_intervals.size() - 1):
+		var from_interval: Vector2 = split_intervals[index]
+		var to_interval: Vector2 = split_intervals[index + 1]
+		gap_centers.append((from_interval.y + to_interval.x) * 0.5)
 
 	return gap_centers
 
 
-func _split_plot_interval(interval: Vector2, safe_gap: float, vertical_corridor_centers: Array[float]) -> Array[Vector2]:
+func _split_plot_interval(
+	interval: Vector2,
+	safe_gap: float,
+	vertical_corridor_centers: Array[float],
+	rng: RandomNumberGenerator
+) -> Array[Vector2]:
 	var length := interval.y - interval.x
 	if length < min_plot_length:
 		return []
@@ -173,7 +183,7 @@ func _split_plot_interval(interval: Vector2, safe_gap: float, vertical_corridor_
 		if not corridor_intervals.is_empty():
 			return corridor_intervals
 
-	return _split_plot_interval_evenly(interval, safe_gap)
+	return _split_plot_interval_uneven(interval, safe_gap, rng)
 
 
 func _split_plot_interval_by_vertical_corridors(
@@ -209,29 +219,41 @@ func _split_plot_interval_by_vertical_corridors(
 	return empty_intervals
 
 
-func _split_plot_interval_evenly(interval: Vector2, safe_gap: float) -> Array[Vector2]:
+func _split_plot_interval_uneven(interval: Vector2, safe_gap: float, rng: RandomNumberGenerator) -> Array[Vector2]:
 	var length := interval.y - interval.x
 	if length < min_plot_length:
 		return []
 
+	var safe_min_length := maxf(min_plot_length, 0.001)
 	var safe_max_length := maxf(max_plot_length, min_plot_length)
-	if safe_gap <= 0.0 or length <= safe_max_length:
+	if length <= safe_max_length:
 		return _single_plot_interval(interval)
 
-	var segment_count := ceili((length + safe_gap) / (safe_max_length + safe_gap))
-	while segment_count > 1:
-		var candidate_length := (length - safe_gap * float(segment_count - 1)) / float(segment_count)
-		if candidate_length >= min_plot_length:
-			break
-		segment_count -= 1
-
-	if segment_count <= 1:
+	var min_segment_count := maxi(1, ceili((length + safe_gap) / (safe_max_length + safe_gap)))
+	var max_segment_count := floori((length + safe_gap) / (safe_min_length + safe_gap))
+	if max_segment_count < min_segment_count:
 		return _single_plot_interval(interval)
 
-	var segment_length := (length - safe_gap * float(segment_count - 1)) / float(segment_count)
+	var segment_count := min_segment_count
+	var choice_max := mini(max_segment_count, min_segment_count + 2)
+	if choice_max > min_segment_count:
+		segment_count = rng.randi_range(min_segment_count, choice_max)
+
+	var plot_total_length := length - safe_gap * float(segment_count - 1)
+	if _is_forced_equal_split(plot_total_length, segment_count, safe_min_length, safe_max_length):
+		if segment_count < max_segment_count:
+			segment_count += 1
+		elif segment_count > min_segment_count:
+			segment_count -= 1
+		plot_total_length = length - safe_gap * float(segment_count - 1)
+
+	if segment_count <= 1 or plot_total_length < safe_min_length:
+		return _single_plot_interval(interval)
+
+	var segment_lengths := _distribute_plot_lengths(plot_total_length, segment_count, safe_min_length, safe_max_length, rng)
 	var split_intervals: Array[Vector2] = []
 	var start_u := interval.x
-	for _segment_index: int in range(segment_count):
+	for segment_length: float in segment_lengths:
 		var end_u := start_u + segment_length
 		split_intervals.append(Vector2(start_u, end_u))
 		start_u = end_u + safe_gap
@@ -239,10 +261,118 @@ func _split_plot_interval_evenly(interval: Vector2, safe_gap: float) -> Array[Ve
 	return split_intervals
 
 
+func _pick_high_variance_extent(min_extent: float, max_extent: float, rng: RandomNumberGenerator) -> float:
+	var safe_min := maxf(min_extent, 0.001)
+	var safe_max := maxf(max_extent, safe_min)
+	if safe_max <= safe_min + 0.001:
+		return safe_min
+
+	var roll := rng.randf()
+	var shaped := pow(rng.randf(), 2.25)
+	var t := shaped if roll < 0.5 else 1.0 - shaped
+	return lerpf(safe_min, safe_max, t)
+
+
+func _distribute_plot_lengths(
+	total_length: float,
+	segment_count: int,
+	safe_min_length: float,
+	safe_max_length: float,
+	rng: RandomNumberGenerator
+) -> Array[float]:
+	var lengths: Array[float] = []
+	if segment_count <= 0:
+		return lengths
+
+	var capacity := maxf(safe_max_length - safe_min_length, 0.0)
+	var remaining_extra := clampf(total_length - safe_min_length * float(segment_count), 0.0, capacity * float(segment_count))
+	for _segment_index: int in range(segment_count):
+		lengths.append(safe_min_length)
+
+	if remaining_extra <= 0.001 or capacity <= 0.001:
+		return lengths
+
+	var weights: Array[float] = []
+	for _segment_index: int in range(segment_count):
+		weights.append(pow(rng.randf_range(0.08, 1.0), 2.4))
+
+	var active_indices: Array[int] = []
+	for segment_index: int in range(segment_count):
+		active_indices.append(segment_index)
+
+	var safety := segment_count * 4
+	while remaining_extra > 0.001 and not active_indices.is_empty() and safety > 0:
+		safety -= 1
+		var total_weight := 0.0
+		for segment_index: int in active_indices:
+			total_weight += weights[segment_index]
+		if total_weight <= 0.001:
+			break
+
+		var distributed_this_pass := 0.0
+		for active_position: int in range(active_indices.size() - 1, -1, -1):
+			var segment_index := active_indices[active_position]
+			var available := safe_max_length - lengths[segment_index]
+			if available <= 0.001:
+				active_indices.remove_at(active_position)
+				continue
+
+			var share := remaining_extra * weights[segment_index] / total_weight
+			var added := minf(available, share)
+			lengths[segment_index] += added
+			distributed_this_pass += added
+			if lengths[segment_index] >= safe_max_length - 0.001:
+				active_indices.remove_at(active_position)
+
+		remaining_extra -= distributed_this_pass
+		if distributed_this_pass <= 0.001:
+			break
+
+	if remaining_extra > 0.001:
+		for segment_index: int in range(segment_count):
+			var available := safe_max_length - lengths[segment_index]
+			if available <= 0.001:
+				continue
+			var added := minf(available, remaining_extra)
+			lengths[segment_index] += added
+			remaining_extra -= added
+			if remaining_extra <= 0.001:
+				break
+
+	return lengths
+
+
+func _is_forced_equal_split(total_length: float, segment_count: int, safe_min_length: float, safe_max_length: float) -> bool:
+	if segment_count <= 1:
+		return false
+
+	var epsilon := 0.001
+	return (
+		absf(total_length - safe_min_length * float(segment_count)) <= epsilon
+		or absf(total_length - safe_max_length * float(segment_count)) <= epsilon
+	)
+
+
 func _single_plot_interval(interval: Vector2) -> Array[Vector2]:
 	var intervals: Array[Vector2] = []
 	intervals.append(interval)
 	return intervals
+
+
+func _build_plot_footprint(plot_length: float, plot_width: float) -> PackedVector2Array:
+	# field_shape_variation is deprecated for generated village paddies.
+	return _make_rectangle_footprint(plot_length, plot_width)
+
+
+func _make_rectangle_footprint(plot_length: float, plot_width: float) -> PackedVector2Array:
+	var half_length := maxf(plot_length, 0.0) * 0.5
+	var half_width := maxf(plot_width, 0.0) * 0.5
+	return PackedVector2Array([
+		Vector2(-half_length, -half_width),
+		Vector2(half_length, -half_width),
+		Vector2(half_length, half_width),
+		Vector2(-half_length, half_width),
+	])
 
 
 func _append_vertical_split_gap_roads(

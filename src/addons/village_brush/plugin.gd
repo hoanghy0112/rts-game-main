@@ -181,7 +181,7 @@ func _set_region(region: VillageRegionScript) -> void:
 		_show_dock()
 		_sync_dock_region(_region)
 		if Engine.is_editor_hint() and _region.is_inside_tree():
-			_region.update_gizmos()
+			_region.request_editor_gizmo_update()
 	else:
 		_sync_dock_region(null)
 		_show_dock()
@@ -353,7 +353,7 @@ func _refresh_brush_preview() -> void:
 	if is_instance_valid(_gizmo_plugin) and _gizmo_plugin.has_method("set_brush_preview"):
 		preview_changed = bool(_gizmo_plugin.call("set_brush_preview", _region, cells, mode, true))
 	if preview_changed and _region.is_inside_tree():
-		_region.update_gizmos()
+		_region.request_editor_gizmo_update()
 
 
 func _clear_brush_preview() -> void:
@@ -367,7 +367,7 @@ func _clear_brush_preview() -> void:
 	if is_instance_valid(_gizmo_plugin) and _gizmo_plugin.has_method("clear_brush_preview"):
 		preview_changed = bool(_gizmo_plugin.call("clear_brush_preview", _region))
 	if (had_preview or preview_changed) and is_instance_valid(_region) and _region.is_inside_tree():
-		_region.update_gizmos()
+		_region.request_editor_gizmo_update()
 	_has_hover_cell = false
 
 

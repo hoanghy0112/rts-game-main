@@ -4,8 +4,12 @@ class_name VillageRegion
 
 const DEFAULT_HOUSE_SCENE: PackedScene = preload("res://addons/village_brush/defaults/default_house.tscn")
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
+const RICE_DENSE_PLANTS_SCENE: PackedScene = preload("res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.tscn")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
+const RICE_DENSE_LAYER_META := &"village_rice_dense_plants_layer"
+const RICE_MASK_SAMPLE_SIZE := 0.5
+const RICE_MASK_MAX_DIMENSION := 2048
 const ROAD_NEIGHBOR_OFFSETS := [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
@@ -14,6 +18,11 @@ const ROAD_NEIGHBOR_OFFSETS := [
 ]
 const HOUSE_ATTEMPT_MULTIPLIER := 80
 const MIN_TERRAIN_PAINT_STEP := 0.25
+const TERRAIN_PAINT_RECORD_STEP := 0.25
+const PAINT_PRIORITY_FIELD := 10
+const PAINT_PRIORITY_HOUSE := 20
+const PAINT_PRIORITY_FIELD_ROAD := 30
+const PAINT_PRIORITY_ROAD := 40
 
 signal cells_changed
 signal resources_changed
@@ -54,8 +63,12 @@ enum PaintMode {
 @export var season_weather_path: NodePath
 @export var field_terrain_registry_path: NodePath
 @export var apply_runtime_terrain_edits := false
+@export var async_runtime_preview_on_ready := true
+@export_range(1, 64, 1, "or_greater") var runtime_house_batch_size: int = 6
+@export_range(1, 64, 1, "or_greater") var runtime_field_batch_size: int = 4
+@export_range(1, 256, 1, "or_greater") var runtime_mask_rows_per_frame: int = 32
 
-@export var road_texture_id: int = -1
+@export var road_texture_id: int = 2
 @export_range(0.1, 64.0, 0.1, "or_greater") var road_width: float = 3.2
 @export_range(0.1, 16.0, 0.1, "or_greater") var road_sample_spacing: float = 0.35
 @export_range(0, 6, 1) var road_curve_iterations: int = 2
@@ -63,6 +76,12 @@ enum PaintMode {
 @export_range(0.0, 1.0, 0.01) var road_texture_strength: float = 0.9
 @export_range(0.0, 1.0, 0.01) var road_edge_feather: float = 0.72
 @export var field_road_texture_id: int = -1
+@export var house_sand_texture_id: int = 5
+@export_range(0.0, 1.0, 0.01) var house_texture_strength: float = 0.68
+@export_range(0.0, 1.0, 0.01) var house_edge_feather: float = 0.58
+@export var field_mud_texture_id: int = 4
+@export_range(0.0, 1.0, 0.01) var field_texture_strength: float = 0.88
+@export_range(0.0, 1.0, 0.01) var field_edge_feather: float = 0.22
 
 @export_range(0.0, 64.0, 0.1, "or_greater") var house_min_spacing: float = 3.6
 @export_range(1.0, 4.0, 0.05, "or_greater") var house_size_spacing_multiplier: float = 1.15
@@ -71,15 +90,16 @@ enum PaintMode {
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_road_clearance: float = 2.0
 @export_range(0, 512, 1, "or_greater") var house_max_count: int = 14
 
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_width: float = 2.4
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_max_plot_width: float = 5.6
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_width: float = 4.8
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_max_plot_width: float = 11.2
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_bund_gap: float = 0.35
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_road_gap_width: float = 1.2
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_length: float = 4.0
-@export_range(0.1, 128.0, 0.1, "or_greater") var field_max_plot_length: float = 12.0
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_length: float = 8.0
+@export_range(0.1, 128.0, 0.1, "or_greater") var field_max_plot_length: float = 24.0
 @export_range(0.1, 16.0, 0.1, "or_greater") var field_sample_step: float = 1.0
 @export_range(0.0, 32.0, 0.1, "or_greater") var field_road_clearance: float = 1.0
 @export_range(0.0, 1.0, 0.01) var field_horizontal_split_bias: float = 1.0
+@export_range(0.0, 1.0, 0.01) var field_shape_variation: float = 0.65
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_region_road_margin: float = 0.6
 @export_range(0.0, 4.0, 0.01, "or_greater") var field_floor_drop: float = 0.5
 @export_range(0.0, 1.0, 0.01, "or_greater") var field_visual_surface_offset: float = 0.06
@@ -120,6 +140,7 @@ var _runtime_road_original_regions: Array = []
 var _runtime_road_copied_regions: Array = []
 var _runtime_road_using_region_copies := false
 var _runtime_field_terrain_shape_applied := false
+var _editor_gizmo_update_pending := false
 var _house_footprint_cache: Dictionary = {}
 var _cached_road_polylines_key := ""
 var _cached_road_polylines: Array = []
@@ -144,7 +165,10 @@ func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
 
-	rebuild_runtime_preview()
+	if async_runtime_preview_on_ready:
+		rebuild_runtime_preview_deferred.call_deferred()
+	else:
+		rebuild_runtime_preview()
 
 
 func _exit_tree() -> void:
@@ -247,6 +271,12 @@ func to_runtime_data() -> Dictionary:
 		"road_texture_strength": road_texture_strength,
 		"road_edge_feather": road_edge_feather,
 		"field_road_texture_id": field_road_texture_id,
+		"house_sand_texture_id": house_sand_texture_id,
+		"house_texture_strength": house_texture_strength,
+		"house_edge_feather": house_edge_feather,
+		"field_mud_texture_id": field_mud_texture_id,
+		"field_texture_strength": field_texture_strength,
+		"field_edge_feather": field_edge_feather,
 		"house_min_spacing": house_min_spacing,
 		"house_size_spacing_multiplier": house_size_spacing_multiplier,
 		"house_footprint_padding": house_footprint_padding,
@@ -262,6 +292,7 @@ func to_runtime_data() -> Dictionary:
 		"field_sample_step": field_sample_step,
 		"field_road_clearance": field_road_clearance,
 		"field_horizontal_split_bias": field_horizontal_split_bias,
+		"field_shape_variation": field_shape_variation,
 		"field_region_road_margin": field_region_road_margin,
 		"field_floor_drop": field_floor_drop,
 		"field_visual_surface_offset": field_visual_surface_offset,
@@ -295,13 +326,84 @@ func rebuild_runtime_preview() -> void:
 	var field_generation := _build_field_generation(road_polylines)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = absi(generation_seed)
+	var house_placements := _build_house_placements(road_polylines, rng)
 
 	if apply_runtime_terrain_edits:
-		_apply_field_terrain_and_road_texture(terrain, road_polylines, field_generation)
+		_apply_field_terrain_and_road_texture(terrain, road_polylines, field_generation, house_placements)
 	else:
 		_runtime_field_terrain_shape_applied = false
-	_generate_houses(terrain, road_polylines, rng)
+	_generate_houses(terrain, house_placements)
 	_generate_fields(terrain, field_generation)
+
+
+func rebuild_runtime_preview_deferred() -> void:
+	if not is_inside_tree():
+		return
+
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	await rebuild_runtime_preview_async()
+
+
+func rebuild_runtime_preview_async() -> void:
+	if Engine.is_editor_hint():
+		return
+
+	clear_runtime_instances()
+
+	if house_cells.is_empty() and field_cells.is_empty() and road_cells.is_empty():
+		_mark_startup_phase("village_ready", {"cells": 0})
+		return
+
+	_runtime_container = Node3D.new()
+	_runtime_container.name = RUNTIME_CONTAINER_NAME
+	add_child(_runtime_container)
+	_runtime_container.owner = null
+
+	var terrain := _get_terrain_node()
+	_mark_startup_phase("village_build_start", {
+		"field_cells": field_cells.size(),
+		"house_cells": house_cells.size(),
+		"road_cells": road_cells.size(),
+	})
+
+	var road_polylines := _build_road_polylines()
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	var field_generation := _build_field_generation(road_polylines)
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = absi(generation_seed)
+	var house_placements := _build_house_placements(road_polylines, rng)
+	_mark_startup_phase("village_layout_ready", {
+		"houses": house_placements.size(),
+		"plots": (field_generation.get("plots", []) as Array).size(),
+	})
+
+	if apply_runtime_terrain_edits:
+		_apply_field_terrain_and_road_texture(terrain, road_polylines, field_generation, house_placements)
+	else:
+		_runtime_field_terrain_shape_applied = false
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	await _generate_houses_async(terrain, house_placements)
+	if not is_inside_tree():
+		return
+
+	await _generate_fields_async(terrain, field_generation)
+	_mark_startup_phase("village_ready", {
+		"houses": house_placements.size(),
+		"plots": (field_generation.get("plots", []) as Array).size(),
+	})
 
 
 func clear_runtime_instances() -> void:
@@ -336,25 +438,25 @@ func _lookup_to_cells(lookup: Dictionary) -> Array[Vector2i]:
 	return normalize_cells(cells)
 
 
-func _generate_houses(terrain: Node3D, road_polylines: Array, rng: RandomNumberGenerator) -> void:
+func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) -> Array[Dictionary]:
+	var placements: Array[Dictionary] = []
 	var scenes := _get_house_scenes()
 	if scenes.is_empty() or house_cells.is_empty() or house_max_count <= 0:
-		return
+		return placements
 
 	var house_lookup := _to_cell_lookup(house_cells)
-	var placed_houses: Array[Dictionary] = []
 	var attempts := maxi(house_max_count * HOUSE_ATTEMPT_MULTIPLIER, house_cells.size() * 12)
 
 	for _attempt: int in range(attempts):
-		if placed_houses.size() >= house_max_count:
+		if placements.size() >= house_max_count:
 			break
 
 		var cell := house_cells[rng.randi_range(0, house_cells.size() - 1)]
 		var local_point := _get_random_point_in_cell(cell, rng)
 
-		var scene := _get_house_scene_for_index(placed_houses.size(), rng)
+		var scene := _get_house_scene_for_index(placements.size(), rng)
 		if not scene:
-			return
+			return placements
 
 		var footprint_data := _get_house_footprint_data(scene)
 		var footprint := float(footprint_data.get("footprint", cell_size))
@@ -366,20 +468,56 @@ func _generate_houses(terrain: Node3D, road_polylines: Array, rng: RandomNumberG
 			continue
 		if _is_point_near_roads(local_point, road_polylines, road_clearance):
 			continue
-		if not _has_house_spacing(local_point, footprint, placed_houses):
+		if not _has_house_spacing(local_point, footprint, placements):
 			continue
 
-		var spatial := _instantiate_runtime_scene(scene, "House", placed_houses.size())
-		if not spatial:
-			return
-
-		_set_runtime_node_position(spatial, local_point, terrain)
-		_face_nearest_road_or_random(spatial, local_point, road_polylines, rng)
-		placed_houses.append({
+		placements.append({
+			"scene": scene,
 			"position": local_point,
+			"rotation_y": _get_house_yaw(local_point, road_polylines, rng),
 			"footprint": footprint,
 			"radius": footprint_radius,
 		})
+
+	return placements
+
+
+func _generate_houses(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
+	for placement_index: int in range(house_placements.size()):
+		var placement := house_placements[placement_index]
+		var scene := placement.get("scene") as PackedScene
+		if not scene:
+			continue
+
+		var spatial := _instantiate_runtime_scene(scene, "House", placement_index)
+		if not spatial:
+			return
+
+		var local_point: Vector2 = placement.get("position", Vector2.ZERO)
+		_set_runtime_node_position(spatial, local_point, terrain)
+		spatial.rotation.y = float(placement.get("rotation_y", 0.0))
+
+
+func _generate_houses_async(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
+	for placement_index: int in range(house_placements.size()):
+		if not is_inside_tree():
+			return
+
+		var placement := house_placements[placement_index]
+		var scene := placement.get("scene") as PackedScene
+		if not scene:
+			continue
+
+		var spatial := _instantiate_runtime_scene(scene, "House", placement_index)
+		if not spatial:
+			return
+
+		var local_point: Vector2 = placement.get("position", Vector2.ZERO)
+		_set_runtime_node_position(spatial, local_point, terrain)
+		spatial.rotation.y = float(placement.get("rotation_y", 0.0))
+
+		if (placement_index + 1) % runtime_house_batch_size == 0:
+			await get_tree().process_frame
 
 
 func _build_field_generation(road_polylines: Array) -> Dictionary:
@@ -417,6 +555,7 @@ func _build_field_generation_uncached(crop_type: CropTypeData, road_polylines: A
 	generator.road_width = road_width
 	generator.road_clearance = field_road_clearance
 	generator.horizontal_split_bias = field_horizontal_split_bias
+	generator.field_shape_variation = field_shape_variation
 
 	var plots: Array[FieldPlotData] = generator.generate(field_cells, road_polylines)
 	return {
@@ -460,6 +599,400 @@ func _generate_fields(terrain: Node3D, field_generation: Dictionary) -> void:
 		if terrain_registry and terrain_registry.has_method("register_field"):
 			terrain_registry.call("register_field", plot, spatial)
 
+	_generate_dense_rice_layer(terrain, crop_type, plots)
+
+
+func _generate_fields_async(terrain: Node3D, field_generation: Dictionary) -> void:
+	var season_weather := _get_season_weather_node()
+	var terrain_registry := _get_field_terrain_registry_node()
+	if terrain_registry and terrain_registry.has_method("clear"):
+		terrain_registry.call("clear")
+
+	var crop_type := field_generation.get("crop_type") as CropTypeData
+	var plots: Array = field_generation.get("plots", [])
+	if not crop_type or not crop_type.field_scene or plots.is_empty():
+		return
+
+	for plot_index: int in range(plots.size()):
+		if not is_inside_tree():
+			return
+
+		var plot := plots[plot_index] as FieldPlotData
+		if not plot:
+			continue
+		var spatial := _instantiate_runtime_scene(crop_type.field_scene, "Field", plot_index)
+		if not spatial:
+			return
+
+		var local_point := Vector2(plot.center.x, plot.center.z)
+		_set_runtime_node_position(spatial, local_point, terrain)
+		if not _runtime_field_terrain_shape_applied:
+			spatial.position.y += maxf(field_visual_surface_offset, 0.0)
+		spatial.rotation.y = _yaw_for_plus_x(Vector2(plot.row_direction.x, plot.row_direction.z).normalized())
+
+		if spatial.has_method("configure_field"):
+			spatial.call("configure_field", plot, crop_type, season_weather)
+		else:
+			push_warning("%s must implement configure_field(plot_data, crop_type, season_weather)." % crop_type.field_scene.resource_path)
+
+		if terrain_registry and terrain_registry.has_method("register_field"):
+			terrain_registry.call("register_field", plot, spatial)
+
+		if (plot_index + 1) % runtime_field_batch_size == 0:
+			await get_tree().process_frame
+
+	await _generate_dense_rice_layer_async(terrain, crop_type, plots)
+
+
+func _generate_dense_rice_layer(terrain: Node3D, crop_type: CropTypeData, plots: Array) -> void:
+	if not _is_rice_crop(crop_type):
+		return
+
+	var mask_info := _build_dense_rice_plot_mask(plots)
+	if mask_info.is_empty():
+		return
+
+	var layer := RICE_DENSE_PLANTS_SCENE.instantiate() as Node3D
+	if not layer:
+		return
+
+	layer.name = "RiceDensePlants"
+	layer.set_meta(RICE_DENSE_LAYER_META, true)
+	layer.set_meta(&"rice_plot_count", int(mask_info.get("plot_count", 0)))
+	_runtime_container.add_child(layer, false, INTERNAL_MODE_BACK)
+	layer.owner = null
+
+	if layer.has_method("configure_from_plot_mask"):
+		layer.call(
+			"configure_from_plot_mask",
+			terrain,
+			self,
+			mask_info.get("texture"),
+			mask_info.get("origin", Vector2.ZERO),
+			float(mask_info.get("sample_size", RICE_MASK_SAMPLE_SIZE)),
+			mask_info.get("texture_size", Vector2i.ONE),
+			int(mask_info.get("plot_count", 0))
+		)
+	elif layer.has_method("configure_from_plots"):
+		layer.call("configure_from_plots", terrain, self, mask_info)
+	else:
+		layer.set("terrain", terrain)
+
+
+func _generate_dense_rice_layer_async(terrain: Node3D, crop_type: CropTypeData, plots: Array) -> void:
+	if not _is_rice_crop(crop_type):
+		return
+
+	var mask_info: Dictionary = await _build_dense_rice_plot_mask_async(plots)
+	if mask_info.is_empty() or not is_inside_tree():
+		return
+
+	var layer := RICE_DENSE_PLANTS_SCENE.instantiate() as Node3D
+	if not layer:
+		return
+
+	layer.name = "RiceDensePlants"
+	layer.set_meta(RICE_DENSE_LAYER_META, true)
+	layer.set_meta(&"rice_plot_count", int(mask_info.get("plot_count", 0)))
+	_runtime_container.add_child(layer, false, INTERNAL_MODE_BACK)
+	layer.owner = null
+
+	if layer.has_method("configure_from_plot_mask"):
+		layer.call(
+			"configure_from_plot_mask",
+			terrain,
+			self,
+			mask_info.get("texture"),
+			mask_info.get("origin", Vector2.ZERO),
+			float(mask_info.get("sample_size", RICE_MASK_SAMPLE_SIZE)),
+			mask_info.get("texture_size", Vector2i.ONE),
+			int(mask_info.get("plot_count", 0))
+		)
+	elif layer.has_method("configure_from_plots"):
+		layer.call("configure_from_plots", terrain, self, mask_info)
+	else:
+		layer.set("terrain", terrain)
+
+	_mark_startup_phase("village_dense_vegetation_ready", {
+		"rice_particles": int(layer.get("particle_count")),
+	})
+
+
+func _is_rice_crop(crop_type: CropTypeData) -> bool:
+	return crop_type != null and crop_type.crop_id == &"rice"
+
+
+func _build_dense_rice_plot_mask(plots: Array) -> Dictionary:
+	var active_plots: Array[FieldPlotData] = []
+	var stage_codes: Array[int] = []
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+
+	for plot_variant: Variant in plots:
+		if not (plot_variant is FieldPlotData):
+			continue
+
+		var plot := plot_variant as FieldPlotData
+		var stage_code := _get_rice_stage_mask_code(plot.stage)
+		if stage_code <= 0:
+			continue
+
+		var outline := plot.get_region_outline_2d()
+		if outline.size() < 3:
+			continue
+
+		active_plots.append(plot)
+		stage_codes.append(stage_code)
+		for point: Vector2 in outline:
+			min_point.x = minf(min_point.x, point.x)
+			min_point.y = minf(min_point.y, point.y)
+			max_point.x = maxf(max_point.x, point.x)
+			max_point.y = maxf(max_point.y, point.y)
+
+	if active_plots.is_empty():
+		return {}
+
+	var edge_inset := _get_dense_rice_edge_inset()
+	var sample_size := RICE_MASK_SAMPLE_SIZE
+	min_point -= Vector2(edge_inset + sample_size, edge_inset + sample_size)
+	max_point += Vector2(edge_inset + sample_size, edge_inset + sample_size)
+
+	var texture_size := _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
+	if texture_size.x > RICE_MASK_MAX_DIMENSION or texture_size.y > RICE_MASK_MAX_DIMENSION:
+		var scale := maxf(
+			float(texture_size.x) / float(RICE_MASK_MAX_DIMENSION),
+			float(texture_size.y) / float(RICE_MASK_MAX_DIMENSION)
+		)
+		sample_size *= scale
+		texture_size = _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
+
+	var image := Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_R8)
+	image.fill(Color.BLACK)
+	var filled_samples := 0
+
+	for index: int in range(active_plots.size()):
+		filled_samples += _rasterize_dense_rice_plot_mask(
+			image,
+			active_plots[index],
+			stage_codes[index],
+			min_point,
+			sample_size,
+			edge_inset
+		)
+
+	if filled_samples <= 0:
+		return {}
+
+	return {
+		"texture": ImageTexture.create_from_image(image),
+		"origin": min_point,
+		"sample_size": sample_size,
+		"texture_size": texture_size,
+		"plot_count": active_plots.size(),
+		"filled_samples": filled_samples,
+	}
+
+
+func _build_dense_rice_plot_mask_async(plots: Array) -> Dictionary:
+	var active_plots: Array[FieldPlotData] = []
+	var stage_codes: Array[int] = []
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+
+	for plot_variant: Variant in plots:
+		if not (plot_variant is FieldPlotData):
+			continue
+
+		var plot := plot_variant as FieldPlotData
+		var stage_code := _get_rice_stage_mask_code(plot.stage)
+		if stage_code <= 0:
+			continue
+
+		var outline := plot.get_region_outline_2d()
+		if outline.size() < 3:
+			continue
+
+		active_plots.append(plot)
+		stage_codes.append(stage_code)
+		for point: Vector2 in outline:
+			min_point.x = minf(min_point.x, point.x)
+			min_point.y = minf(min_point.y, point.y)
+			max_point.x = maxf(max_point.x, point.x)
+			max_point.y = maxf(max_point.y, point.y)
+
+	if active_plots.is_empty():
+		return {}
+
+	var edge_inset := _get_dense_rice_edge_inset()
+	var sample_size := RICE_MASK_SAMPLE_SIZE
+	min_point -= Vector2(edge_inset + sample_size, edge_inset + sample_size)
+	max_point += Vector2(edge_inset + sample_size, edge_inset + sample_size)
+
+	var texture_size := _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
+	if texture_size.x > RICE_MASK_MAX_DIMENSION or texture_size.y > RICE_MASK_MAX_DIMENSION:
+		var scale := maxf(
+			float(texture_size.x) / float(RICE_MASK_MAX_DIMENSION),
+			float(texture_size.y) / float(RICE_MASK_MAX_DIMENSION)
+		)
+		sample_size *= scale
+		texture_size = _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
+
+	var image := Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_R8)
+	image.fill(Color.BLACK)
+	var filled_samples := 0
+
+	for index: int in range(active_plots.size()):
+		var plot_filled_samples: int = await _rasterize_dense_rice_plot_mask_async(
+			image,
+			active_plots[index],
+			stage_codes[index],
+			min_point,
+			sample_size,
+			edge_inset
+		)
+		filled_samples += plot_filled_samples
+		if not is_inside_tree():
+			return {}
+
+	if filled_samples <= 0:
+		return {}
+
+	return {
+		"texture": ImageTexture.create_from_image(image),
+		"origin": min_point,
+		"sample_size": sample_size,
+		"texture_size": texture_size,
+		"plot_count": active_plots.size(),
+		"filled_samples": filled_samples,
+	}
+
+
+func _rasterize_dense_rice_plot_mask(
+	image: Image,
+	plot: FieldPlotData,
+	stage_code: int,
+	mask_origin: Vector2,
+	sample_size: float,
+	edge_inset: float
+) -> int:
+	if not plot or stage_code <= 0:
+		return 0
+
+	var pixel_bounds := _get_plot_mask_pixel_bounds(plot, image.get_size(), mask_origin, sample_size)
+	var filled_samples := 0
+	for y: int in range(pixel_bounds.position.y, pixel_bounds.end.y):
+		for x: int in range(pixel_bounds.position.x, pixel_bounds.end.x):
+			if image.get_pixel(x, y).r > 0.0:
+				continue
+			var local_point := mask_origin + Vector2(float(x) + 0.5, float(y) + 0.5) * sample_size
+			if not plot.contains_region_point(local_point, edge_inset):
+				continue
+			image.set_pixel(x, y, Color(float(stage_code) / 255.0, 0.0, 0.0, 1.0))
+			filled_samples += 1
+	return filled_samples
+
+
+func _rasterize_dense_rice_plot_mask_async(
+	image: Image,
+	plot: FieldPlotData,
+	stage_code: int,
+	mask_origin: Vector2,
+	sample_size: float,
+	edge_inset: float
+) -> int:
+	if not plot or stage_code <= 0:
+		return 0
+
+	var pixel_bounds := _get_plot_mask_pixel_bounds(plot, image.get_size(), mask_origin, sample_size)
+	var filled_samples := 0
+	var rows_since_yield := 0
+	for y: int in range(pixel_bounds.position.y, pixel_bounds.end.y):
+		for x: int in range(pixel_bounds.position.x, pixel_bounds.end.x):
+			if image.get_pixel(x, y).r > 0.0:
+				continue
+			var local_point := mask_origin + Vector2(float(x) + 0.5, float(y) + 0.5) * sample_size
+			if not plot.contains_region_point(local_point, edge_inset):
+				continue
+			image.set_pixel(x, y, Color(float(stage_code) / 255.0, 0.0, 0.0, 1.0))
+			filled_samples += 1
+
+		rows_since_yield += 1
+		if rows_since_yield >= runtime_mask_rows_per_frame:
+			rows_since_yield = 0
+			await get_tree().process_frame
+			if not is_inside_tree():
+				return filled_samples
+	return filled_samples
+
+
+func _get_plot_mask_pixel_bounds(
+	plot: FieldPlotData,
+	texture_size: Vector2i,
+	mask_origin: Vector2,
+	sample_size: float
+) -> Rect2i:
+	var outline := plot.get_region_outline_2d()
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+	for point: Vector2 in outline:
+		min_point.x = minf(min_point.x, point.x)
+		min_point.y = minf(min_point.y, point.y)
+		max_point.x = maxf(max_point.x, point.x)
+		max_point.y = maxf(max_point.y, point.y)
+
+	var safe_sample_size := maxf(sample_size, 0.01)
+	var min_pixel := Vector2i(
+		clampi(floori((min_point.x - mask_origin.x) / safe_sample_size) - 1, 0, texture_size.x - 1),
+		clampi(floori((min_point.y - mask_origin.y) / safe_sample_size) - 1, 0, texture_size.y - 1)
+	)
+	var max_pixel := Vector2i(
+		clampi(ceili((max_point.x - mask_origin.x) / safe_sample_size) + 1, 0, texture_size.x - 1),
+		clampi(ceili((max_point.y - mask_origin.y) / safe_sample_size) + 1, 0, texture_size.y - 1)
+	)
+	return Rect2i(min_pixel, max_pixel - min_pixel + Vector2i.ONE)
+
+
+func _get_dense_rice_mask_texture_size(min_point: Vector2, max_point: Vector2, sample_size: float) -> Vector2i:
+	var safe_sample_size := maxf(sample_size, 0.01)
+	return Vector2i(
+		maxi(ceili((max_point.x - min_point.x) / safe_sample_size), 1),
+		maxi(ceili((max_point.y - min_point.y) / safe_sample_size), 1)
+	)
+
+
+func _get_rice_stage_code_at_point(
+	local_point: Vector2,
+	plots: Array[FieldPlotData],
+	stage_codes: Array[int],
+	edge_inset: float
+) -> int:
+	for index: int in range(plots.size()):
+		if plots[index].contains_region_point(local_point, edge_inset):
+			return stage_codes[index]
+	return 0
+
+
+func _get_rice_stage_mask_code(stage_id: StringName) -> int:
+	match stage_id:
+		&"", &"empty":
+			return 0
+		&"seedling":
+			return 1
+		&"flooded_green":
+			return 2
+		&"tillering", &"growth":
+			return 3
+		&"mature_gold":
+			return 4
+		&"harvested_stubble", &"harvest", &"maintenance":
+			return 5
+		_:
+			return 3
+
+
+func _get_dense_rice_edge_inset() -> float:
+	return maxf(0.22, maxf(field_bund_gap * 0.5, field_edge_slope_width + 0.08))
+
 
 func _instantiate_runtime_scene(scene: PackedScene, name_prefix: String, index: int) -> Node3D:
 	if not scene:
@@ -480,29 +1013,31 @@ func _instantiate_runtime_scene(scene: PackedScene, name_prefix: String, index: 
 
 func _set_runtime_node_position(spatial: Node3D, local_point: Vector2, terrain: Node3D) -> void:
 	var world_position := _get_surface_world_position_from_local_2d(local_point, terrain)
-	spatial.position = to_local(world_position)
+	spatial.position = _world_to_region_local(world_position)
 
 
-func _face_nearest_road_or_random(spatial: Node3D, local_point: Vector2, road_polylines: Array, rng: RandomNumberGenerator) -> void:
+func _get_house_yaw(local_point: Vector2, road_polylines: Array, rng: RandomNumberGenerator) -> float:
 	var nearest := _get_nearest_road(local_point, road_polylines)
 	if nearest.is_empty():
-		spatial.rotation.y = rng.randf_range(0.0, TAU)
-		return
+		return rng.randf_range(0.0, TAU)
 
 	var road_point: Vector2 = nearest["point"]
 	var direction := road_point - local_point
 	if direction.length_squared() <= 0.0001:
-		spatial.rotation.y = rng.randf_range(0.0, TAU)
-		return
+		return rng.randf_range(0.0, TAU)
 
-	spatial.rotation.y = _yaw_for_minus_z(direction.normalized())
+	return _yaw_for_minus_z(direction.normalized())
+
+
+func _face_nearest_road_or_random(spatial: Node3D, local_point: Vector2, road_polylines: Array, rng: RandomNumberGenerator) -> void:
+	spatial.rotation.y = _get_house_yaw(local_point, road_polylines, rng)
 
 func _get_cell_surface_world_position(cell: Vector2i, terrain: Node3D) -> Vector3:
 	return _get_surface_world_position_from_local_2d(_cell_to_local_2d_center(cell), terrain)
 
 
 func _get_surface_world_position_from_local_2d(local_point: Vector2, terrain: Node3D) -> Vector3:
-	var world_position := to_global(Vector3(local_point.x, 0.0, local_point.y))
+	var world_position := _region_local_to_world(Vector3(local_point.x, 0.0, local_point.y))
 	var terrain_height := _get_terrain_height(terrain, world_position)
 	if terrain_height != null:
 		world_position.y = terrain_height
@@ -631,7 +1166,7 @@ func _get_road_polylines_cache_key() -> String:
 
 func _get_field_generation_cache_key(crop_type: CropTypeData, road_polylines: Array) -> String:
 	var field_scene := crop_type.field_scene if crop_type else null
-	return "fields|%s|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
+	return "fields|%s|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
 		_get_cells_cache_key(field_cells),
 		_get_resource_cache_key(crop_type),
 		_get_resource_cache_key(field_scene),
@@ -647,6 +1182,7 @@ func _get_field_generation_cache_key(crop_type: CropTypeData, road_polylines: Ar
 		field_sample_step,
 		field_road_clearance,
 		field_horizontal_split_bias,
+		field_shape_variation,
 		_get_polylines_cache_key(road_polylines),
 	]
 
@@ -736,48 +1272,59 @@ func _edge_key(a: Vector2i, b: Vector2i) -> String:
 	return "%d,%d:%d,%d" % [first.x, first.y, second.x, second.y]
 
 
-func _apply_field_terrain_and_road_texture(terrain: Node3D, road_polylines: Array, field_generation: Dictionary) -> void:
+func _apply_field_terrain_and_road_texture(
+	terrain: Node3D,
+	road_polylines: Array,
+	field_generation: Dictionary,
+	house_placements: Array[Dictionary] = []
+) -> void:
 	var plots: Array = field_generation.get("plots", [])
 	var field_generation_cells: Array = field_generation.get("field_cells", [])
 	var generated_field_road_polylines: Array = field_generation.get("field_road_polylines", [])
 	var has_field_surface := not field_generation_cells.is_empty() and not plots.is_empty()
 	var has_generated_field_roads := not generated_field_road_polylines.is_empty()
-	if road_polylines.is_empty() and not has_field_surface and not has_generated_field_roads:
+	var has_house_surface := not house_placements.is_empty()
+	if road_polylines.is_empty() and not has_field_surface and not has_generated_field_roads and not has_house_surface:
 		return
 
 	if not is_instance_valid(terrain):
-		if not road_polylines.is_empty():
-			push_warning("VillageRegion has road cells but terrain_path does not resolve to a Node3D; skipping runtime road texture.")
+		push_warning("VillageRegion terrain_path does not resolve to a Node3D; skipping runtime terrain texture edits.")
 		return
 
 	var terrain_data := _get_terrain_data(terrain)
 	if not terrain_data:
-		push_warning("VillageRegion terrain has no Terrain3D data; skipping runtime road texture.")
+		push_warning("VillageRegion terrain has no Terrain3D data; skipping runtime terrain texture edits.")
 		return
 
 	var terrain_assets_variant: Variant = terrain.get("assets")
 	if not (terrain_assets_variant is Object):
-		push_warning("VillageRegion terrain has no Terrain3D assets; skipping runtime road texture.")
+		push_warning("VillageRegion terrain has no Terrain3D assets; skipping runtime terrain texture edits.")
 		return
 
 	var terrain_assets := terrain_assets_variant as Object
 	if not terrain_assets.has_method("get_texture_count"):
-		push_warning("VillageRegion terrain assets cannot report texture count; skipping runtime road texture.")
+		push_warning("VillageRegion terrain assets cannot report texture count; skipping runtime terrain texture edits.")
 		return
 
 	var texture_count := _get_terrain_texture_count(terrain_assets)
-	var road_texture_valid := road_texture_id >= 0 and road_texture_id < texture_count
+	var road_texture_valid := _is_terrain_texture_id_valid(road_texture_id, texture_count)
 	var field_texture_id := _get_field_road_texture_id(texture_count)
-	var field_texture_valid := field_texture_id >= 0 and field_texture_id < texture_count
+	var field_texture_valid := _is_terrain_texture_id_valid(field_texture_id, texture_count)
+	var field_mud_texture_valid := _is_terrain_texture_id_valid(field_mud_texture_id, texture_count)
+	var house_sand_texture_valid := _is_terrain_texture_id_valid(house_sand_texture_id, texture_count)
 
 	if not terrain_data.has_method("set_control_base_id"):
-		push_warning("VillageRegion Terrain3D data cannot set control texture IDs; skipping runtime road texture.")
+		push_warning("VillageRegion Terrain3D data cannot set control texture IDs; skipping runtime terrain texture edits.")
 		road_texture_valid = false
 		field_texture_valid = false
+		field_mud_texture_valid = false
+		house_sand_texture_valid = false
 	if not terrain_data.has_method("get_control") or not terrain_data.has_method("set_control"):
-		push_warning("VillageRegion Terrain3D data cannot restore control values; skipping runtime road texture.")
+		push_warning("VillageRegion Terrain3D data cannot restore control values; skipping runtime terrain texture edits.")
 		road_texture_valid = false
 		field_texture_valid = false
+		field_mud_texture_valid = false
+		house_sand_texture_valid = false
 
 	var radius := maxf(road_width * 0.5, 0.05)
 	var sample_spacing := maxf(road_sample_spacing, 0.1)
@@ -786,14 +1333,44 @@ func _apply_field_terrain_and_road_texture(terrain: Node3D, road_polylines: Arra
 	_runtime_road_terrain = terrain
 	_runtime_road_control_records.clear()
 	_runtime_field_terrain_shape_applied = false
-	var touched_regions := _collect_runtime_terrain_regions(terrain_data, field_generation_cells)
+	var touched_regions := _collect_runtime_terrain_regions(terrain_data, field_generation_cells, house_placements)
 	if not _use_runtime_terrain_region_copies(terrain_data, touched_regions):
-		push_warning("VillageRegion could not create runtime Terrain3D region copies; skipping road texture to avoid modifying terrain files.")
+		push_warning("VillageRegion could not create runtime Terrain3D region copies; skipping terrain texture edits to avoid modifying terrain files.")
 		_runtime_road_terrain = null
 		return
 
 	if has_field_surface:
 		_runtime_field_terrain_shape_applied = _shape_field_terrain(terrain_data, terrain, plots)
+
+	if has_field_surface and field_mud_texture_valid:
+		_paint_field_plot_surfaces(
+			terrain_data,
+			terrain,
+			plots,
+			texture_count,
+			painted_points,
+			field_mud_texture_id
+		)
+	elif has_field_surface:
+		push_warning(
+			"VillageRegion field mud texture id %d is invalid for %d Terrain3D textures; skipping field mud texture."
+			% [field_mud_texture_id, texture_count]
+		)
+
+	if has_house_surface and house_sand_texture_valid:
+		_paint_house_clearings(
+			terrain_data,
+			terrain,
+			house_placements,
+			texture_count,
+			painted_points,
+			house_sand_texture_id
+		)
+	elif has_house_surface:
+		push_warning(
+			"VillageRegion house ground texture id %d is invalid for %d Terrain3D textures; skipping house clearing texture."
+			% [house_sand_texture_id, texture_count]
+		)
 
 	if road_texture_valid:
 		for polyline: PackedVector2Array in road_polylines:
@@ -806,7 +1383,10 @@ func _apply_field_terrain_and_road_texture(terrain: Node3D, road_polylines: Arra
 				paint_step,
 				texture_count,
 				painted_points,
-				road_texture_id
+				road_texture_id,
+				road_texture_strength,
+				road_edge_feather,
+				PAINT_PRIORITY_ROAD
 			)
 	elif not road_polylines.is_empty():
 		push_warning(
@@ -859,7 +1439,11 @@ func _apply_road_texture(terrain: Node3D, road_polylines: Array, field_road_poly
 	)
 
 
-func _collect_runtime_terrain_regions(terrain_data: Object, field_generation_cells: Array) -> Dictionary:
+func _collect_runtime_terrain_regions(
+	terrain_data: Object,
+	field_generation_cells: Array,
+	house_placements: Array[Dictionary]
+) -> Dictionary:
 	var regions: Dictionary = {}
 	if not terrain_data.has_method("get_regionp"):
 		return regions
@@ -872,6 +1456,7 @@ func _collect_runtime_terrain_regions(terrain_data: Object, field_generation_cel
 		field_edge_slope_width + MIN_TERRAIN_PAINT_STEP
 	)
 	_add_touched_terrain_regions_for_cells(regions, terrain_data, field_generation_cells, field_margin)
+	_add_touched_terrain_regions_for_house_placements(regions, terrain_data, house_placements)
 	return regions
 
 
@@ -888,7 +1473,7 @@ func _add_touched_terrain_regions_for_cells(
 
 		var cell := cell_variant as Vector2i
 		for point: Vector2 in _get_expanded_cell_sample_points(cell, safe_margin):
-			var world_position := to_global(Vector3(point.x, 0.0, point.y))
+			var world_position := _region_local_to_world(Vector3(point.x, 0.0, point.y))
 			var region_variant: Variant = terrain_data.call("get_regionp", world_position)
 			if region_variant is Object:
 				regions[region_variant] = true
@@ -906,6 +1491,121 @@ func _get_expanded_cell_sample_points(cell: Vector2i, margin: float) -> Array[Ve
 		max_point,
 		Vector2(min_point.x, max_point.y),
 	]
+
+
+func _add_touched_terrain_regions_for_house_placements(
+	regions: Dictionary,
+	terrain_data: Object,
+	house_placements: Array[Dictionary]
+) -> void:
+	for placement: Dictionary in house_placements:
+		var center: Vector2 = placement.get("position", Vector2.ZERO)
+		var radius := _get_house_clearing_radius(placement)
+		var points := [
+			center,
+			center + Vector2(radius, 0.0),
+			center + Vector2(-radius, 0.0),
+			center + Vector2(0.0, radius),
+			center + Vector2(0.0, -radius),
+			center + Vector2(radius, radius),
+			center + Vector2(-radius, radius),
+			center + Vector2(radius, -radius),
+			center + Vector2(-radius, -radius),
+		]
+
+		for point: Vector2 in points:
+			var world_position := _region_local_to_world(Vector3(point.x, 0.0, point.y))
+			var region_variant: Variant = terrain_data.call("get_regionp", world_position)
+			if region_variant is Object:
+				regions[region_variant] = true
+
+
+func _paint_field_plot_surfaces(
+	terrain_data: Object,
+	terrain: Node3D,
+	plots: Array,
+	texture_count: int,
+	painted_points: Dictionary,
+	target_texture_id: int
+) -> void:
+	var sample_spacing := maxf(MIN_TERRAIN_PAINT_STEP, minf(maxf(field_sample_step, MIN_TERRAIN_PAINT_STEP), 1.0))
+	for plot_variant: Variant in plots:
+		if not (plot_variant is FieldPlotData):
+			continue
+
+		var plot := plot_variant as FieldPlotData
+		var bounds := _get_plot_bounds_2d(plot, sample_spacing)
+		if bounds.is_empty():
+			continue
+
+		var min_point: Vector2 = bounds["min"]
+		var max_point: Vector2 = bounds["max"]
+		var x := min_point.x
+		while x <= max_point.x + 0.001:
+			var z := min_point.y
+			while z <= max_point.y + 0.001:
+				var local_point := Vector2(x, z)
+				var strength := _get_plot_texture_strength(local_point, plot, field_texture_strength, field_edge_feather)
+				if strength > 0.003:
+					_paint_texture_point(
+						terrain_data,
+						terrain,
+						local_point,
+						texture_count,
+						painted_points,
+						target_texture_id,
+						strength,
+						PAINT_PRIORITY_FIELD
+					)
+				z += sample_spacing
+			x += sample_spacing
+
+
+func _paint_house_clearings(
+	terrain_data: Object,
+	terrain: Node3D,
+	house_placements: Array[Dictionary],
+	texture_count: int,
+	painted_points: Dictionary,
+	target_texture_id: int
+) -> void:
+	for placement: Dictionary in house_placements:
+		var radius := _get_house_clearing_radius(placement)
+		var sample_step := maxf(MIN_TERRAIN_PAINT_STEP, minf(road_sample_spacing, radius * 0.35))
+		_paint_radial_texture_sample(
+			terrain_data,
+			terrain,
+			placement.get("position", Vector2.ZERO),
+			radius,
+			sample_step,
+			texture_count,
+			painted_points,
+			target_texture_id,
+			house_texture_strength,
+			house_edge_feather,
+			PAINT_PRIORITY_HOUSE
+		)
+
+
+func _get_house_clearing_radius(placement: Dictionary) -> float:
+	var radius := float(placement.get("radius", cell_size * 0.5))
+	return maxf(radius, cell_size * 0.45)
+
+
+func _get_plot_texture_strength(local_point: Vector2, plot: FieldPlotData, texture_strength: float, edge_feather: float) -> float:
+	var edge_distance := plot.get_region_edge_distance(local_point)
+	if edge_distance < 0.0:
+		return 0.0
+
+	var strength := clampf(texture_strength, 0.0, 1.0)
+	var feather := clampf(edge_feather, 0.0, 1.0)
+	if feather <= 0.0:
+		return strength
+
+	var half_length := plot.length * 0.5
+	var half_width := plot.width * 0.5
+	var feather_width := maxf(minf(half_length, half_width) * feather, MIN_TERRAIN_PAINT_STEP)
+	return strength * _smootherstep(edge_distance / feather_width)
 
 
 func _paint_field_road_surface_mask(
@@ -948,7 +1648,10 @@ func _paint_field_road_surface_mask(
 					field_paint_step,
 					texture_count,
 					painted_points,
-					target_texture_id
+					target_texture_id,
+					road_texture_strength,
+					road_edge_feather,
+					PAINT_PRIORITY_FIELD_ROAD
 				)
 			z += field_sample_spacing
 		x += field_sample_spacing
@@ -963,7 +1666,10 @@ func _paint_field_road_surface_mask(
 			field_paint_step,
 			texture_count,
 			painted_points,
-			target_texture_id
+			target_texture_id,
+			road_texture_strength,
+			road_edge_feather,
+			PAINT_PRIORITY_FIELD_ROAD
 		)
 
 	var plot_perimeter_polylines: Array = []
@@ -981,37 +1687,33 @@ func _paint_field_road_surface_mask(
 			field_paint_step,
 			texture_count,
 			painted_points,
-			target_texture_id
+			target_texture_id,
+			road_texture_strength,
+			road_edge_feather,
+			PAINT_PRIORITY_FIELD_ROAD
 		)
 
 
 func _append_plot_perimeter_roads(polylines: Array, plot: FieldPlotData) -> void:
-	var row_direction := Vector2(plot.row_direction.x, plot.row_direction.z).normalized()
-	var lateral_direction := Vector2(plot.lateral_direction.x, plot.lateral_direction.z).normalized()
-	if row_direction.length_squared() <= 0.0001 or lateral_direction.length_squared() <= 0.0001:
+	var outline := plot.get_region_outline_2d()
+	if outline.size() < 2:
 		return
 
-	var center := Vector2(plot.center.x, plot.center.z)
-	var half_length := plot.length * 0.5
-	var half_width := plot.width * 0.5
-	var corners := [
-		center - row_direction * half_length - lateral_direction * half_width,
-		center + row_direction * half_length - lateral_direction * half_width,
-		center + row_direction * half_length + lateral_direction * half_width,
-		center - row_direction * half_length + lateral_direction * half_width,
-	]
-
-	for index: int in range(corners.size()):
+	for index: int in range(outline.size()):
 		var polyline := PackedVector2Array()
-		polyline.append(corners[index])
-		polyline.append(corners[(index + 1) % corners.size()])
+		polyline.append(outline[index])
+		polyline.append(outline[(index + 1) % outline.size()])
 		polylines.append(polyline)
 
 
 func _get_field_road_texture_id(texture_count: int) -> int:
-	if field_road_texture_id >= 0 and field_road_texture_id < texture_count:
+	if _is_terrain_texture_id_valid(field_road_texture_id, texture_count):
 		return field_road_texture_id
 	return road_texture_id
+
+
+func _is_terrain_texture_id_valid(texture_id: int, texture_count: int) -> bool:
+	return texture_id >= 0 and texture_id < texture_count
 
 
 func _get_field_road_width() -> float:
@@ -1078,7 +1780,7 @@ func _set_terrain_height_delta(
 	modified_regions: Dictionary,
 	modified_pixels: Dictionary
 ) -> bool:
-	var world_position := to_global(Vector3(local_point.x, 0.0, local_point.y))
+	var world_position := _region_local_to_world(Vector3(local_point.x, 0.0, local_point.y))
 	var region_variant: Variant = terrain_data.call("get_regionp", world_position)
 	if not (region_variant is Object):
 		return false
@@ -1132,41 +1834,23 @@ func _get_terrain_height_pixel(terrain_data: Object, terrain: Node3D, world_posi
 
 
 func _get_plot_lowering_weight(local_point: Vector2, plot: FieldPlotData) -> float:
-	var row_direction := Vector2(plot.row_direction.x, plot.row_direction.z).normalized()
-	var lateral_direction := Vector2(plot.lateral_direction.x, plot.lateral_direction.z).normalized()
-	if row_direction.length_squared() <= 0.0001 or lateral_direction.length_squared() <= 0.0001:
+	var edge_distance := plot.get_region_edge_distance(local_point)
+	if edge_distance < 0.0:
 		return 0.0
 
-	var center := Vector2(plot.center.x, plot.center.z)
-	var relative := local_point - center
-	var local_u := relative.dot(row_direction)
-	var local_v := relative.dot(lateral_direction)
-	var half_length := plot.length * 0.5
-	var half_width := plot.width * 0.5
-	if absf(local_u) > half_length or absf(local_v) > half_width:
-		return 0.0
-
-	var edge_distance := minf(half_length - absf(local_u), half_width - absf(local_v))
 	var slope_width := maxf(field_edge_slope_width, 0.01)
 	return clampf(edge_distance / slope_width, 0.0, 1.0)
 
 
 func _get_plot_bounds_2d(plot: FieldPlotData, margin: float) -> Dictionary:
-	var row_direction := Vector2(plot.row_direction.x, plot.row_direction.z).normalized()
-	var lateral_direction := Vector2(plot.lateral_direction.x, plot.lateral_direction.z).normalized()
-	if row_direction.length_squared() <= 0.0001 or lateral_direction.length_squared() <= 0.0001:
+	var outline := plot.get_region_outline_2d()
+	if outline.is_empty():
 		return {}
 
-	var center := Vector2(plot.center.x, plot.center.z)
-	var half_length := plot.length * 0.5 + margin
-	var half_width := plot.width * 0.5 + margin
-	var corners := [
-		center - row_direction * half_length - lateral_direction * half_width,
-		center + row_direction * half_length - lateral_direction * half_width,
-		center + row_direction * half_length + lateral_direction * half_width,
-		center - row_direction * half_length + lateral_direction * half_width,
-	]
-	return _get_point_bounds_2d(corners, 0.0)
+	var points: Array[Vector2] = []
+	for point: Vector2 in outline:
+		points.append(point)
+	return _get_point_bounds_2d(points, margin)
 
 
 func _get_cell_bounds_2d(cells: Array, margin: float) -> Dictionary:
@@ -1233,15 +1917,7 @@ func _is_point_inside_any_plot(point: Vector2, plots: Array, inset: float) -> bo
 
 
 func _is_point_inside_plot(point: Vector2, plot: FieldPlotData, inset: float) -> bool:
-	var row_direction := Vector2(plot.row_direction.x, plot.row_direction.z).normalized()
-	var lateral_direction := Vector2(plot.lateral_direction.x, plot.lateral_direction.z).normalized()
-	if row_direction.length_squared() <= 0.0001 or lateral_direction.length_squared() <= 0.0001:
-		return false
-
-	var relative := point - Vector2(plot.center.x, plot.center.z)
-	var half_length := maxf(plot.length * 0.5 - inset, 0.0)
-	var half_width := maxf(plot.width * 0.5 - inset, 0.0)
-	return absf(relative.dot(row_direction)) <= half_length and absf(relative.dot(lateral_direction)) <= half_width
+	return plot.contains_region_point(point, inset)
 
 
 func _apply_road_texture_to_generated_lines(
@@ -1267,7 +1943,10 @@ func _apply_road_texture_to_generated_lines(
 				field_paint_step,
 				texture_count,
 				painted_points,
-				target_texture_id
+				target_texture_id,
+				road_texture_strength,
+				road_edge_feather,
+				PAINT_PRIORITY_FIELD_ROAD
 			)
 
 
@@ -1427,13 +2106,28 @@ func _paint_road_polyline(
 	paint_step: float,
 	texture_count: int,
 	painted_points: Dictionary,
-	target_texture_id: int
+	target_texture_id: int,
+	texture_strength: float,
+	edge_feather: float,
+	priority: int
 ) -> void:
 	if polyline.is_empty():
 		return
 
 	if polyline.size() == 1:
-		_paint_road_sample(terrain_data, terrain, polyline[0], radius, paint_step, texture_count, painted_points, target_texture_id)
+		_paint_road_sample(
+			terrain_data,
+			terrain,
+			polyline[0],
+			radius,
+			paint_step,
+			texture_count,
+			painted_points,
+			target_texture_id,
+			texture_strength,
+			edge_feather,
+			priority
+		)
 		return
 
 	for index: int in range(polyline.size() - 1):
@@ -1455,7 +2149,10 @@ func _paint_road_polyline(
 				paint_step,
 				texture_count,
 				painted_points,
-				target_texture_id
+				target_texture_id,
+				texture_strength,
+				edge_feather,
+				priority
 			)
 
 
@@ -1467,58 +2164,114 @@ func _paint_road_sample(
 	paint_step: float,
 	texture_count: int,
 	painted_points: Dictionary,
-	target_texture_id: int
+	target_texture_id: int,
+	texture_strength: float,
+	edge_feather: float,
+	priority: int
 ) -> void:
-	var x := -radius
-	while x <= radius + 0.001:
-		var z := -radius
-		while z <= radius + 0.001:
+	_paint_radial_texture_sample(
+		terrain_data,
+		terrain,
+		local_center,
+		radius,
+		paint_step,
+		texture_count,
+		painted_points,
+		target_texture_id,
+		texture_strength,
+		edge_feather,
+		priority
+	)
+
+
+func _paint_radial_texture_sample(
+	terrain_data: Object,
+	terrain: Node3D,
+	local_center: Vector2,
+	radius: float,
+	paint_step: float,
+	texture_count: int,
+	painted_points: Dictionary,
+	target_texture_id: int,
+	texture_strength: float,
+	edge_feather: float,
+	priority: int
+) -> void:
+	var safe_radius := maxf(radius, 0.001)
+	var safe_paint_step := maxf(paint_step, MIN_TERRAIN_PAINT_STEP)
+	var x := -safe_radius
+	while x <= safe_radius + 0.001:
+		var z := -safe_radius
+		while z <= safe_radius + 0.001:
 			var offset := Vector2(x, z)
-			if offset.length_squared() <= radius * radius:
-				var strength := _get_road_spray_strength(offset.length() / radius)
-				if strength <= 0.003:
-					z += paint_step
-					continue
-
-				var local_point := local_center + offset
-				var paint_key := Vector2i(roundi(local_point.x / paint_step), roundi(local_point.y / paint_step))
-				var existing_point_data: Variant = painted_points.get(paint_key)
-				if existing_point_data is Dictionary and float((existing_point_data as Dictionary).get("strength", 0.0)) >= strength:
-					z += paint_step
-					continue
-
-				if not painted_points.has(paint_key):
-					painted_points[paint_key] = true
-					var world_position := _get_surface_world_position_from_local_2d(local_point, terrain)
-					var original_control := int(terrain_data.call("get_control", world_position))
-					var base_texture_id := _get_road_base_texture_id(terrain_data, world_position, original_control, texture_count, target_texture_id)
-					_runtime_road_control_records.append({
-						"position": world_position,
-						"control": original_control,
-					})
-					painted_points[paint_key] = {
-						"position": world_position,
-						"base_texture_id": base_texture_id,
-						"strength": strength,
-					}
-				else:
-					var point_data := existing_point_data as Dictionary
-					point_data["strength"] = strength
-					painted_points[paint_key] = point_data
-
-				var point_data := painted_points[paint_key] as Dictionary
-				_set_road_control(
-					terrain_data,
-					point_data["position"],
-					int(point_data["base_texture_id"]),
-					strength,
-					target_texture_id
-				)
-			z += paint_step
-		x += paint_step
+			if offset.length_squared() <= safe_radius * safe_radius:
+				var strength := _get_radial_texture_strength(offset.length() / safe_radius, texture_strength, edge_feather)
+				if strength > 0.003:
+					_paint_texture_point(
+						terrain_data,
+						terrain,
+						local_center + offset,
+						texture_count,
+						painted_points,
+						target_texture_id,
+						strength,
+						priority
+					)
+			z += safe_paint_step
+		x += safe_paint_step
 
 
-func _set_road_control(terrain_data: Object, world_position: Vector3, base_texture_id: int, strength: float, target_texture_id: int) -> void:
+func _paint_texture_point(
+	terrain_data: Object,
+	terrain: Node3D,
+	local_point: Vector2,
+	texture_count: int,
+	painted_points: Dictionary,
+	target_texture_id: int,
+	strength: float,
+	priority: int
+) -> void:
+	var paint_key := Vector2i(
+		roundi(local_point.x / TERRAIN_PAINT_RECORD_STEP),
+		roundi(local_point.y / TERRAIN_PAINT_RECORD_STEP)
+	)
+	var existing_point_data: Variant = painted_points.get(paint_key)
+	if existing_point_data is Dictionary:
+		var existing_data := existing_point_data as Dictionary
+		var existing_priority := int(existing_data.get("priority", 0))
+		var existing_strength := float(existing_data.get("strength", 0.0))
+		if existing_priority > priority or (existing_priority == priority and existing_strength >= strength):
+			return
+
+		existing_data["strength"] = strength
+		existing_data["priority"] = priority
+		painted_points[paint_key] = existing_data
+	else:
+		var world_position := _get_surface_world_position_from_local_2d(local_point, terrain)
+		var original_control := int(terrain_data.call("get_control", world_position))
+		var base_texture_id := _get_overlay_base_texture_id(terrain_data, world_position, original_control, texture_count, target_texture_id)
+		_runtime_road_control_records.append({
+			"position": world_position,
+			"control": original_control,
+		})
+		painted_points[paint_key] = {
+			"position": world_position,
+			"base_texture_id": base_texture_id,
+			"strength": strength,
+			"priority": priority,
+		}
+
+	var point_data := painted_points[paint_key] as Dictionary
+	_set_terrain_overlay_control(
+		terrain_data,
+		point_data["position"],
+		int(point_data["base_texture_id"]),
+		strength,
+		target_texture_id
+	)
+
+
+func _set_terrain_overlay_control(terrain_data: Object, world_position: Vector3, base_texture_id: int, strength: float, target_texture_id: int) -> void:
 	terrain_data.call("set_control_base_id", world_position, base_texture_id)
 	if terrain_data.has_method("set_control_overlay_id"):
 		terrain_data.call("set_control_overlay_id", world_position, target_texture_id)
@@ -1528,18 +2281,18 @@ func _set_road_control(terrain_data: Object, world_position: Vector3, base_textu
 		terrain_data.call("set_control_auto", world_position, false)
 
 
-func _get_road_spray_strength(normalized_distance: float) -> float:
-	var texture_strength := clampf(road_texture_strength, 0.0, 1.0)
-	var feather := clampf(road_edge_feather, 0.0, 1.0)
+func _get_radial_texture_strength(normalized_distance: float, texture_strength: float, edge_feather: float) -> float:
+	var strength := clampf(texture_strength, 0.0, 1.0)
+	var feather := clampf(edge_feather, 0.0, 1.0)
 	if feather <= 0.0:
-		return texture_strength
+		return strength
 
 	var inner := clampf(1.0 - feather, 0.0, 1.0)
 	if normalized_distance <= inner:
-		return texture_strength
+		return strength
 
 	var edge_weight := clampf((normalized_distance - inner) / maxf(feather, 0.001), 0.0, 1.0)
-	return texture_strength * (1.0 - _smootherstep(edge_weight))
+	return strength * (1.0 - _smootherstep(edge_weight))
 
 
 func _smootherstep(weight: float) -> float:
@@ -1547,7 +2300,7 @@ func _smootherstep(weight: float) -> float:
 	return value * value * value * (value * (value * 6.0 - 15.0) + 10.0)
 
 
-func _get_road_base_texture_id(terrain_data: Object, world_position: Vector3, original_control: int, texture_count: int, target_texture_id: int) -> int:
+func _get_overlay_base_texture_id(terrain_data: Object, world_position: Vector3, original_control: int, texture_count: int, target_texture_id: int) -> int:
 	var control_auto := (original_control & 0x1) != 0
 	var control_base_id := (original_control >> 27) & 0x1f
 	var control_overlay_id := (original_control >> 22) & 0x1f
@@ -1555,11 +2308,11 @@ func _get_road_base_texture_id(terrain_data: Object, world_position: Vector3, or
 
 	if not control_auto:
 		var visible_control_id := control_overlay_id if control_blend >= 0.5 else control_base_id
-		if _is_valid_road_base_texture_id(visible_control_id, texture_count, target_texture_id):
+		if _is_valid_overlay_base_texture_id(visible_control_id, texture_count, target_texture_id):
 			return visible_control_id
-		if _is_valid_road_base_texture_id(control_base_id, texture_count, target_texture_id):
+		if _is_valid_overlay_base_texture_id(control_base_id, texture_count, target_texture_id):
 			return control_base_id
-		if _is_valid_road_base_texture_id(control_overlay_id, texture_count, target_texture_id):
+		if _is_valid_overlay_base_texture_id(control_overlay_id, texture_count, target_texture_id):
 			return control_overlay_id
 
 	if terrain_data.has_method("get_texture_id"):
@@ -1569,21 +2322,21 @@ func _get_road_base_texture_id(terrain_data: Object, world_position: Vector3, or
 			if not is_nan(texture_ids.z):
 				if texture_ids.z >= 0.5 and not is_nan(texture_ids.y):
 					var visible_overlay_id := int(texture_ids.y)
-					if _is_valid_road_base_texture_id(visible_overlay_id, texture_count, target_texture_id):
+					if _is_valid_overlay_base_texture_id(visible_overlay_id, texture_count, target_texture_id):
 						return visible_overlay_id
 				elif texture_ids.z < 0.5 and not is_nan(texture_ids.x):
 					var visible_base_id := int(texture_ids.x)
-					if _is_valid_road_base_texture_id(visible_base_id, texture_count, target_texture_id):
+					if _is_valid_overlay_base_texture_id(visible_base_id, texture_count, target_texture_id):
 						return visible_base_id
-			if not is_nan(texture_ids.x) and _is_valid_road_base_texture_id(int(texture_ids.x), texture_count, target_texture_id):
+			if not is_nan(texture_ids.x) and _is_valid_overlay_base_texture_id(int(texture_ids.x), texture_count, target_texture_id):
 				return int(texture_ids.x)
-			if not is_nan(texture_ids.y) and _is_valid_road_base_texture_id(int(texture_ids.y), texture_count, target_texture_id):
+			if not is_nan(texture_ids.y) and _is_valid_overlay_base_texture_id(int(texture_ids.y), texture_count, target_texture_id):
 				return int(texture_ids.y)
 
 	return 0
 
 
-func _is_valid_road_base_texture_id(texture_id: int, texture_count: int, target_texture_id: int) -> bool:
+func _is_valid_overlay_base_texture_id(texture_id: int, texture_count: int, target_texture_id: int) -> bool:
 	return texture_id >= 0 and texture_id < texture_count and texture_id != target_texture_id
 
 
@@ -1903,6 +2656,15 @@ func _get_terrain_node() -> Node3D:
 	return null
 
 
+func _mark_startup_phase(label: String, context: Dictionary = {}) -> void:
+	if Engine.is_editor_hint():
+		return
+
+	var probe := get_node_or_null("/root/StartupPerformanceProbe") if is_inside_tree() else null
+	if probe and probe.has_method("mark_phase"):
+		probe.call("mark_phase", label, context)
+
+
 func _get_season_weather_node() -> SeasonWeatherSystem:
 	if season_weather_path.is_empty():
 		return null
@@ -1924,14 +2686,18 @@ func _get_field_terrain_registry_node() -> FieldTerrainRegistry:
 
 
 func _get_terrain_data(terrain: Node3D) -> Object:
-	if not is_instance_valid(terrain):
+	if not _is_terrain_ready_for_height_queries(terrain):
 		return null
 
 	var terrain_data: Variant = terrain.get("data")
 	if not (terrain_data is Object):
 		return null
 
-	return terrain_data as Object
+	var terrain_data_object := terrain_data as Object
+	if not is_instance_valid(terrain_data_object) or terrain_data_object.is_queued_for_deletion():
+		return null
+
+	return terrain_data_object
 
 
 func _get_terrain_height(terrain: Node3D, world_position: Vector3) -> Variant:
@@ -1941,6 +2707,10 @@ func _get_terrain_height(terrain: Node3D, world_position: Vector3) -> Variant:
 
 	if not terrain_data_object.has_method("get_height"):
 		return null
+	if terrain_data_object.has_method("get_region_count"):
+		var region_count := int(terrain_data_object.call("get_region_count"))
+		if region_count <= 0:
+			return null
 
 	var height: float = terrain_data_object.call("get_height", world_position)
 	if is_nan(height) or absf(height) > 1.0e20:
@@ -1949,15 +2719,70 @@ func _get_terrain_height(terrain: Node3D, world_position: Vector3) -> Variant:
 	return height
 
 
+func request_editor_gizmo_update() -> void:
+	if not Engine.is_editor_hint() or not is_inside_tree() or not _is_in_active_edited_scene():
+		return
+	if _editor_gizmo_update_pending:
+		return
+
+	_editor_gizmo_update_pending = true
+	_flush_editor_gizmo_update.call_deferred()
+
+
+func _flush_editor_gizmo_update() -> void:
+	_editor_gizmo_update_pending = false
+	if not Engine.is_editor_hint() or not is_inside_tree() or not _is_in_active_edited_scene():
+		return
+
+	update_gizmos()
+
+
 func _notify_cells_changed() -> void:
 	if _suspend_cell_notifications:
 		return
 	cells_changed.emit()
 	if Engine.is_editor_hint() and is_inside_tree():
-		update_gizmos()
+		request_editor_gizmo_update()
+
+
+func _region_local_to_world(local_position: Vector3) -> Vector3:
+	if is_inside_tree():
+		return global_transform * local_position
+	return transform * local_position
 
 
 func _world_to_region_local(world_position: Vector3) -> Vector3:
 	if is_inside_tree():
 		return to_local(world_position)
 	return transform.affine_inverse() * world_position
+
+
+func _is_terrain_ready_for_height_queries(terrain: Node3D) -> bool:
+	if not is_instance_valid(terrain) or terrain.is_queued_for_deletion():
+		return false
+	if Engine.is_editor_hint() and not _is_node_in_active_edited_scene(terrain):
+		return false
+	return true
+
+
+func _is_in_active_edited_scene() -> bool:
+	return _is_node_in_active_edited_scene(self)
+
+
+func _is_node_in_active_edited_scene(node: Node) -> bool:
+	if not Engine.is_editor_hint():
+		return true
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return false
+	if not Engine.has_singleton(&"EditorInterface"):
+		return true
+
+	var editor_interface := Engine.get_singleton(&"EditorInterface")
+	if editor_interface == null or not editor_interface.has_method("get_edited_scene_root"):
+		return true
+
+	var edited_root := editor_interface.call("get_edited_scene_root") as Node
+	if not is_instance_valid(edited_root):
+		return false
+
+	return node == edited_root or edited_root.is_ancestor_of(node)

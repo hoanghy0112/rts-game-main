@@ -4,14 +4,12 @@ extends EditorNode3DGizmoPlugin
 const VillageRegionScript = preload("res://addons/village_brush/village_region.gd")
 
 const SURFACE_OFFSET := 0.025
-const EDGE_SEGMENTS := 1
-const LARGE_REGION_CELL_LIMIT := 500
 const SURFACE_CACHE_SCALE := 20.0
-const HOUSE_COLOR := Color(1.0, 0.55, 0.18, 0.95)
-const FIELD_COLOR := Color(0.24, 0.82, 0.48, 0.95)
-const ROAD_COLOR := Color(0.72, 0.62, 0.46, 0.95)
-const PREVIEW_COLOR := Color(0.15, 0.62, 1.0, 1.0)
-const ERASE_PREVIEW_COLOR := Color(1.0, 0.2, 0.16, 1.0)
+const HOUSE_COLOR := Color(1.0, 0.55, 0.18, 0.42)
+const FIELD_COLOR := Color(0.24, 0.82, 0.48, 0.40)
+const ROAD_COLOR := Color(0.72, 0.62, 0.46, 0.45)
+const PREVIEW_COLOR := Color(0.15, 0.62, 1.0, 0.52)
+const ERASE_PREVIEW_COLOR := Color(1.0, 0.2, 0.16, 0.56)
 
 enum CellDrawStyle {
 	HOUSE,
@@ -24,18 +22,18 @@ var _preview_region_id := 0
 var _preview_cells: Array[Vector2i] = []
 var _preview_mode := 0
 var _preview_visible := false
-var _base_line_cache: Dictionary = {}
+var _base_mesh_cache: Dictionary = {}
 var _surface_point_cache_by_region: Dictionary = {}
 
 
 func _init() -> void:
 	_cell_material = StandardMaterial3D.new()
 	_cell_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_cell_material.set_flag(BaseMaterial3D.FLAG_DISABLE_DEPTH_TEST, true)
 	_cell_material.set_flag(BaseMaterial3D.FLAG_ALBEDO_FROM_VERTEX_COLOR, true)
 	_cell_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_cell_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_cell_material.albedo_color = Color.WHITE
-	add_material("village_cell_lines", _cell_material)
+	add_material("village_cell_fill", _cell_material)
 
 
 func _get_gizmo_name() -> String:
@@ -82,11 +80,13 @@ func _redraw(gizmo: EditorNode3DGizmo) -> void:
 	gizmo.clear()
 
 	var region := gizmo.get_node_3d() as VillageRegionScript
-	if not is_instance_valid(region):
+	if not is_instance_valid(region) or not _is_node_in_active_edited_scene(region):
 		return
 
-	var material := get_material("village_cell_lines", gizmo)
+	var material := get_material("village_cell_fill", gizmo)
 	var terrain := _get_terrain(region)
+	if is_instance_valid(terrain) and not _is_terrain_ready_for_height_queries(region, terrain):
+		terrain = null
 	_draw_cached_cells(gizmo, region, terrain, region.house_cells, material, HOUSE_COLOR, CellDrawStyle.HOUSE)
 	_draw_cached_cells(gizmo, region, terrain, region.field_cells, material, FIELD_COLOR, CellDrawStyle.FIELD)
 	_draw_cached_cells(gizmo, region, terrain, region.road_cells, material, ROAD_COLOR, CellDrawStyle.ROAD)
@@ -114,9 +114,9 @@ func _draw_cached_cells(
 	if cells.is_empty():
 		return
 
-	var lines := _get_cached_cell_lines(region, terrain, cells, draw_style)
-	if not lines.is_empty():
-		gizmo.add_lines(lines, material, false, color)
+	var mesh := _get_cached_cell_mesh(region, terrain, cells, color, draw_style)
+	if mesh.get_surface_count() > 0:
+		gizmo.add_mesh(mesh, material)
 
 
 func _draw_cells(
@@ -132,51 +132,54 @@ func _draw_cells(
 		return
 
 	var surface_cache := _get_surface_point_cache(region, terrain)
-	var lines := _build_cell_lines(region, terrain, cells, draw_style, surface_cache)
-	if not lines.is_empty():
-		gizmo.add_lines(lines, material, false, color)
+	var mesh := _build_cell_mesh(region, terrain, cells, color, draw_style, surface_cache)
+	if mesh.get_surface_count() > 0:
+		gizmo.add_mesh(mesh, material)
 
 
-func _get_cached_cell_lines(
+func _get_cached_cell_mesh(
 	region: VillageRegionScript,
 	terrain: Node3D,
 	cells: Array[Vector2i],
+	color: Color,
 	draw_style: int
-) -> PackedVector3Array:
+) -> ArrayMesh:
 	var region_id := region.get_instance_id()
-	var cache_signature := _get_cell_line_cache_signature(region, terrain, cells, draw_style)
-	var cache := _base_line_cache.get(region_id, {}) as Dictionary
+	var cache_signature := _get_cell_mesh_cache_signature(region, terrain, cells, color, draw_style)
+	var cache := _base_mesh_cache.get(region_id, {}) as Dictionary
 	var cache_key := str(draw_style)
 	var cached_record: Variant = cache.get(cache_key)
 	if cached_record is Dictionary:
 		var record := cached_record as Dictionary
-		var cached_lines: Variant = record.get("lines")
-		if str(record.get("signature", "")) == cache_signature and cached_lines is PackedVector3Array:
-			return cached_lines as PackedVector3Array
+		var cached_mesh: Variant = record.get("mesh")
+		if str(record.get("signature", "")) == cache_signature and cached_mesh is ArrayMesh:
+			return cached_mesh as ArrayMesh
 
 	var surface_cache := _get_surface_point_cache(region, terrain)
-	var lines := _build_cell_lines(region, terrain, cells, draw_style, surface_cache)
+	var mesh := _build_cell_mesh(region, terrain, cells, color, draw_style, surface_cache)
 	cache[cache_key] = {
 		"signature": cache_signature,
-		"lines": lines,
+		"mesh": mesh,
 	}
-	_base_line_cache[region_id] = cache
-	return lines
+	_base_mesh_cache[region_id] = cache
+	return mesh
 
 
-func _build_cell_lines(
+func _build_cell_mesh(
 	region: VillageRegionScript,
 	terrain: Node3D,
 	cells: Array[Vector2i],
-	draw_style: int,
+	color: Color,
+	_draw_style: int,
 	surface_cache: Dictionary
-) -> PackedVector3Array:
-	var lines := PackedVector3Array()
-	if cells.size() > LARGE_REGION_CELL_LIMIT:
-		_append_aggregate_cell_lines(lines, region, terrain, cells, surface_cache)
-		return lines
+) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	var colors := PackedColorArray()
+	vertices.resize(cells.size() * 6)
+	colors.resize(cells.size() * 6)
 
 	var half_size := region.cell_size * 0.5
+	var vertex_index := 0
 	for cell: Vector2i in cells:
 		var center := region.cell_to_local_center(cell)
 
@@ -185,98 +188,70 @@ func _build_cell_lines(
 		var se := center + Vector3(half_size, 0.0, half_size)
 		var sw := center + Vector3(-half_size, 0.0, half_size)
 
-		_append_surface_line(lines, region, terrain, nw, ne, surface_cache)
-		_append_surface_line(lines, region, terrain, ne, se, surface_cache)
-		_append_surface_line(lines, region, terrain, se, sw, surface_cache)
-		_append_surface_line(lines, region, terrain, sw, nw, surface_cache)
-		match draw_style:
-			CellDrawStyle.HOUSE:
-				_append_surface_line(lines, region, terrain, nw, se, surface_cache)
-				_append_surface_line(lines, region, terrain, ne, sw, surface_cache)
-			CellDrawStyle.FIELD:
-				var row_a := center + Vector3(0.0, 0.0, -half_size * 0.35)
-				var row_b := center + Vector3(0.0, 0.0, half_size * 0.35)
-				_append_surface_line(
-					lines,
-					region,
-					terrain,
-					row_a + Vector3(-half_size, 0.0, 0.0),
-					row_a + Vector3(half_size, 0.0, 0.0),
-					surface_cache
-				)
-				_append_surface_line(
-					lines,
-					region,
-					terrain,
-					row_b + Vector3(-half_size, 0.0, 0.0),
-					row_b + Vector3(half_size, 0.0, 0.0),
-					surface_cache
-				)
-			CellDrawStyle.ROAD:
-				_append_surface_line(
-					lines,
-					region,
-					terrain,
-					center + Vector3(-half_size, 0.0, 0.0),
-					center + Vector3(half_size, 0.0, 0.0),
-					surface_cache
-				)
-				_append_surface_line(
-					lines,
-					region,
-					terrain,
-					center + Vector3(0.0, 0.0, -half_size),
-					center + Vector3(0.0, 0.0, half_size),
-					surface_cache
-				)
+		vertex_index = _append_cell_fill_triangles(
+			vertices,
+			colors,
+			vertex_index,
+			color,
+			region,
+			terrain,
+			nw,
+			ne,
+			se,
+			sw,
+			surface_cache
+		)
 
-	return lines
+	var mesh := ArrayMesh.new()
+	if vertices.is_empty():
+		return mesh
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
-func _append_aggregate_cell_lines(
-	lines: PackedVector3Array,
+func _append_cell_fill_triangles(
+	vertices: PackedVector3Array,
+	colors: PackedColorArray,
+	vertex_index: int,
+	color: Color,
 	region: VillageRegionScript,
 	terrain: Node3D,
-	cells: Array[Vector2i],
+	nw: Vector3,
+	ne: Vector3,
+	se: Vector3,
+	sw: Vector3,
 	surface_cache: Dictionary
-) -> void:
-	var lookup: Dictionary = {}
-	for cell: Vector2i in cells:
-		lookup[cell] = true
+) -> int:
+	var surface_nw := _to_surface_local(region, terrain, nw, surface_cache)
+	var surface_ne := _to_surface_local(region, terrain, ne, surface_cache)
+	var surface_se := _to_surface_local(region, terrain, se, surface_cache)
+	var surface_sw := _to_surface_local(region, terrain, sw, surface_cache)
 
-	var half_size := region.cell_size * 0.5
-	for cell: Vector2i in cells:
-		var center := region.cell_to_local_center(cell)
-		var nw := center + Vector3(-half_size, 0.0, -half_size)
-		var ne := center + Vector3(half_size, 0.0, -half_size)
-		var se := center + Vector3(half_size, 0.0, half_size)
-		var sw := center + Vector3(-half_size, 0.0, half_size)
+	vertices[vertex_index] = surface_nw
+	colors[vertex_index] = color
+	vertex_index += 1
+	vertices[vertex_index] = surface_se
+	colors[vertex_index] = color
+	vertex_index += 1
+	vertices[vertex_index] = surface_ne
+	colors[vertex_index] = color
+	vertex_index += 1
 
-		if not lookup.has(cell + Vector2i(0, -1)):
-			_append_surface_line(lines, region, terrain, nw, ne, surface_cache)
-		if not lookup.has(cell + Vector2i(1, 0)):
-			_append_surface_line(lines, region, terrain, ne, se, surface_cache)
-		if not lookup.has(cell + Vector2i(0, 1)):
-			_append_surface_line(lines, region, terrain, se, sw, surface_cache)
-		if not lookup.has(cell + Vector2i(-1, 0)):
-			_append_surface_line(lines, region, terrain, sw, nw, surface_cache)
-
-
-func _append_surface_line(
-	lines: PackedVector3Array,
-	region: VillageRegionScript,
-	terrain: Node3D,
-	from_local: Vector3,
-	to_local: Vector3,
-	surface_cache: Dictionary
-) -> void:
-	var previous := _to_surface_local(region, terrain, from_local, surface_cache)
-	for index: int in range(1, EDGE_SEGMENTS + 1):
-		var weight := float(index) / float(EDGE_SEGMENTS)
-		var next := _to_surface_local(region, terrain, from_local.lerp(to_local, weight), surface_cache)
-		lines.append(previous)
-		lines.append(next)
-		previous = next
+	vertices[vertex_index] = surface_nw
+	colors[vertex_index] = color
+	vertex_index += 1
+	vertices[vertex_index] = surface_sw
+	colors[vertex_index] = color
+	vertex_index += 1
+	vertices[vertex_index] = surface_se
+	colors[vertex_index] = color
+	vertex_index += 1
+	return vertex_index
 
 
 func _to_surface_local(region: VillageRegionScript, terrain: Node3D, local_position: Vector3, surface_cache: Dictionary) -> Vector3:
@@ -290,7 +265,7 @@ func _to_surface_local(region: VillageRegionScript, terrain: Node3D, local_posit
 		return cached_position as Vector3
 
 	var surface_position := local_position
-	if not is_instance_valid(terrain) or not region.is_inside_tree():
+	if not _is_terrain_ready_for_height_queries(region, terrain):
 		surface_position.y += SURFACE_OFFSET
 		surface_cache[cache_key] = surface_position
 		return surface_position
@@ -337,18 +312,27 @@ func _get_surface_point_cache(region: VillageRegionScript, terrain: Node3D) -> D
 	return points
 
 
-func _get_cell_line_cache_signature(region: VillageRegionScript, terrain: Node3D, cells: Array[Vector2i], draw_style: int) -> String:
-	return "%s|%d|%s" % [
+func _get_cell_mesh_cache_signature(
+	region: VillageRegionScript,
+	terrain: Node3D,
+	cells: Array[Vector2i],
+	color: Color,
+	draw_style: int
+) -> String:
+	return "%s|%d|%s|%s" % [
 		_get_surface_signature(region, terrain),
 		draw_style,
+		str(color),
 		_get_cells_key(cells),
 	]
 
 
 func _get_surface_signature(region: VillageRegionScript, terrain: Node3D) -> String:
 	var terrain_id := terrain.get_instance_id() if is_instance_valid(terrain) else 0
-	return "%d|%.4f|%s|%s" % [
+	var terrain_data_id := _get_terrain_data_id(terrain)
+	return "%d|%d|%.4f|%s|%s" % [
 		terrain_id,
+		terrain_data_id,
 		region.cell_size,
 		str(region.origin),
 		_transform_signature(region.global_transform if region.is_inside_tree() else region.transform),
@@ -395,7 +379,7 @@ func _get_terrain_height(terrain: Node3D, world_position: Vector3) -> Variant:
 		return null
 
 	var terrain_data_object := terrain_data as Object
-	if not terrain_data_object.has_method("get_height"):
+	if not _is_terrain_data_ready_for_height_queries(terrain_data_object):
 		return null
 
 	var height: float = terrain_data_object.call("get_height", world_position)
@@ -403,3 +387,61 @@ func _get_terrain_height(terrain: Node3D, world_position: Vector3) -> Variant:
 		return null
 
 	return height
+
+
+func _is_terrain_ready_for_height_queries(region: VillageRegionScript, terrain: Node3D) -> bool:
+	if not is_instance_valid(region) or not region.is_inside_tree():
+		return false
+	if not is_instance_valid(terrain) or terrain.is_queued_for_deletion():
+		return false
+	if Engine.is_editor_hint() and (
+		not _is_node_in_active_edited_scene(region)
+		or not _is_node_in_active_edited_scene(terrain)
+	):
+		return false
+
+	var terrain_data: Variant = terrain.get("data")
+	if not (terrain_data is Object):
+		return false
+	return _is_terrain_data_ready_for_height_queries(terrain_data as Object)
+
+
+func _is_terrain_data_ready_for_height_queries(terrain_data_object: Object) -> bool:
+	if not is_instance_valid(terrain_data_object) or terrain_data_object.is_queued_for_deletion():
+		return false
+	if not terrain_data_object.has_method("get_height"):
+		return false
+	if terrain_data_object.has_method("get_region_count"):
+		var region_count := int(terrain_data_object.call("get_region_count"))
+		if region_count <= 0:
+			return false
+	return true
+
+
+func _get_terrain_data_id(terrain: Node3D) -> int:
+	if not is_instance_valid(terrain) or terrain.is_queued_for_deletion():
+		return 0
+
+	var terrain_data: Variant = terrain.get("data")
+	if terrain_data is Object and is_instance_valid(terrain_data):
+		return (terrain_data as Object).get_instance_id()
+	return 0
+
+
+func _is_node_in_active_edited_scene(node: Node) -> bool:
+	if not Engine.is_editor_hint():
+		return true
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return false
+	if not Engine.has_singleton(&"EditorInterface"):
+		return true
+
+	var editor_interface := Engine.get_singleton(&"EditorInterface")
+	if editor_interface == null or not editor_interface.has_method("get_edited_scene_root"):
+		return true
+
+	var edited_root := editor_interface.call("get_edited_scene_root") as Node
+	if not is_instance_valid(edited_root):
+		return false
+
+	return node == edited_root or edited_root.is_ancestor_of(node)

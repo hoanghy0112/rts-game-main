@@ -15,14 +15,16 @@ Concrete field scripts implement:
 
 Field scenes are presentation and local interaction nodes. They can own meshes, materials, collision hints, selection markers, crop props, and water visuals.
 
-Gameplay state belongs in `FieldPlotData` and registries. Plot id, dimensions, crop stage, flood level, mud level, labor, irrigation, and safety values should be stored in data objects so simulation systems can query them without walking visual scene nodes.
+Gameplay state belongs in `FieldPlotData` and registries. Plot id, footprint, bounding dimensions, crop stage, flood level, mud level, labor, irrigation, and safety values should be stored in data objects so simulation systems can query them without walking visual scene nodes.
+
+Generated footprints may be concave orthogonal polygons rather than rectangles. Concrete field scenes should treat the polygon as authoritative and expect right-angle jogs along both row-aligned and lateral-aligned edges.
 
 ## Concrete Fields
 
 `RiceField.tscn` attaches `RiceField.gd`, which implements the abstract methods and reacts to `SeasonWeatherSystem.environment_changed`. Future `CornField.tscn` or `VegetableField.tscn` scenes should follow the same pattern:
 
 1. Attach a concrete script extending `AbstractField`.
-2. Use `plot_data.length` and `plot_data.width` for visual dimensions.
+2. Use `plot_data.footprint` for visual meshes, crop scattering, collision hints, and point checks. Use `plot_data.length` and `plot_data.width` only as bounding extents or compatibility dimensions.
 3. Use `crop_type.get_ground_state_id(snapshot)` and `crop_type.get_ground_state_data(id)` for ground material and movement metadata.
 4. Update `plot_data.ground_state_id` and `plot_data.ground_state_data` when environment changes.
 
@@ -34,4 +36,4 @@ Maps contain one `SeasonWeatherSystem.tscn`. `VillageRegion` resolves it through
 
 ## Registry Rule
 
-Units should query `FieldTerrainRegistry`, not field scene nodes. The registry stores plot data and field transforms, answers point-in-field checks, and returns ground state or speed multiplier values. This keeps movement code independent from crop-specific scene hierarchies.
+Units should query `FieldTerrainRegistry`, not field scene nodes. The registry stores plot data and field transforms, answers polygon point-in-field checks, and returns ground state or speed multiplier values. This keeps movement code independent from crop-specific scene hierarchies.

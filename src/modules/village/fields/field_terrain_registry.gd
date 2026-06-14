@@ -53,7 +53,4 @@ func _get_record_at(world_pos: Vector3) -> Dictionary:
 
 func _contains_world_position(plot_data: FieldPlotData, field_node: Node3D, world_pos: Vector3) -> bool:
 	var local_pos := field_node.to_local(world_pos)
-	return (
-		absf(local_pos.x) <= plot_data.length * 0.5
-		and absf(local_pos.z) <= plot_data.width * 0.5
-	)
+	return plot_data.contains_local_point(Vector2(local_pos.x, local_pos.z))

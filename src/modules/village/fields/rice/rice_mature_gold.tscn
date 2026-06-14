@@ -2,10 +2,14 @@
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_gold"]
 albedo_color = Color(0.82, 0.67, 0.27, 1)
-roughness = 0.88
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.9
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_panicle"]
 albedo_color = Color(0.95, 0.78, 0.32, 1)
+metallic = 0.0
+metallic_specular = 0.0
 roughness = 0.9
 
 [sub_resource type="BoxMesh" id="BoxMesh_stem"]

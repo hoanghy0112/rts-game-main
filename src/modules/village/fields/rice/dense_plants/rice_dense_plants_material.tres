@@ -1,0 +1,10 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://modules/village/fields/rice/dense_plants/rice_dense_plants_blade.gdshader" id="1_blade_shader"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_blade_shader")
+shader_parameter/base_shadow = Vector3(0.11, 0.16, 0.05)
+shader_parameter/tip_light = Vector3(1.08, 1.05, 0.86)
+shader_parameter/backlight_color = Vector3(0.34, 0.38, 0.18)
