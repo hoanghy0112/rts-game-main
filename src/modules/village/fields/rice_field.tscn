@@ -1,0 +1,79 @@
+[gd_scene load_steps=13 format=3 uid="uid://hh2q7fljlest"]
+
+[ext_resource type="Script" path="res://modules/village/fields/rice_field.gd" id="1_rice"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_dry"]
+albedo_color = Color(0.2, 0.53, 0.2, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wet"]
+albedo_color = Color(0.14, 0.38, 0.24, 1)
+roughness = 0.72
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_flooded"]
+albedo_color = Color(0.13, 0.32, 0.33, 1)
+roughness = 0.52
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_muddy"]
+albedo_color = Color(0.29, 0.22, 0.13, 1)
+roughness = 0.95
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_crop"]
+albedo_color = Color(0.54, 0.82, 0.31, 1)
+roughness = 0.84
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_seedling"]
+albedo_color = Color(0.45, 0.82, 0.29, 1)
+roughness = 0.82
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_tillering"]
+albedo_color = Color(0.28, 0.68, 0.22, 1)
+roughness = 0.86
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_mature"]
+albedo_color = Color(0.82, 0.67, 0.27, 1)
+roughness = 0.88
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_stubble"]
+albedo_color = Color(0.61, 0.47, 0.25, 1)
+roughness = 0.92
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_water"]
+transparency = 1
+albedo_color = Color(0.28, 0.43, 0.45, 0.46)
+roughness = 0.18
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(1, 0.04, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_water"]
+size = Vector3(1, 0.018, 1)
+
+[node name="RiceField" type="Node3D"]
+script = ExtResource("1_rice")
+dry_material = SubResource("StandardMaterial3D_dry")
+wet_material = SubResource("StandardMaterial3D_wet")
+flooded_material = SubResource("StandardMaterial3D_flooded")
+muddy_material = SubResource("StandardMaterial3D_muddy")
+crop_material = SubResource("StandardMaterial3D_crop")
+seedling_material = SubResource("StandardMaterial3D_seedling")
+tillering_material = SubResource("StandardMaterial3D_tillering")
+mature_material = SubResource("StandardMaterial3D_mature")
+stubble_material = SubResource("StandardMaterial3D_stubble")
+water_material = SubResource("StandardMaterial3D_water")
+
+[node name="VisualRoot" type="Node3D" parent="."]
+
+[node name="Ground" type="MeshInstance3D" parent="VisualRoot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.02, 0)
+mesh = SubResource("BoxMesh_ground")
+surface_material_override/0 = SubResource("StandardMaterial3D_dry")
+
+[node name="Water" type="MeshInstance3D" parent="VisualRoot"]
+visible = false
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.055, 0)
+mesh = SubResource("BoxMesh_water")
+surface_material_override/0 = SubResource("StandardMaterial3D_water")
+
+[node name="CropMultiMesh" type="MultiMeshInstance3D" parent="VisualRoot"]
+material_override = SubResource("StandardMaterial3D_crop")

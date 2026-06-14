@@ -1,0 +1,33 @@
+[gd_scene load_steps=5 format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_water"]
+transparency = 1
+albedo_color = Color(0.28, 0.43, 0.45, 0.46)
+roughness = 0.18
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_rice"]
+albedo_color = Color(0.25, 0.64, 0.22, 1)
+roughness = 0.86
+
+[sub_resource type="BoxMesh" id="BoxMesh_blade"]
+size = Vector3(0.06, 0.68, 0.06)
+
+[sub_resource type="BoxMesh" id="BoxMesh_water"]
+size = Vector3(0.65, 0.018, 0.65)
+
+[node name="RiceFloodedGreen" type="Node3D"]
+
+[node name="Water" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.045, 0)
+mesh = SubResource("BoxMesh_water")
+surface_material_override/0 = SubResource("StandardMaterial3D_water")
+
+[node name="BladeA" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.95, 0.22, 0, -0.22, 0.95, 0, 0, 0, 1, -0.04, 0.34, 0)
+mesh = SubResource("BoxMesh_blade")
+surface_material_override/0 = SubResource("StandardMaterial3D_rice")
+
+[node name="BladeB" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.94, -0.24, 0, 0.24, 0.94, 0, 0, 0, 1, 0.04, 0.34, 0.03)
+mesh = SubResource("BoxMesh_blade")
+surface_material_override/0 = SubResource("StandardMaterial3D_rice")

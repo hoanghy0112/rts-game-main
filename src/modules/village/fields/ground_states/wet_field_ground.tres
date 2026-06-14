@@ -1,0 +1,12 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://modules/village/fields/field_ground_state_data.gd" id="1_ground"]
+
+[resource]
+script = ExtResource("1_ground")
+id = &"wet"
+display_name = "Wet"
+default_speed_multiplier = 0.82
+infantry_speed_multiplier = 0.86
+cavalry_speed_multiplier = 0.78
+cart_speed_multiplier = 0.7

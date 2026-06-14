@@ -1,0 +1,12 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://modules/village/fields/field_ground_state_data.gd" id="1_ground"]
+
+[resource]
+script = ExtResource("1_ground")
+id = &"flooded"
+display_name = "Flooded"
+default_speed_multiplier = 0.45
+infantry_speed_multiplier = 0.5
+cavalry_speed_multiplier = 0.38
+cart_speed_multiplier = 0.28

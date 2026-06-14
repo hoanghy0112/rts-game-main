@@ -1,0 +1,20 @@
+[gd_scene load_steps=3 format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_stubble"]
+albedo_color = Color(0.61, 0.47, 0.25, 1)
+roughness = 0.92
+
+[sub_resource type="BoxMesh" id="BoxMesh_stubble"]
+size = Vector3(0.06, 0.24, 0.06)
+
+[node name="RiceHarvestedStubble" type="Node3D"]
+
+[node name="StubbleA" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.98, 0.08, 0, -0.08, 0.98, 0, 0, 0, 1, -0.035, 0.12, 0)
+mesh = SubResource("BoxMesh_stubble")
+surface_material_override/0 = SubResource("StandardMaterial3D_stubble")
+
+[node name="StubbleB" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.98, -0.09, 0, 0.09, 0.98, 0, 0, 0, 1, 0.03, 0.12, 0.02)
+mesh = SubResource("BoxMesh_stubble")
+surface_material_override/0 = SubResource("StandardMaterial3D_stubble")

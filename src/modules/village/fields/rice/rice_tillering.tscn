@@ -1,0 +1,25 @@
+[gd_scene load_steps=3 format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_tillering"]
+albedo_color = Color(0.28, 0.68, 0.22, 1)
+roughness = 0.86
+
+[sub_resource type="BoxMesh" id="BoxMesh_blade"]
+size = Vector3(0.055, 0.72, 0.055)
+
+[node name="RiceTillering" type="Node3D"]
+
+[node name="BladeA" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.95, 0.22, 0, -0.22, 0.95, 0, 0, 0, 1, -0.04, 0.36, 0)
+mesh = SubResource("BoxMesh_blade")
+surface_material_override/0 = SubResource("StandardMaterial3D_tillering")
+
+[node name="BladeB" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.94, -0.24, 0, 0.24, 0.94, 0, 0, 0, 1, 0.03, 0.35, 0.03)
+mesh = SubResource("BoxMesh_blade")
+surface_material_override/0 = SubResource("StandardMaterial3D_tillering")
+
+[node name="BladeC" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0.16, 0, 1, 0, -0.16, 0, 1, 0.02, 0.34, -0.02)
+mesh = SubResource("BoxMesh_blade")
+surface_material_override/0 = SubResource("StandardMaterial3D_tillering")
