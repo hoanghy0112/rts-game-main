@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://bebbp34ry4xy"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_pfo6c"]
+sky_top_color = Color(0.2661915, 0.45719308, 0.69377774, 1)
+sky_horizon_color = Color(0.54099554, 0.6666508, 0.8176317, 1)
+sky_curve = 0.113679014
+
+[sub_resource type="Sky" id="Sky_ao8jh"]
+sky_material = SubResource("ProceduralSkyMaterial_pfo6c")
+
+[sub_resource type="Environment" id="Environment_bsx4n"]
+background_mode = 2
+sky = SubResource("Sky_ao8jh")
+tonemap_mode = 3
+sdfgi_enabled = true
+sdfgi_energy = 0.8
+glow_enabled = true
+fog_mode = 1
+fog_light_color = Color(0.56078434, 0.72156864, 0.8392157, 1)
+fog_density = 0.0937
+fog_depth_curve = 10.196474
+fog_depth_begin = 83.3
+fog_depth_end = 604.2
+volumetric_fog_density = 0.002
+volumetric_fog_albedo = Color(0.28817517, 0.60483795, 0.7773397, 1)
+volumetric_fog_length = 277.34
+volumetric_fog_detail_spread = 6.0
+volumetric_fog_sky_affect = 0.0
+
+[node name="EnvironmentRig" type="Node3D" unique_id=1375303899]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1382714300]
+transform = Transform3D(-0.18586503, 0.699031, -0.6905142, 0.08929903, 0.7118686, 0.6966124, 0.978509, 0.06781362, -0.19473425, 0, 0, 0)
+light_energy = 2.306
+light_bake_mode = 0
+shadow_enabled = true
+directional_shadow_max_distance = 590.4
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1101563664]
+environment = SubResource("Environment_bsx4n")
