@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bwxyho8xn5uei"]
+
+[ext_resource type="Script" path="res://addons/village_brush/dock/village_brush_dock.gd" id="1_dock"]
+
+[node name="Village Brush" type="PanelContainer"]
+script = ExtResource("1_dock")

@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_road"]
+albedo_color = Color(0.42, 0.36, 0.27, 1)
+roughness = 0.95
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_edge"]
+albedo_color = Color(0.63, 0.54, 0.39, 1)
+roughness = 0.92
+
+[sub_resource type="BoxMesh" id="BoxMesh_road"]
+size = Vector3(3.8, 0.04, 3.8)
+
+[sub_resource type="BoxMesh" id="BoxMesh_edge"]
+size = Vector3(3.8, 0.045, 0.12)
+
+[node name="DefaultRoad" type="Node3D"]
+
+[node name="Surface" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.025, 0)
+mesh = SubResource("BoxMesh_road")
+surface_material_override/0 = SubResource("StandardMaterial3D_road")
+
+[node name="EdgeNorth" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.065, -1.55)
+mesh = SubResource("BoxMesh_edge")
+surface_material_override/0 = SubResource("StandardMaterial3D_edge")
+
+[node name="EdgeSouth" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.065, 1.55)
+mesh = SubResource("BoxMesh_edge")
+surface_material_override/0 = SubResource("StandardMaterial3D_edge")
