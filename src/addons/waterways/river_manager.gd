@@ -392,13 +392,15 @@ func _init() -> void:
 func _enter_tree() -> void:
 	if Engine.is_editor_hint() and _first_enter_tree:
 		_first_enter_tree = false
-	
+
 	if not curve:
 		curve = Curve3D.new()
 		curve.bake_interval = 0.05
 		curve.add_point(Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, -0.25), Vector3(0.0, 0.0, 0.25))
 		curve.add_point(Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, -0.25), Vector3(0.0, 0.0, 0.25))
-	
+
+	_sync_widths_to_curve()
+
 	if get_child_count() <= 0:
 		## This is what happens on creating a new river
 		var new_mesh_instance := MeshInstance3D.new()
@@ -478,6 +480,7 @@ func set_curve_point_out(index : int, position : Vector3) -> void:
 
 func set_widths(new_widths) -> void:
 	widths = new_widths
+	_sync_widths_to_curve()
 	if _first_enter_tree:
 		return
 	_generate_river()
@@ -605,10 +608,26 @@ func set_lod0_distance(value : float) -> void:
 
 
 # Private Methods
+func _sync_widths_to_curve() -> void:
+	var target_count := 2
+	if curve:
+		target_count = maxi(curve.get_point_count(), 2)
+
+	if widths.is_empty():
+		widths.append(1.0)
+
+	while widths.size() < target_count:
+		widths.append(widths[widths.size() - 1])
+
+	if widths.size() > target_count:
+		widths.resize(target_count)
+
+
 func _generate_river() -> void:
+	_sync_widths_to_curve()
 	var average_width := WaterHelperMethods.sum_array(widths) / float(widths.size() / 2)
 	_steps = int( max(1.0, round(curve.get_baked_length() / average_width)) )
-	
+
 	var river_width_values := WaterHelperMethods.generate_river_width_values(curve, _steps, shape_step_length_divs, shape_step_width_divs, widths)
 	mesh_instance.mesh = WaterHelperMethods.generate_river_mesh(curve, _steps, shape_step_length_divs, shape_step_width_divs, shape_smoothness, river_width_values)
 	mesh_instance.mesh.surface_set_material(0, _material)

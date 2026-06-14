@@ -42,13 +42,20 @@ static func calculate_side(steps : int) -> int:
 
 static func generate_river_width_values(curve : Curve3D, steps : int, step_length_divs : int, step_width_divs : int, widths : Array[float]) -> Array[float]:
 	var river_width_values: Array[float]
-	var length := curve.get_baked_length()
+	var point_count := curve.get_point_count()
+	if point_count < 2 or widths.is_empty():
+		return river_width_values
+
+	var safe_widths := widths.duplicate()
+	while safe_widths.size() < point_count:
+		safe_widths.append(safe_widths[safe_widths.size() - 1])
+
 	for step in steps * step_length_divs + 1:
 		var target_pos := curve.sample_baked((float(step) / float(steps * step_length_divs + 1)) * curve.get_baked_length())
 		var closest_dist := 4096.0
 		var closest_interpolate : float
 		var closest_point : int
-		for c_point in curve.get_point_count() - 1:
+		for c_point in point_count - 1:
 			for i in 100:
 				var interpolate := float(i) / 100.0
 				var pos := curve.sample(c_point, interpolate)
@@ -57,7 +64,8 @@ static func generate_river_width_values(curve : Curve3D, steps : int, step_lengt
 					closest_dist = dist
 					closest_interpolate = interpolate
 					closest_point = c_point
-		river_width_values.append( lerp(widths[closest_point], widths[closest_point + 1], closest_interpolate) )
+		var next_point := mini(closest_point + 1, safe_widths.size() - 1)
+		river_width_values.append( lerp(safe_widths[closest_point], safe_widths[next_point], closest_interpolate) )
 	
 	return river_width_values
 
