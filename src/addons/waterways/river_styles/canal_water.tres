@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="RiverStyleData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://addons/waterways/river_style_data.gd" id="1_style"]
+[ext_resource type="Texture2D" uid="uid://b85tlq8wcklbo" path="res://addons/waterways/textures/water1_normal_bump.png" id="2_normal"]
+
+[resource]
+script = ExtResource("1_style")
+style_id = &"canal_water"
+display_name = "Canal Water"
+shader_type = 0
+normal_scale = 0.55
+normal_bump_texture = ExtResource("2_normal")
+uv_scale = Vector3(1.25, 1.25, 1)
+roughness = 0.16
+edge_fade = 0.18
+albedo_color = Projection(0.35, 0.72, 0.86, 0, 0.03, 0.23, 0.42, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+albedo_depth = 28.0
+albedo_depth_curve = 0.22
+transparency_clarity = 42.0
+transparency_depth_curve = 0.22
+transparency_refraction = 0.65
+flow_speed = 0.42
+flow_base = 0.0
+flow_steepness = 0.8
+flow_distance = 0.65
+flow_pressure = 0.7
+flow_max = 2.25
+foam_color = Color(0.92, 0.96, 0.95, 1)
+foam_amount = 0.65
+foam_steepness = 0.08
+foam_smoothness = 0.6
+apply_shape_defaults = true
+shape_step_length_divs = 1
+shape_step_width_divs = 1
+shape_smoothness = 0.45
+apply_lod_defaults = true
+lod_lod0_distance = 60.0
+apply_baking_defaults = true
+baking_resolution = 1
+baking_raycast_distance = 10.0
+baking_raycast_layers = 1
+baking_dilate = 0.55
+baking_flowmap_blur = 0.035
+baking_foam_cutoff = 0.94
+baking_foam_offset = 0.08
+baking_foam_blur = 0.018

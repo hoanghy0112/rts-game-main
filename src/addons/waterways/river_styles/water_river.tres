@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="RiverStyleData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://addons/waterways/river_style_data.gd" id="1_style"]
+[ext_resource type="Texture2D" uid="uid://b85tlq8wcklbo" path="res://addons/waterways/textures/water1_normal_bump.png" id="2_normal"]
+
+[resource]
+script = ExtResource("1_style")
+style_id = &"water_river"
+display_name = "Water River"
+shader_type = 0
+normal_scale = 1.0
+normal_bump_texture = ExtResource("2_normal")
+uv_scale = Vector3(1, 1, 1)
+roughness = 0.2
+edge_fade = 0.25
+albedo_color = Projection(0.54481506, 0.7194988, 0.75390625, 0, 0, 0.03396344, 0.26171875, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+albedo_depth = 22.63200107502
+albedo_depth_curve = 0.25
+transparency_clarity = 34.7370016500075
+transparency_depth_curve = 0.25
+transparency_refraction = 1.0
+flow_speed = 1.0
+flow_base = 0.0
+flow_steepness = 2.0
+flow_distance = 1.0
+flow_pressure = 1.0
+flow_max = 4.0
+foam_color = Color(0.9, 0.9, 0.9, 1)
+foam_amount = 2.0
+foam_steepness = 0.126000005985
+foam_smoothness = 0.3
+apply_shape_defaults = true
+shape_step_length_divs = 1
+shape_step_width_divs = 1
+shape_smoothness = 0.5
+apply_lod_defaults = true
+lod_lod0_distance = 50.0
+apply_baking_defaults = true
+baking_resolution = 1
+baking_raycast_distance = 10.0
+baking_raycast_layers = 1
+baking_dilate = 0.6
+baking_flowmap_blur = 0.04
+baking_foam_cutoff = 0.9
+baking_foam_offset = 0.1
+baking_foam_blur = 0.02

@@ -3,11 +3,12 @@
 extends EditorInspectorPlugin
 
 const RiverManager = preload("res://addons/waterways/river_manager.gd")
+const RiverStyleData = preload("res://addons/waterways/river_style_data.gd")
 var _editor = load("res://addons/waterways/editor_property.gd")
 
 
 func _can_handle(object) -> bool:
-	return object is RiverManager
+	return object is RiverManager or object is RiverStyleData
 
 
 func _parse_property(object: Object, type: Variant.Type, name: String, hint_type: PropertyHint, hint_string: String, usage_flags, wide: bool) -> bool:

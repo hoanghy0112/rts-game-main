@@ -4,6 +4,7 @@
 extends Node3D
 
 const WaterHelperMethods = preload("./water_helper_methods.gd")
+const RiverStyleData = preload("./river_style_data.gd")
 
 const FILTER_RENDERER_PATH = "res://addons/waterways/filter_renderer.tscn"
 const FLOW_OFFSET_NOISE_TEXTURE_PATH = "res://addons/waterways/textures/flow_offset_noise.png"
@@ -67,6 +68,7 @@ const DEFAULT_PARAMETERS = {
 	shape_smoothness = 0.5,
 	mat_shader_type = 0,
 	mat_custom_shader = null,
+	river_style = null,
 	baking_resolution = 2, 
 	baking_raycast_distance = 10.0,
 	baking_raycast_layers = 1,
@@ -80,6 +82,8 @@ const DEFAULT_PARAMETERS = {
 
 
 # Shape Properties
+var river_style: RiverStyleData: set = set_river_style
+
 var shape_step_length_divs : int = 1: set = set_step_length_divs
 var shape_step_width_divs : int = 1: set = set_step_width_divs
 var shape_smoothness : float = 0.5: set = set_smoothness
@@ -133,6 +137,19 @@ signal progress_notified
 func _get_property_list() -> Array:
 	var props = [
 		{
+			name = "Style",
+			type = TYPE_NIL,
+			hint_string = "river_style",
+			usage = PROPERTY_USAGE_GROUP | PROPERTY_USAGE_SCRIPT_VARIABLE
+		},
+		{
+			name = "river_style",
+			type = TYPE_OBJECT,
+			hint = PROPERTY_HINT_RESOURCE_TYPE,
+			hint_string = "RiverStyleData",
+			usage = PROPERTY_USAGE_DEFAULT | PROPERTY_USAGE_SCRIPT_VARIABLE
+		},
+		{
 			name = "Shape",
 			type = TYPE_NIL,
 			hint_string = "shape_",
@@ -184,7 +201,7 @@ func _get_property_list() -> Array:
 	var props2 = []
 	var mat_categories = MATERIAL_CATEGORIES.duplicate(true)
 	
-	if _material.shader != null:
+	if _has_shader_material():
 		var shader_params := RenderingServer.get_shader_parameter_list(_material.shader.get_rid())
 		for p in shader_params:
 			if p.name.begins_with("i_"):
@@ -336,6 +353,8 @@ func _get_property_list() -> Array:
 
 func _set(property: StringName, value) -> bool:
 	if str(property).begins_with("mat_"):
+		if not is_instance_valid(_material):
+			return false
 		# TODO, is there a better way to do this, now that right() has changed?
 		var param_name : String = str(property).replace("mat_", "")
 		_material.set_shader_parameter(param_name, value)
@@ -345,12 +364,16 @@ func _set(property: StringName, value) -> bool:
 
 func _get(property : StringName):
 	if str(property).begins_with("mat_"):
+		if not is_instance_valid(_material):
+			return null
 		var param_name : String = str(property).replace("mat_", "")
 		return _material.get_shader_parameter(param_name)
 
 
 func _property_can_revert(property : StringName) -> bool:
 	if str(property).begins_with("mat_"):
+		if not is_instance_valid(_material):
+			return false
 		var param_name : String = str(property).replace("mat_", "")
 		return _material.property_can_revert(str("shader_parameter/", param_name))
 
@@ -363,6 +386,8 @@ func _property_can_revert(property : StringName) -> bool:
 
 func _property_get_revert(property : StringName):
 	if str(property).begins_with("mat_"):
+		if not is_instance_valid(_material):
+			return null
 		var param_name : String = str(property).replace("mat_", "")
 		var revert_value = _material.property_get_revert(str("shader_parameter/", param_name))
 		return revert_value
@@ -410,7 +435,15 @@ func _enter_tree() -> void:
 		_generate_river()
 	else:
 		mesh_instance = get_child(0) as MeshInstance3D
-		_material = mesh_instance.mesh.surface_get_material(0) as ShaderMaterial
+		if mesh_instance != null and mesh_instance.mesh != null and mesh_instance.mesh.get_surface_count() > 0:
+			var existing_material := mesh_instance.mesh.surface_get_material(0) as ShaderMaterial
+			if existing_material != null:
+				_material = existing_material
+		elif mesh_instance != null:
+			_generate_river()
+
+	if river_style != null:
+		_apply_river_style(river_style, false)
 	
 	set_materials("i_valid_flowmap", valid_flowmap)
 	set_materials("i_uv2_sides", _uv2_sides)
@@ -427,6 +460,8 @@ func _get_configuration_warning() -> String:
 
 
 func get_transformed_aabb() -> AABB:
+	if mesh_instance == null:
+		return AABB()
 	return global_transform * mesh_instance.get_aabb()
 
 
@@ -487,22 +522,29 @@ func set_widths(new_widths) -> void:
 
 
 func set_materials(param : String, value) -> void:
-	_material.set_shader_parameter(param, value)
-	_debug_material.set_shader_parameter(param, value)
+	if is_instance_valid(_material):
+		_material.set_shader_parameter(param, value)
+	if is_instance_valid(_debug_material):
+		_debug_material.set_shader_parameter(param, value)
 
 
 func set_debug_view(index : int) -> void:
 	debug_view = index
+	if mesh_instance == null:
+		return
 	if index == 0:
 		mesh_instance.material_override = null
 	else:
-		_debug_material.set_shader_parameter("mode", index)
+		if is_instance_valid(_debug_material):
+			_debug_material.set_shader_parameter("mode", index)
 		mesh_instance.material_override = _debug_material
 
 
 func spawn_mesh() -> void:
 	if owner == null:
 		push_warning("Cannot create MeshInstance3D sibling when River is root.")
+		return
+	if mesh_instance == null:
 		return
 	var sibling_mesh := mesh_instance.duplicate(true)
 	get_parent().add_child(sibling_mesh)
@@ -532,10 +574,26 @@ func get_closest_point_to(point : Vector3) -> int:
 
 
 func get_shader_parameter(param : String):
+	if not is_instance_valid(_material):
+		return null
 	return _material.get_shader_parameter(param)
 
 
 # Parameter Setters
+func set_river_style(style: RiverStyleData) -> void:
+	if river_style == style:
+		return
+	river_style = style
+	if is_inside_tree() and mesh_instance != null:
+		_apply_river_style(river_style, true)
+
+
+func apply_river_style() -> void:
+	if river_style == null:
+		return
+	_apply_river_style(river_style, true)
+
+
 func set_step_length_divs(value : int) -> void:
 	shape_step_length_divs = value
 	if _first_enter_tree:
@@ -570,14 +628,7 @@ func set_shader_type(type: int):
 	if type == mat_shader_type:
 		return
 	mat_shader_type = type
-	
-	if mat_shader_type == SHADER_TYPES.CUSTOM:
-		_material.shader = mat_custom_shader
-	else:
-		_material.shader = load(BUILTIN_SHADERS[mat_shader_type].shader_path)
-		for texture in BUILTIN_SHADERS[mat_shader_type].texture_paths:
-			_material.set_shader_parameter(texture.name, load(texture.path) as Texture)
-	
+	_apply_shader_selection()
 	notify_property_list_changed()
 
 
@@ -585,18 +636,16 @@ func set_custom_shader(shader : Shader) -> void:
 	if mat_custom_shader == shader:
 		return
 	mat_custom_shader = shader
-	if mat_custom_shader != null:
+	if mat_custom_shader != null and is_instance_valid(_material):
 		_material.shader = mat_custom_shader
 		
-		if Engine.is_editor_hint:
+		if Engine.is_editor_hint():
 			# Ability to fork default shader
 			if shader.code == "":
 				var selected_shader = load(BUILTIN_SHADERS[mat_shader_type].shader_path) as Shader
 				shader.code = selected_shader.code
 	
 	if shader != null:
-		print("shader != null - set shader type to custom")
-		print(shader)
 		set_shader_type(SHADER_TYPES.CUSTOM)
 	else:
 		set_shader_type(SHADER_TYPES.WATER)
@@ -608,6 +657,95 @@ func set_lod0_distance(value : float) -> void:
 
 
 # Private Methods
+func _has_shader_material() -> bool:
+	return is_instance_valid(_material) and is_instance_valid(_material.shader)
+
+
+func _apply_shader_selection() -> void:
+	if not is_instance_valid(_material):
+		return
+	if mat_shader_type == SHADER_TYPES.CUSTOM:
+		_material.shader = mat_custom_shader
+	else:
+		_material.shader = load(BUILTIN_SHADERS[mat_shader_type].shader_path) as Shader
+		for texture in BUILTIN_SHADERS[mat_shader_type].texture_paths:
+			_material.set_shader_parameter(texture.name, load(texture.path) as Texture)
+	_selected_shader = mat_shader_type
+
+
+func _apply_river_style(style: RiverStyleData, invalidate_flowmap: bool) -> void:
+	if style == null:
+		return
+
+	mat_custom_shader = style.custom_shader
+	mat_shader_type = clampi(style.shader_type, SHADER_TYPES.WATER, SHADER_TYPES.CUSTOM)
+	_apply_shader_selection()
+	_apply_style_shader_parameters(style)
+
+	if style.apply_shape_defaults:
+		shape_step_length_divs = maxi(style.shape_step_length_divs, 1)
+		shape_step_width_divs = maxi(style.shape_step_width_divs, 1)
+		shape_smoothness = maxf(style.shape_smoothness, 0.1)
+		_apply_style_default_width(style)
+
+	if style.apply_lod_defaults:
+		lod_lod0_distance = style.lod_lod0_distance
+		set_materials("i_lod0_distance", lod_lod0_distance)
+
+	if style.apply_baking_defaults:
+		baking_resolution = style.baking_resolution
+		baking_raycast_distance = style.baking_raycast_distance
+		baking_raycast_layers = style.baking_raycast_layers
+		baking_dilate = style.baking_dilate
+		baking_flowmap_blur = style.baking_flowmap_blur
+		baking_foam_cutoff = style.baking_foam_cutoff
+		baking_foam_offset = style.baking_foam_offset
+		baking_foam_blur = style.baking_foam_blur
+
+	if invalidate_flowmap:
+		_invalidate_flowmap()
+
+	if mesh_instance != null and curve != null:
+		_generate_river()
+
+	notify_property_list_changed()
+	if invalidate_flowmap:
+		emit_signal("river_changed")
+
+
+func _apply_style_shader_parameters(style: RiverStyleData) -> void:
+	if not _has_shader_material():
+		return
+
+	var supported_parameters: Dictionary = {}
+	for parameter in RenderingServer.get_shader_parameter_list(_material.shader.get_rid()):
+		supported_parameters[StringName(str(parameter.name))] = true
+
+	var style_parameters := style.get_shader_parameters()
+	for parameter_name in style_parameters:
+		var shader_parameter := StringName(str(parameter_name))
+		if supported_parameters.has(shader_parameter):
+			set_materials(str(shader_parameter), style_parameters[parameter_name])
+
+
+func _apply_style_default_width(style: RiverStyleData) -> void:
+	if not style.apply_default_width_to_new_rivers:
+		return
+	if widths.size() > 2:
+		return
+	for width in widths:
+		if not is_equal_approx(width, 1.0):
+			return
+	for i in widths.size():
+		widths[i] = style.default_width
+
+
+func _invalidate_flowmap() -> void:
+	valid_flowmap = false
+	set_materials("i_valid_flowmap", valid_flowmap)
+	update_configuration_warnings()
+
+
 func _sync_widths_to_curve() -> void:
 	var target_count := 2
 	if curve:
@@ -624,13 +762,16 @@ func _sync_widths_to_curve() -> void:
 
 
 func _generate_river() -> void:
+	if curve == null or mesh_instance == null or not is_instance_valid(_material):
+		return
 	_sync_widths_to_curve()
 	var average_width := WaterHelperMethods.sum_array(widths) / float(widths.size() / 2)
 	_steps = int( max(1.0, round(curve.get_baked_length() / average_width)) )
 
 	var river_width_values := WaterHelperMethods.generate_river_width_values(curve, _steps, shape_step_length_divs, shape_step_width_divs, widths)
 	mesh_instance.mesh = WaterHelperMethods.generate_river_mesh(curve, _steps, shape_step_length_divs, shape_step_width_divs, shape_smoothness, river_width_values)
-	mesh_instance.mesh.surface_set_material(0, _material)
+	if mesh_instance.mesh != null and mesh_instance.mesh.get_surface_count() > 0:
+		mesh_instance.mesh.surface_set_material(0, _material)
 
 
 func _generate_flowmap(flowmap_resolution : float) -> void:

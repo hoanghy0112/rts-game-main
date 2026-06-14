@@ -6,6 +6,7 @@ extends EditorPlugin
 const WaterHelperMethods = preload("./water_helper_methods.gd")
 const WaterSystem = preload("./water_system_manager.gd")
 const RiverManager = preload("./river_manager.gd")
+const RiverStyleData = preload("./river_style_data.gd")
 const WaterfallManager = preload("./waterfall_manager.gd")
 const WaterfallConfiguration = preload("./waterfall_configuration.gd")
 const RiverGizmo = preload("./gui/river_gizmo.gd")
@@ -32,6 +33,7 @@ var selection_locked := false
 
 func _enter_tree() -> void:
 	add_custom_type("River", "Node3D",RiverManager, preload("./icons/river.svg"))
+	add_custom_type("RiverStyleData", "Resource", RiverStyleData, preload("./icons/river.svg"))
 	add_custom_type("Waterfall", "Node3D", WaterfallManager, preload("./icons/river.svg"))
 	add_custom_type("WaterfallConfiguration", "Resource", WaterfallConfiguration, preload("./icons/river.svg"))
 	add_custom_type("WaterSystem", "Node3D", preload("./water_system_manager.gd"), preload("./icons/system.svg"))
@@ -68,21 +70,47 @@ func _on_generate_system_maps_pressed() -> void:
 
 
 func _exit_tree() -> void:
+	_hide_river_control_panel()
+	_hide_water_system_control_panel()
+	_disconnect_edited_node_progress()
+
 	remove_custom_type("River")
+	remove_custom_type("RiverStyleData")
 	remove_custom_type("Waterfall")
 	remove_custom_type("WaterfallConfiguration")
 	remove_custom_type("WaterSystem")
 	remove_custom_type("Buoyant")
-	remove_node_3d_gizmo_plugin(river_gizmo)
-	remove_node_3d_gizmo_plugin(waterfall_gizmo)
-	remove_inspector_plugin(gradient_inspector)
-	_river_controls.disconnect("mode", Callable(self, "_on_mode_change"))
-	_river_controls.disconnect("options", Callable(self, "_on_option_change"))
-	_editor_selection.disconnect("selection_changed", Callable(self, "_on_selection_change"))
-	disconnect("scene_changed", Callable(self, "_on_scene_changed"));
-	disconnect("scene_closed", Callable(self, "_on_scene_closed"));
-	_hide_river_control_panel()
-	_hide_water_system_control_panel()
+	if is_instance_valid(river_gizmo):
+		remove_node_3d_gizmo_plugin(river_gizmo)
+		river_gizmo.editor_plugin = null
+	if is_instance_valid(waterfall_gizmo):
+		remove_node_3d_gizmo_plugin(waterfall_gizmo)
+		waterfall_gizmo.editor_plugin = null
+	if is_instance_valid(gradient_inspector):
+		remove_inspector_plugin(gradient_inspector)
+	if is_instance_valid(_river_controls):
+		if _river_controls.is_connected("mode", Callable(self, "_on_mode_change")):
+			_river_controls.disconnect("mode", Callable(self, "_on_mode_change"))
+		if _river_controls.is_connected("options", Callable(self, "_on_option_change")):
+			_river_controls.disconnect("options", Callable(self, "_on_option_change"))
+	if is_instance_valid(_editor_selection) and _editor_selection.is_connected("selection_changed", Callable(self, "_on_selection_change")):
+		_editor_selection.disconnect("selection_changed", Callable(self, "_on_selection_change"))
+	if is_connected("scene_changed", Callable(self, "_on_scene_changed")):
+		disconnect("scene_changed", Callable(self, "_on_scene_changed"));
+	if is_connected("scene_closed", Callable(self, "_on_scene_closed")):
+		disconnect("scene_closed", Callable(self, "_on_scene_closed"));
+
+	if is_instance_valid(_river_controls):
+		_river_controls.free()
+	if is_instance_valid(_water_system_controls):
+		_water_system_controls.free()
+
+	_progress_window = null
+	_river_controls = null
+	_water_system_controls = null
+	_edited_node = null
+	_editor_selection = null
+	_heightmap_renderer = null
 
 
 func _handles(node):
@@ -107,19 +135,22 @@ func _on_selection_change() -> void:
 	# If selection is locked to a river, revert any selection change
 	if selection_locked and _edited_node is RiverManager:
 		if len(selected) == 0 or selected[0] != _edited_node:
+			var locked_node: RiverManager = _edited_node
 			_editor_selection.clear()
-			_editor_selection.add_node(_edited_node)
+			_editor_selection.add_node(locked_node)
 			_show_river_control_panel()
-			_edited_node = selected[0] as RiverManager
-			_river_controls.menu.debug_view_menu_selected = _edited_node.debug_view
-			if not _edited_node.is_connected("progress_notified", Callable(self, "_river_progress_notified")):
-				_edited_node.connect("progress_notified", Callable(self, "_river_progress_notified"))
+			_edited_node = locked_node
+			_river_controls.menu.debug_view_menu_selected = locked_node.debug_view
+			if not locked_node.is_connected("progress_notified", Callable(self, "_river_progress_notified")):
+				locked_node.connect("progress_notified", Callable(self, "_river_progress_notified"))
 			return
 
 	_hide_water_system_control_panel()
 	_hide_river_control_panel()
+	_disconnect_edited_node_progress()
 
 	if len(selected) == 0:
+		_edited_node = null
 		return
 	if selected[0] is RiverManager:
 		_show_river_control_panel()
@@ -343,19 +374,29 @@ func _river_progress_notified(progress : float, message : String) -> void:
 
 
 func _show_river_control_panel() -> void:
+	if not is_instance_valid(_river_controls):
+		return
 	if not _river_controls.get_parent():
 		add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _river_controls)
-		_river_controls.menu.connect("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed"))
-		_river_controls.menu.connect("generate_mesh", Callable(self, "_on_generate_mesh_pressed"))
-		_river_controls.menu.connect("debug_view_changed", Callable(self, "_on_debug_view_changed"))
+		if not _river_controls.menu.is_connected("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed")):
+			_river_controls.menu.connect("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed"))
+		if not _river_controls.menu.is_connected("generate_mesh", Callable(self, "_on_generate_mesh_pressed")):
+			_river_controls.menu.connect("generate_mesh", Callable(self, "_on_generate_mesh_pressed"))
+		if not _river_controls.menu.is_connected("debug_view_changed", Callable(self, "_on_debug_view_changed")):
+			_river_controls.menu.connect("debug_view_changed", Callable(self, "_on_debug_view_changed"))
 
 
 func _hide_river_control_panel() -> void:
+	if not is_instance_valid(_river_controls):
+		return
 	if _river_controls.get_parent():
 		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _river_controls)
-		_river_controls.menu.disconnect("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed"))
-		_river_controls.menu.disconnect("generate_mesh", Callable(self, "_on_generate_mesh_pressed"))
-		_river_controls.menu.disconnect("debug_view_changed", Callable(self, "_on_debug_view_changed"))
+		if _river_controls.menu.is_connected("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed")):
+			_river_controls.menu.disconnect("generate_flowmap", Callable(self, "_on_generate_flowmap_pressed"))
+		if _river_controls.menu.is_connected("generate_mesh", Callable(self, "_on_generate_mesh_pressed")):
+			_river_controls.menu.disconnect("generate_mesh", Callable(self, "_on_generate_mesh_pressed"))
+		if _river_controls.menu.is_connected("debug_view_changed", Callable(self, "_on_debug_view_changed")):
+			_river_controls.menu.disconnect("debug_view_changed", Callable(self, "_on_debug_view_changed"))
 
 		if _river_controls.lock_selection:
 			_river_controls.lock_selection.button_pressed = false
@@ -365,12 +406,24 @@ func _hide_river_control_panel() -> void:
 
 
 func _show_water_system_control_panel() -> void:
+	if not is_instance_valid(_water_system_controls):
+		return
 	if not _water_system_controls.get_parent():
 		add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _water_system_controls)
-		_water_system_controls.menu.connect("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed"))
+		if not _water_system_controls.menu.is_connected("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed")):
+			_water_system_controls.menu.connect("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed"))
 
 
 func _hide_water_system_control_panel() -> void:
+	if not is_instance_valid(_water_system_controls):
+		return
 	if _water_system_controls.get_parent():
 		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _water_system_controls)
-		_water_system_controls.menu.disconnect("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed"))
+		if _water_system_controls.menu.is_connected("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed")):
+			_water_system_controls.menu.disconnect("generate_system_maps", Callable(self, "_on_generate_system_maps_pressed"))
+
+
+func _disconnect_edited_node_progress() -> void:
+	if is_instance_valid(_edited_node) and _edited_node.has_signal("progress_notified"):
+		if _edited_node.is_connected("progress_notified", Callable(self, "_river_progress_notified")):
+			_edited_node.disconnect("progress_notified", Callable(self, "_river_progress_notified"))
