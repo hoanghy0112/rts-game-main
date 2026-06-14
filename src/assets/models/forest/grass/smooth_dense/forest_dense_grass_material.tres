@@ -1,0 +1,9 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://bveqcgx3t50k8"]
+
+[ext_resource type="Shader" uid="uid://chdsbvyl28hvh" path="res://assets/models/forest/grass/smooth_dense/forest_dense_grass_blade.gdshader" id="1_blade_shader"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_blade_shader")
+shader_parameter/base_color = Vector3(0.18, 0.25, 0.07)
+shader_parameter/backlight_color = Vector3(0.3, 0.36, 0.2)

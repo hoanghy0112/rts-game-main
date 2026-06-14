@@ -1,0 +1,6 @@
+[gd_resource type="ArrayMesh" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://assets/models/forest/grass/flower_dense/forest_flower_grass_clump_mesh.gd" id="1_clump_mesh_script"]
+
+[resource]
+script = ExtResource("1_clump_mesh_script")

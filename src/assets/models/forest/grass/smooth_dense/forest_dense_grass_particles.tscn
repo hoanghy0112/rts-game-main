@@ -1,0 +1,26 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://assets/models/forest/grass/smooth_dense/forest_dense_grass_particles.gd" id="1_layer_script"]
+[ext_resource type="Material" path="res://assets/models/forest/grass/smooth_dense/forest_dense_grass_process_material.tres" id="2_process_material"]
+[ext_resource type="Material" path="res://assets/models/forest/grass/smooth_dense/forest_dense_grass_material.tres" id="3_grass_material"]
+
+[sub_resource type="RibbonTrailMesh" id="RibbonTrailMesh_grass"]
+shape = 0
+section_length = 0.18
+section_segments = 1
+
+[node name="ForestDenseGrassParticles" type="Node3D"]
+script = ExtResource("1_layer_script")
+instance_spacing = 0.375
+cell_width = 64.0
+grid_width = 3
+rows = 170
+amount = 28900
+process_fixed_fps = 1
+process_material = ExtResource("2_process_material")
+mesh = SubResource("RibbonTrailMesh_grass")
+shadow_mode = 0
+mesh_material_override = ExtResource("3_grass_material")
+min_draw_distance = 96.0
+particle_count = 260100
+metadata/_edit_lock_ = true

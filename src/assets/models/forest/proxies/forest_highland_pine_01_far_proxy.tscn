@@ -1,0 +1,62 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_yr8qc"]
+resource_name = "Proxy Trunk"
+albedo_color = Color(0.35, 0.22, 0.11, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.92
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_lr6hf"]
+top_radius = 0.196
+bottom_radius = 0.308
+height = 2.464
+radial_segments = 7
+rings = 1
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_viab6"]
+resource_name = "Proxy Canopy"
+albedo_color = Color(0.18, 0.42, 0.16, 1)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.95
+backlight_enabled = true
+backlight = Color(0.18, 0.28, 0.12, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_qtcm3"]
+radius = 0.896
+height = 1.6128
+radial_segments = 12
+rings = 6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_r1p6w"]
+resource_name = "Proxy Soft Canopy"
+transparency = 3
+alpha_hash_scale = 1.0
+alpha_antialiasing_mode = 1
+alpha_antialiasing_edge = 0.15
+cull_mode = 2
+albedo_color = Color(0.18, 0.42, 0.16, 0.34)
+metallic = 0.0
+metallic_specular = 0.0
+roughness = 0.95
+backlight_enabled = true
+backlight = Color(0.22, 0.32, 0.15, 1)
+
+[node name="ForestHighlandPine01FarProxy" type="Node3D" unique_id=877528975]
+
+[node name="Trunk" type="MeshInstance3D" parent="." unique_id=1048183325]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.232, 0)
+material_override = SubResource("StandardMaterial3D_yr8qc")
+mesh = SubResource("CylinderMesh_lr6hf")
+
+[node name="Canopy" type="MeshInstance3D" parent="." unique_id=386218549]
+transform = Transform3D(1.08, 0, 0, 0, 0.86, 0, 0, 0, 1.08, 0, 2.9568, 0)
+material_override = SubResource("StandardMaterial3D_viab6")
+mesh = SubResource("SphereMesh_qtcm3")
+
+[node name="SoftCanopy" type="MeshInstance3D" parent="." unique_id=1725669501]
+transform = Transform3D(1.25, 0, 0, 0, 0.98, 0, 0, 0, 1.25, 0, 2.9568, 0)
+material_override = SubResource("StandardMaterial3D_r1p6w")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_qtcm3")

@@ -1,0 +1,103 @@
+[gd_resource type="Resource" script_class="ForestPaletteData" format=3 uid="uid://dvjo6bh5krp7t"]
+
+[ext_resource type="Script" uid="uid://br4465lt3pu64" path="res://addons/forest_brush/forest_plant_type_data.gd" id="1_tfytm"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/proxies/forest_canopy_tree_01_far_proxy.tscn" id="2_ktyf2"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_canopy_tree_01.tscn" id="3_s6r1d"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_flower_grass_01.tscn" id="4_ulgyo"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/proxies/forest_highland_pine_01_far_proxy.tscn" id="5_wv2c8"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_highland_pine_01.tscn" id="6_h4m6j"]
+[ext_resource type="Script" uid="uid://cnnjopcjmsjc3" path="res://addons/forest_brush/forest_palette_data.gd" id="7_31nr8"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/grass/smooth_dense/forest_smooth_grass_01.tscn" id="8_jq0m3"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/grass/smooth_dense/forest_dense_grass_particles.tscn" id="9_q04b7"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/grass/flower_dense/forest_flower_grass_particles.tscn" id="10_flower_dense"]
+
+[sub_resource type="Resource" id="Resource_cu111"]
+script = ExtResource("1_tfytm")
+id = &"forest_canopy_tree_01"
+display_name = "Forest Canopy Tree 01"
+description = "User-derived plant split from res://assets/models/forest/source/trees/canopy-tree/canopy_tree.glb."
+scene = ExtResource("3_s6r1d")
+lod2_scene = ExtResource("2_ktyf2")
+density_per_cell = 0.22
+density_jitter = 0.35
+min_scale = 0.85
+max_scale = 1.25
+cell_edge_margin = 0.18
+near_visible_distance = 120.0
+mid_visible_distance = 300.0
+far_visible_distance = 920.0
+mid_keep_ratio = 0.95
+far_keep_ratio = 0.55
+far_scale_multiplier = 1.28
+terrain3d_mesh_id = 5
+
+[sub_resource type="Resource" id="Resource_of7mo"]
+script = ExtResource("1_tfytm")
+id = &"forest_flower_grass_01"
+display_name = "Forest Flower Grass 01"
+description = "Dense matte flower grass blade layer adapted from res://assets/models/forest/source/grass/flower-grass/flower_grass.glb."
+category = 5
+render_strategy = 1
+scene = ExtResource("4_ulgyo")
+density_per_cell = 7.5
+density_jitter = 0.22
+min_scale = 0.7
+max_scale = 1.25
+surface_offset = 0.005
+cell_edge_margin = 0.04
+disable_shadows = true
+near_visible_distance = 92.0
+mid_visible_distance = 240.0
+far_visible_distance = 440.0
+mid_keep_ratio = 0.32
+far_keep_ratio = 0.08
+far_scale_multiplier = 1.8
+terrain3d_mesh_id = 6
+dense_particle_scene = ExtResource("10_flower_dense")
+
+[sub_resource type="Resource" id="Resource_6v2s4"]
+script = ExtResource("1_tfytm")
+id = &"forest_highland_pine_01"
+display_name = "Forest Highland Pine 01"
+description = "User-derived plant split from res://assets/models/forest/source/trees/highland-pine/highland_pine.glb."
+scene = ExtResource("6_h4m6j")
+lod2_scene = ExtResource("5_wv2c8")
+density_per_cell = 0.22
+density_jitter = 0.35
+min_scale = 0.85
+max_scale = 1.25
+cell_edge_margin = 0.18
+near_visible_distance = 120.0
+mid_visible_distance = 300.0
+far_visible_distance = 920.0
+mid_keep_ratio = 0.95
+far_keep_ratio = 0.55
+far_scale_multiplier = 1.28
+terrain3d_mesh_id = 7
+
+[sub_resource type="Resource" id="Resource_r5r1p"]
+script = ExtResource("1_tfytm")
+id = &"forest_smooth_grass_01"
+display_name = "Forest Smooth Grass 01"
+description = "Dense smooth grass blade layer adapted from the Terrain3D particle grass example."
+category = 5
+render_strategy = 1
+scene = ExtResource("8_jq0m3")
+density_per_cell = 0.0
+density_jitter = 0.0
+cell_edge_margin = 0.0
+disable_shadows = true
+near_visible_distance = 120.0
+mid_visible_distance = 240.0
+far_visible_distance = 360.0
+mid_keep_ratio = 0.0
+far_keep_ratio = 0.0
+terrain3d_mesh_id = 8
+dense_particle_scene = ExtResource("9_q04b7")
+
+[resource]
+script = ExtResource("7_31nr8")
+id = &"default_user_forest"
+display_name = "Default User Forest"
+description = "Forest Brush palette generated from user-provided tree and grass source assets copied into res://assets/models/forest/source."
+plant_types = Array[ExtResource("1_tfytm")]([SubResource("Resource_cu111"), SubResource("Resource_of7mo"), SubResource("Resource_6v2s4"), SubResource("Resource_r5r1p")])
