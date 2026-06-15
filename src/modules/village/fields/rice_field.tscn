@@ -1,6 +1,7 @@
-[gd_scene load_steps=7 format=3 uid="uid://hh2q7fljlest"]
+[gd_scene load_steps=9 format=3 uid="uid://hh2q7fljlest"]
 
 [ext_resource type="Script" path="res://modules/village/fields/rice_field.gd" id="1_rice"]
+[ext_resource type="Shader" path="res://modules/village/fields/rice_field_overlay.gdshader" id="2_overlay"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_dry"]
 albedo_color = Color(0.2, 0.53, 0.2, 1)
@@ -37,6 +38,16 @@ metallic = 0.0
 metallic_specular = 0.0
 roughness = 0.96
 
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_rice_overlay"]
+shader = ExtResource("2_overlay")
+shader_parameter/base_color = Color(0.23, 0.48, 0.14, 1)
+shader_parameter/dark_color = Color(0.13, 0.33, 0.09, 1)
+shader_parameter/light_color = Color(0.42, 0.68, 0.21, 1)
+shader_parameter/overlay_alpha = 0.78
+shader_parameter/patch_size_meters = 3.5
+shader_parameter/edge_fade_uv = 0.035
+shader_parameter/alpha_threshold = 0.04
+
 [node name="RiceField" type="Node3D"]
 script = ExtResource("1_rice")
 dry_material = SubResource("StandardMaterial3D_dry")
@@ -45,6 +56,7 @@ flooded_material = SubResource("StandardMaterial3D_flooded")
 muddy_material = SubResource("StandardMaterial3D_muddy")
 water_material = SubResource("StandardMaterial3D_water")
 bund_material = SubResource("StandardMaterial3D_bund")
+rice_overlay_material = SubResource("ShaderMaterial_rice_overlay")
 
 [node name="VisualRoot" type="Node3D" parent="."]
 
@@ -59,3 +71,10 @@ surface_material_override/0 = SubResource("StandardMaterial3D_water")
 
 [node name="BundEdges" type="MeshInstance3D" parent="VisualRoot"]
 material_override = SubResource("StandardMaterial3D_bund")
+
+[node name="RiceMacroOverlay" type="MeshInstance3D" parent="VisualRoot"]
+visible = false
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.075, 0)
+cast_shadow = 0
+gi_mode = 0
+material_override = SubResource("ShaderMaterial_rice_overlay")
