@@ -2,14 +2,30 @@ extends Node
 
 const LOG_PREFIX := "[startup_probe]"
 const BYTES_PER_MIB := 1048576.0
+const LONG_FRAME_GAP_THRESHOLD_MS := 1000.0
 
 var _boot_usec := 0
 var _phase_counter := 0
+var _last_process_usec := 0
 
 
 func _ready() -> void:
 	_boot_usec = Time.get_ticks_usec()
+	_last_process_usec = _boot_usec
 	mark_phase("boot")
+
+
+func _process(_delta: float) -> void:
+	if not OS.is_debug_build():
+		return
+
+	var now := Time.get_ticks_usec()
+	var gap_ms := float(now - _last_process_usec) / 1000.0 if _last_process_usec > 0 else 0.0
+	_last_process_usec = now
+	if gap_ms >= LONG_FRAME_GAP_THRESHOLD_MS:
+		mark_phase("long_frame_gap", {
+			"gap_ms": "%.1f" % gap_ms,
+		})
 
 
 func mark_phase(label: String, context: Dictionary = {}) -> void:

@@ -1,6 +1,7 @@
 extends Control
 
 const DRAFT_SCENE_PATH := "res://modules/draft/draft.tscn"
+const SLOW_LOAD_THRESHOLD_MS := 1000.0
 const TARGET_FPS := 60
 
 @onready var _status_label: Label = $StatusLabel
@@ -17,11 +18,18 @@ func _ready() -> void:
 
 func _load_draft_scene() -> void:
 	await get_tree().process_frame
+	_mark_startup_phase("draft_resource_load_start")
+	var resource_load_started_usec := Time.get_ticks_usec()
 	var scene := ResourceLoader.load(DRAFT_SCENE_PATH) as PackedScene
 	if not scene:
 		_show_load_error("Loaded resource is not a scene: %s." % DRAFT_SCENE_PATH)
 		return
 
+	var load_ms := float(Time.get_ticks_usec() - resource_load_started_usec) / 1000.0
+	if load_ms >= SLOW_LOAD_THRESHOLD_MS:
+		_mark_startup_phase("draft_resource_slow", {
+			"load_ms": "%.1f" % load_ms,
+		})
 	_mark_startup_phase("draft_resource_ready", {
 		"load_ms": "%.1f" % (float(Time.get_ticks_usec() - _load_started_usec) / 1000.0),
 	})

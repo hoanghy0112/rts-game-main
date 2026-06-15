@@ -22,13 +22,13 @@ const METHOD_GET_MOVE_SENSITIVITY: StringName = &"get_move_sensitivity"
 @export var fast_move_multiplier: float = 3.0
 @export var zoom_move_reference_distance: float = DEFAULT_DISTANCE
 @export var min_zoom_move_scale: float = 0.5
-@export var max_zoom_move_scale: float = 7.0
+@export var max_zoom_move_scale: float = 14.0
 @export var move_lerp_speed: float = 12.0
 
 @export_group("Zoom")
 @export var zoom_step: float = 5.0
 @export var min_distance: float = 3.0
-@export var max_distance: float = 220.0
+@export var max_distance: float = 440.0
 @export var zoom_lerp_speed: float = 14.0
 
 @export_group("Rotation")
