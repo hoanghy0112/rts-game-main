@@ -6,11 +6,12 @@ uniform sampler2D main_noise;
 uniform float main_noise_scale = 0.01;
 uniform vec3 position_offset = vec3(0.0, 0.45, 0.0);
 uniform bool align_to_normal = true;
-uniform float normal_strength : hint_range(0.01, 1.0, 0.01) = 0.3;
+uniform float normal_strength : hint_range(0.01, 1.0, 0.01) = 0.55;
 uniform bool random_rotation = true;
 uniform float random_spacing : hint_range(0.0, 1.0, 0.01) = 0.5;
 uniform vec3 min_scale = vec3(0.125, 0.5, 0.125);
 uniform vec3 max_scale = vec3(0.125, 1.0, 0.125);
+uniform float terrain_clearance_meters : hint_range(0.0, 0.25, 0.005) = 0.04;
 
 group_uniforms shaping;
 uniform float clod_scale_boost = 2.0;
@@ -21,8 +22,11 @@ uniform float patch_max_threshold : hint_range(0.0, 1.0, 0.001) = 0.2;
 
 group_uniforms filtering;
 uniform float condition_dither_range : hint_range(0.0, 1.0, 0.01) = 0.15;
-uniform float surface_slope_min : hint_range(0.0, 1.0, 0.01) = 0.87;
+uniform float surface_slope_min : hint_range(0.0, 1.0, 0.01) = 0.86;
 uniform float distance_fade_amount : hint_range(0.0, 1.0, 0.01) = 0.66;
+uniform float distance_cull_buffer_meters : hint_range(0.0, 64.0, 0.5) = 8.0;
+uniform bool fast_surface_sampling = true;
+uniform bool use_color_map_tint = false;
 
 group_uniforms forest_mask;
 uniform bool forest_mask_enabled = false;
@@ -167,24 +171,30 @@ void start() {
 	h[1] = texelFetch(_height_maps, index[1], 0).r;
 	h[2] = texelFetch(_height_maps, index[2], 0).r;
 	h[3] = texelFetch(_height_maps, index[3], 0).r;
-	h[4] = texelFetch(_height_maps, get_index_coord(index_id + offsets.yz, VERTEX_PASS), 0).r;
-	h[5] = texelFetch(_height_maps, get_index_coord(index_id + offsets.zy, VERTEX_PASS), 0).r;
-	h[6] = texelFetch(_height_maps, get_index_coord(index_id + offsets.zx, VERTEX_PASS), 0).r;
-	h[7] = texelFetch(_height_maps, get_index_coord(index_id + offsets.xz, VERTEX_PASS), 0).r;
+	float slope_x = mix(h[2] - h[3], h[1] - h[0], weight.y);
+	float slope_z = mix(h[0] - h[3], h[1] - h[2], weight.x);
+	vec3 w_normal = normalize(vec3(-slope_x, _vertex_spacing, -slope_z));
+	if (!fast_surface_sampling) {
+		h[4] = texelFetch(_height_maps, get_index_coord(index_id + offsets.yz, VERTEX_PASS), 0).r;
+		h[5] = texelFetch(_height_maps, get_index_coord(index_id + offsets.zy, VERTEX_PASS), 0).r;
+		h[6] = texelFetch(_height_maps, get_index_coord(index_id + offsets.zx, VERTEX_PASS), 0).r;
+		h[7] = texelFetch(_height_maps, get_index_coord(index_id + offsets.xz, VERTEX_PASS), 0).r;
 
-	vec3 index_normal[4];
-	index_normal[0] = vec3(h[0] - h[1], _vertex_spacing, h[0] - h[7]);
-	index_normal[1] = vec3(h[1] - h[5], _vertex_spacing, h[1] - h[4]);
-	index_normal[2] = vec3(h[2] - h[6], _vertex_spacing, h[2] - h[1]);
-	index_normal[3] = vec3(h[3] - h[2], _vertex_spacing, h[3] - h[0]);
-	vec3 w_normal = normalize(
-		index_normal[0] * weights[0] +
-		index_normal[1] * weights[1] +
-		index_normal[2] * weights[2] +
-		index_normal[3] * weights[3]
-	);
+		vec3 index_normal[4];
+		index_normal[0] = vec3(h[0] - h[1], _vertex_spacing, h[0] - h[7]);
+		index_normal[1] = vec3(h[1] - h[5], _vertex_spacing, h[1] - h[4]);
+		index_normal[2] = vec3(h[2] - h[6], _vertex_spacing, h[2] - h[1]);
+		index_normal[3] = vec3(h[3] - h[2], _vertex_spacing, h[3] - h[0]);
+		w_normal = normalize(
+			index_normal[0] * weights[0] +
+			index_normal[1] * weights[1] +
+			index_normal[2] * weights[2] +
+			index_normal[3] * weights[3]
+		);
+	}
 
 	pos.y = h[0] * weights[0] + h[1] * weights[1] + h[2] * weights[2] + h[3] * weights[3];
+	pos.y += terrain_clearance_meters;
 
 	TRANSFORM = mat4(1.0);
 	vec3 orientation = vec3(0.0, 1.0, 0.0);
@@ -193,7 +203,8 @@ void start() {
 	float noise = textureLod(main_noise, uv, 0.0).r;
 	float clods = smoothstep(clod_min_threshold, clod_max_threshold, noise) * clod_scale_boost;
 	float patch = smoothstep(patch_min_threshold, patch_max_threshold, noise);
-	float width_modifier = 1.0 + 3.0 * smoothstep(0.0, max_dist, length(camera_position - pos));
+	float camera_dist = length(camera_position - pos);
+	float width_modifier = 1.0 + 3.0 * smoothstep(0.0, max_dist, camera_dist);
 
 	vec3 scale = vec3(
 		mix(min_scale.x, max_scale.x, r.x) * width_modifier,
@@ -203,7 +214,7 @@ void start() {
 	vec3 offset = position_offset * scale;
 
 	if (align_to_normal) {
-		orientation = mix(orientation, w_normal, normal_strength);
+		orientation = normalize(mix(orientation, w_normal, normal_strength));
 		mat3 alignment = align_to_vector(orientation);
 		offset = alignment * offset;
 		TRANSFORM = mat4(alignment);
@@ -222,14 +233,16 @@ void start() {
 		hide_particle(pos);
 	}
 
-	highp vec4 c[4];
-	#define COLOR_MAP vec4(1.0, 1.0, 1.0, 0.5)
-	c[0] = index[0].z >= 0 ? texelFetch(_color_maps, index[0], 0) : COLOR_MAP;
-	c[1] = index[1].z >= 0 ? texelFetch(_color_maps, index[1], 0) : COLOR_MAP;
-	c[2] = index[2].z >= 0 ? texelFetch(_color_maps, index[2], 0) : COLOR_MAP;
-	c[3] = index[3].z >= 0 ? texelFetch(_color_maps, index[3], 0) : COLOR_MAP;
-	vec4 color_map = c[0] * weights[0] + c[1] * weights[1] + c[2] * weights[2] + c[3] * weights[3];
-	COLOR = color_map;
+	COLOR = vec4(1.0);
+	if (use_color_map_tint) {
+		highp vec4 c[4];
+		#define COLOR_MAP vec4(1.0, 1.0, 1.0, 0.5)
+		c[0] = index[0].z >= 0 ? texelFetch(_color_maps, index[0], 0) : COLOR_MAP;
+		c[1] = index[1].z >= 0 ? texelFetch(_color_maps, index[1], 0) : COLOR_MAP;
+		c[2] = index[2].z >= 0 ? texelFetch(_color_maps, index[2], 0) : COLOR_MAP;
+		c[3] = index[3].z >= 0 ? texelFetch(_color_maps, index[3], 0) : COLOR_MAP;
+		COLOR = c[0] * weights[0] + c[1] * weights[1] + c[2] * weights[2] + c[3] * weights[3];
+	}
 
 	uint control = floatBitsToUint(texelFetch(_control_maps, index[3], 0).r);
 	bool auto = bool(control & 0x1u);
@@ -241,15 +254,15 @@ void start() {
 		hide_particle(pos);
 	}
 
-	if (length(camera_position - pos) > max_dist) {
+	if (camera_dist > max_dist + distance_cull_buffer_meters) {
 		hide_particle(pos);
 	} else {
 		float fade_factor = 1.0 - smoothstep(
 			max_dist * distance_fade_amount,
 			max_dist + 0.0001,
-			length(camera_position - pos)
-		) + 0.001;
-		scale.y *= fade_factor;
+			camera_dist
+		);
+		scale *= fade_factor;
 		offset *= fade_factor;
 	}
 

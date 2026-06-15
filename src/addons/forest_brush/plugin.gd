@@ -17,6 +17,7 @@ var _dock_added := false
 var _gizmo_plugin
 var _region: ForestRegionScript
 
+var _paint_enabled := false
 var _brush_mode := ForestRegionScript.PaintMode.PAINT
 var _brush_radius := 1
 var _selected_plant_ids: Array[StringName] = []
@@ -54,6 +55,7 @@ func _enter_tree() -> void:
 	_dock.name = "Forest Brush"
 	_dock.palette_changed.connect(_on_dock_palette_changed)
 	_dock.selected_plant_ids_changed.connect(_on_dock_selected_plant_ids_changed)
+	_dock.paint_enabled_changed.connect(_on_dock_paint_enabled_changed)
 	_dock.brush_mode_changed.connect(_on_dock_brush_mode_changed)
 	_dock.brush_radius_changed.connect(_on_dock_brush_radius_changed)
 	_dock.density_multiplier_changed.connect(_on_dock_density_multiplier_changed)
@@ -114,6 +116,13 @@ func _make_visible(visible: bool) -> void:
 
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> AfterGUIInput:
 	if not is_instance_valid(_region):
+		return AFTER_GUI_INPUT_PASS
+
+	if not _paint_enabled:
+		if _stroke_active:
+			_finish_stroke()
+		if _preview_active or _has_hover_cell:
+			_clear_brush_preview()
 		return AFTER_GUI_INPUT_PASS
 
 	if event is InputEventMouseMotion:
@@ -186,6 +195,7 @@ func _set_region(region: ForestRegionScript) -> void:
 		_sync_dock_region(_region)
 		return
 
+	_paint_enabled = false
 	_region = region
 	if is_instance_valid(_region):
 		_show_dock()
@@ -218,6 +228,8 @@ func _hide_dock() -> void:
 func _sync_dock_region(region: ForestRegionScript) -> void:
 	if is_instance_valid(_dock):
 		_dock.set_region(region, _selected_plant_ids, _has_explicit_plant_selection)
+		if _dock.has_method("set_paint_enabled"):
+			_dock.call("set_paint_enabled", _paint_enabled)
 
 
 func _on_dock_palette_changed(resource: Resource) -> void:
@@ -239,6 +251,20 @@ func _on_dock_selected_plant_ids_changed(plant_ids: Array[StringName]) -> void:
 	_selected_plant_ids = _copy_plant_ids(plant_ids)
 	_has_explicit_plant_selection = true
 	_refresh_brush_preview()
+
+
+func _on_dock_paint_enabled_changed(enabled: bool) -> void:
+	if _paint_enabled == enabled:
+		return
+
+	_paint_enabled = enabled
+	if _paint_enabled:
+		_refresh_brush_preview()
+		return
+
+	if _stroke_active:
+		_finish_stroke()
+	_clear_brush_preview()
 
 
 func _on_dock_brush_mode_changed(mode: int) -> void:
@@ -312,7 +338,7 @@ func _on_dock_clear_requested() -> void:
 
 
 func _start_stroke() -> void:
-	if not is_instance_valid(_region):
+	if not _paint_enabled or not is_instance_valid(_region):
 		return
 
 	_stroke_active = true
@@ -370,7 +396,7 @@ func _update_brush_preview_at_position(world_position: Vector3) -> void:
 
 
 func _refresh_brush_preview() -> void:
-	if not is_instance_valid(_region) or not _has_hover_cell:
+	if not _paint_enabled or not is_instance_valid(_region) or not _has_hover_cell:
 		_clear_brush_preview()
 		return
 
@@ -418,7 +444,7 @@ func _clear_brush_preview() -> void:
 
 
 func _paint_at_cell(center_cell: Vector2i) -> void:
-	if not is_instance_valid(_stroke_region):
+	if not _paint_enabled or not is_instance_valid(_stroke_region):
 		return
 
 	if _stroke_centers.has(center_cell):

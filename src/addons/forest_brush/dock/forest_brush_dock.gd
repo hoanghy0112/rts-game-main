@@ -3,6 +3,7 @@ extends PanelContainer
 
 signal palette_changed(resource: Resource)
 signal selected_plant_ids_changed(plant_ids: Array[StringName])
+signal paint_enabled_changed(enabled: bool)
 signal brush_mode_changed(mode: int)
 signal brush_radius_changed(radius: int)
 signal density_multiplier_changed(multiplier: float)
@@ -20,6 +21,8 @@ enum BrushMode {
 var _region: ForestRegionScript
 var _syncing := false
 var _palette_picker: EditorResourcePicker
+var _paint_checkbox: CheckBox
+var _paint_enabled := false
 var _plants_box: VBoxContainer
 var _empty_plants_label: Label
 var _mode_buttons: Dictionary = {}
@@ -56,6 +59,8 @@ func set_region(region: ForestRegionScript, selected_plant_ids: Array[StringName
 	var has_region := is_instance_valid(_region)
 	if _palette_picker:
 		_palette_picker.editable = has_region
+	if _paint_checkbox:
+		_paint_checkbox.disabled = not has_region
 	_set_mode_buttons_disabled(not has_region)
 	if _radius_spinbox:
 		_radius_spinbox.editable = has_region
@@ -78,6 +83,17 @@ func set_region(region: ForestRegionScript, selected_plant_ids: Array[StringName
 
 func get_brush_mode() -> int:
 	return _selected_mode
+
+
+func set_paint_enabled(enabled: bool) -> void:
+	_paint_enabled = enabled
+	if not _paint_checkbox:
+		return
+
+	var was_syncing := _syncing
+	_syncing = true
+	_paint_checkbox.button_pressed = enabled
+	_syncing = was_syncing
 
 
 func set_brush_mode(mode: int) -> void:
@@ -130,6 +146,12 @@ func _build_ui() -> void:
 	title.text = "Forest Brush"
 	title.add_theme_font_size_override("font_size", int(16.0 * EditorInterface.get_editor_scale()))
 	root.add_child(title)
+
+	_paint_checkbox = CheckBox.new()
+	_paint_checkbox.text = "Paint Enabled"
+	_paint_checkbox.button_pressed = _paint_enabled
+	_paint_checkbox.toggled.connect(_on_paint_enabled_toggled)
+	root.add_child(_paint_checkbox)
 
 	_palette_picker = _add_resource_picker(root, "Palette", "ForestPaletteData")
 	_palette_picker.resource_changed.connect(_on_palette_changed)
@@ -350,6 +372,13 @@ func _on_palette_changed(resource: Resource) -> void:
 	palette_changed.emit(resource)
 	_rebuild_plant_checks()
 	selected_plant_ids_changed.emit(get_selected_plant_ids())
+
+
+func _on_paint_enabled_toggled(pressed: bool) -> void:
+	if _syncing:
+		return
+	_paint_enabled = pressed
+	paint_enabled_changed.emit(pressed)
 
 
 func _on_plant_toggled(pressed: bool, plant_id: StringName) -> void:

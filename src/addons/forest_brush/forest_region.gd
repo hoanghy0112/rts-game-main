@@ -6,7 +6,7 @@ const DEFAULT_PALETTE: ForestPaletteData = preload("res://assets/models/forest/d
 const ForestRegionData = preload("res://addons/forest_brush/forest_region_data.gd")
 const RUNTIME_CONTAINER_NAME := "__ForestRuntimeInstances"
 const MAX_PLACEMENTS_PER_CELL := 512
-const LOD_TIER_COUNT := 3
+const LOD_TIER_COUNT := 4
 const LOD_FADE_BEGIN_RATIO := 0.88
 const DENSE_GRASS_LAYER_META := &"forest_dense_grass_layer"
 
@@ -60,6 +60,22 @@ enum PaintMode {
 		if is_equal_approx(tree_low_poly_distance, clamped_value):
 			return
 		tree_low_poly_distance = clamped_value
+		_notify_resource_rendering_changed()
+
+@export_range(0.0, 512.0, 1.0, "or_greater") var tree_lod_fade_margin_meters: float = 48.0:
+	set(value):
+		var clamped_value := maxf(value, 0.0)
+		if is_equal_approx(tree_lod_fade_margin_meters, clamped_value):
+			return
+		tree_lod_fade_margin_meters = clamped_value
+		_notify_resource_rendering_changed()
+
+@export_range(0.0, 2048.0, 1.0, "or_greater") var tree_billboard_fade_margin_meters: float = 240.0:
+	set(value):
+		var clamped_value := maxf(value, 0.0)
+		if is_equal_approx(tree_billboard_fade_margin_meters, clamped_value):
+			return
+		tree_billboard_fade_margin_meters = clamped_value
 		_notify_resource_rendering_changed()
 
 @export_group("")
@@ -301,6 +317,10 @@ func to_runtime_data() -> Dictionary:
 	}
 
 
+func get_macro_detail_data() -> Dictionary:
+	return to_runtime_data()
+
+
 func rebuild_runtime_preview() -> void:
 	clear_runtime_instances()
 
@@ -389,20 +409,23 @@ func rebuild_runtime_chunks(chunks: Array[Vector2i]) -> void:
 		rebuild_runtime_preview()
 		return
 
-	for chunk_coord: Vector2i in chunks:
-		_remove_runtime_chunk(chunk_coord)
 	_remove_dense_grass_layers()
 
 	if _forest_cells_cache.is_empty() or not palette:
 		return
 
-	var chunk_filter: Dictionary = {}
+	var near_chunk_filter: Dictionary = {}
 	for chunk_coord: Vector2i in chunks:
-		chunk_filter[chunk_coord] = true
+		near_chunk_filter[chunk_coord] = true
+	var far_chunk_filter := _expand_chunks_for_lod_multipliers(chunks)
+	_remove_runtime_chunks_for_rebuild(near_chunk_filter, far_chunk_filter)
 
 	var terrain := _get_terrain_node()
-	var groups := _build_instance_groups(terrain, chunk_filter)
-	_create_multimesh_groups(groups)
+	var near_groups := _build_instance_groups(terrain, near_chunk_filter, {0: true, 1: true})
+	_create_multimesh_groups(near_groups)
+	if far_chunk_filter != near_chunk_filter:
+		var far_groups := _build_instance_groups(terrain, far_chunk_filter, {2: true, 3: true})
+		_create_multimesh_groups(far_groups)
 	_create_dense_grass_layers(_build_dense_grass_layer_specs(terrain))
 
 
@@ -589,7 +612,7 @@ func _set_compact_data_from_legacy(cells: Array[Vector2i], plant_map: Dictionary
 	_sync_legacy_cache_from_region_data()
 
 
-func _build_instance_groups(terrain: Node3D, chunk_filter: Dictionary = {}) -> Dictionary:
+func _build_instance_groups(terrain: Node3D, chunk_filter: Dictionary = {}, lod_filter: Dictionary = {}) -> Dictionary:
 	var plant_types_by_id := _get_palette_plant_types_by_id()
 	var groups: Dictionary = {}
 	var cells_to_build := _get_cells_for_runtime_build(chunk_filter)
@@ -614,6 +637,8 @@ func _build_instance_groups(terrain: Node3D, chunk_filter: Dictionary = {}) -> D
 			var placements := _build_cell_placements(cell, plant_type, terrain)
 			for placement: Dictionary in placements:
 				for lod_tier: int in lod_tiers:
+					if not lod_filter.is_empty() and not lod_filter.has(lod_tier):
+						continue
 					if not _placement_is_kept_for_lod(placement, plant_type, lod_tier):
 						continue
 
@@ -728,8 +753,10 @@ func _add_placement_part_to_groups(
 		placement_transform.basis = placement_transform.basis.scaled(Vector3.ONE * lod_scale)
 
 	var final_transform := placement_transform * part_transform
-	var chunk_coord := _get_chunk_coord(cell)
-	var chunk_origin := _get_chunk_origin(chunk_coord)
+	var chunk_coord := _get_chunk_coord_for_lod(cell, lod_tier)
+	var chunk_origin := _get_chunk_origin_for_lod(chunk_coord, lod_tier)
+	var base_chunk_coord := _get_chunk_coord(cell)
+	var base_chunk_key := _chunk_key(base_chunk_coord)
 	var relative_transform := final_transform
 	relative_transform.origin -= chunk_origin
 
@@ -751,15 +778,19 @@ func _add_placement_part_to_groups(
 			"mesh": mesh,
 			"material": material,
 			"chunk_coord": chunk_coord,
-			"chunk_key": _chunk_key(chunk_coord),
+			"chunk_key": _chunk_key_for_lod(chunk_coord, lod_tier),
 			"chunk_origin": chunk_origin,
-			"shadow_casting": GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if plant_type.disable_shadows else int(part.get("shadow_casting", GeometryInstance3D.SHADOW_CASTING_SETTING_ON)),
+			"base_chunk_keys": {},
+			"shadow_casting": _get_shadow_casting_for_lod(plant_type, lod_tier, int(part.get("shadow_casting", GeometryInstance3D.SHADOW_CASTING_SETTING_ON))),
 			"transforms": [],
 		}
 		groups[group_key] = group
 
 	var transforms: Array = group["transforms"]
 	transforms.append(relative_transform)
+	var base_chunk_keys := group.get("base_chunk_keys", {}) as Dictionary
+	base_chunk_keys[base_chunk_key] = true
+	group["base_chunk_keys"] = base_chunk_keys
 
 
 func _create_multimesh_groups(groups: Dictionary) -> void:
@@ -900,6 +931,8 @@ func _create_multimesh_group(group: Dictionary) -> void:
 	instance.cast_shadow = int(group.get("shadow_casting", GeometryInstance3D.SHADOW_CASTING_SETTING_ON))
 	instance.set_meta("forest_chunk", group.get("chunk_coord", Vector2i.ZERO))
 	instance.set_meta("forest_chunk_key", str(group.get("chunk_key", "")))
+	instance.set_meta("forest_lod_tier", int(group.get("lod_tier", 0)))
+	instance.set_meta("forest_base_chunk_keys", _packed_string_array_from_keys(group.get("base_chunk_keys", {})))
 	if custom_aabb.size.length_squared() > 0.0:
 		instance.custom_aabb = custom_aabb
 
@@ -920,15 +953,15 @@ func _create_multimesh_group(group: Dictionary) -> void:
 func _configure_visibility_range(instance: GeometryInstance3D, plant_type: ForestPlantTypeData, lod_tier: int) -> void:
 	var end_distance := _get_visible_distance_for_lod(plant_type, lod_tier)
 	var begin_distance := 0.0
-	if lod_tier == 1:
-		begin_distance = maxf(0.0, plant_type.near_visible_distance * LOD_FADE_BEGIN_RATIO)
-	elif lod_tier >= 2:
-		begin_distance = maxf(0.0, _get_low_poly_distance_for_plant_type(plant_type) * LOD_FADE_BEGIN_RATIO)
+	if lod_tier > 0:
+		begin_distance = maxf(0.0, _get_begin_distance_for_lod(plant_type, lod_tier))
 
 	instance.visibility_range_begin = begin_distance
 	instance.visibility_range_end = end_distance
-	instance.visibility_range_begin_margin = 8.0
-	instance.visibility_range_end_margin = 12.0
+	instance.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	var fade_margin := _get_visibility_fade_margin_for_lod(lod_tier)
+	instance.visibility_range_begin_margin = fade_margin if begin_distance > 0.0 else 0.0
+	instance.visibility_range_end_margin = fade_margin
 
 
 func _get_scene_parts(plant_type: ForestPlantTypeData, lod_tier: int) -> Array[Dictionary]:
@@ -1056,8 +1089,28 @@ func _get_visible_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: in
 			return _get_low_poly_distance_for_plant_type(plant_type)
 		2:
 			return maxf(plant_type.far_visible_distance, _get_low_poly_distance_for_plant_type(plant_type))
+		3:
+			return maxf(plant_type.billboard_visible_distance, plant_type.far_visible_distance)
 		_:
 			return plant_type.get_visible_distance_for_lod(lod_tier)
+
+
+func _get_begin_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: int) -> float:
+	match lod_tier:
+		1:
+			return plant_type.near_visible_distance * LOD_FADE_BEGIN_RATIO
+		2:
+			return _get_low_poly_distance_for_plant_type(plant_type) * LOD_FADE_BEGIN_RATIO
+		3:
+			return plant_type.far_visible_distance * LOD_FADE_BEGIN_RATIO
+		_:
+			return 0.0
+
+
+func _get_visibility_fade_margin_for_lod(lod_tier: int) -> float:
+	if lod_tier >= 3:
+		return tree_billboard_fade_margin_meters
+	return tree_lod_fade_margin_meters
 
 
 func _get_low_poly_distance_for_plant_type(plant_type: ForestPlantTypeData) -> float:
@@ -1113,6 +1166,99 @@ func _get_chunk_origin(chunk_coord: Vector2i) -> Vector3:
 		0.0,
 		float(chunk_coord.y * safe_chunk_size) * safe_cell_size
 	)
+
+
+func _get_chunk_coord_for_lod(cell: Vector2i, lod_tier: int) -> Vector2i:
+	return ForestRegionData.get_chunk_coord_for_cell(cell, _get_chunk_size_cells_for_lod(lod_tier))
+
+
+func _get_chunk_origin_for_lod(chunk_coord: Vector2i, lod_tier: int) -> Vector3:
+	var safe_chunk_size := _get_chunk_size_cells_for_lod(lod_tier)
+	var safe_cell_size := maxf(cell_size, 0.1)
+	return origin + Vector3(
+		float(chunk_coord.x * safe_chunk_size) * safe_cell_size,
+		0.0,
+		float(chunk_coord.y * safe_chunk_size) * safe_cell_size
+	)
+
+
+func _get_chunk_size_cells_for_lod(lod_tier: int) -> int:
+	var safe_chunk_size := maxi(_chunk_size_cells, 1)
+	if lod_tier >= 3:
+		return safe_chunk_size * 8
+	if lod_tier == 2:
+		return safe_chunk_size * 2
+	return safe_chunk_size
+
+
+func _chunk_key_for_lod(chunk_coord: Vector2i, lod_tier: int) -> String:
+	if lod_tier <= 1:
+		return _chunk_key(chunk_coord)
+	return "lod%d:%s" % [lod_tier, _chunk_key(chunk_coord)]
+
+
+func _expand_chunks_for_lod_multipliers(chunks: Array[Vector2i]) -> Dictionary:
+	var expanded: Dictionary = {}
+	for chunk_coord: Vector2i in chunks:
+		expanded[chunk_coord] = true
+		_add_base_chunks_for_multiplier(expanded, chunk_coord, 2)
+		_add_base_chunks_for_multiplier(expanded, chunk_coord, 8)
+	return expanded
+
+
+func _add_base_chunks_for_multiplier(expanded: Dictionary, chunk_coord: Vector2i, multiplier: int) -> void:
+	var safe_multiplier := maxi(multiplier, 1)
+	var parent_chunk := Vector2i(
+		_floor_div_int(chunk_coord.x, safe_multiplier),
+		_floor_div_int(chunk_coord.y, safe_multiplier)
+	)
+	for x: int in range(parent_chunk.x * safe_multiplier, parent_chunk.x * safe_multiplier + safe_multiplier):
+		for y: int in range(parent_chunk.y * safe_multiplier, parent_chunk.y * safe_multiplier + safe_multiplier):
+			expanded[Vector2i(x, y)] = true
+
+
+func _packed_string_array_from_keys(keys_variant: Variant) -> PackedStringArray:
+	var packed := PackedStringArray()
+	if not (keys_variant is Dictionary):
+		return packed
+	var keys := keys_variant as Dictionary
+	var sorted_keys: Array[String] = []
+	for key: Variant in keys.keys():
+		sorted_keys.append(str(key))
+	sorted_keys.sort()
+	for key: String in sorted_keys:
+		packed.append(key)
+	return packed
+
+
+func _chunk_coord_from_key(chunk_key: String) -> Vector2i:
+	var normalized := chunk_key
+	var prefix_index := normalized.find(":")
+	if prefix_index >= 0:
+		normalized = normalized.substr(prefix_index + 1)
+	var parts := normalized.split(",", false, 1)
+	if parts.size() != 2:
+		return Vector2i(2147483647, 2147483647)
+	return Vector2i(int(parts[0]), int(parts[1]))
+
+
+func _floor_div_int(value: int, divisor: int) -> int:
+	var safe_divisor := maxi(divisor, 1)
+	if value >= 0:
+		return value / safe_divisor
+	return -int(ceili(float(-value) / float(safe_divisor)))
+
+
+func _get_shadow_casting_for_lod(
+	plant_type: ForestPlantTypeData,
+	lod_tier: int,
+	part_shadow_casting: int
+) -> int:
+	if not plant_type or plant_type.disable_shadows:
+		return GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if plant_type.max_shadow_lod_tier < 0 or lod_tier > plant_type.max_shadow_lod_tier:
+		return GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return part_shadow_casting
 
 
 func _get_surface_world_position_from_local_2d(local_point: Vector2, terrain: Node3D) -> Vector3:
@@ -1242,6 +1388,40 @@ func _remove_runtime_chunk(chunk_coord: Vector2i) -> void:
 	for child: Node in children_to_remove:
 		_runtime_container.remove_child(child)
 		child.free()
+
+
+func _remove_runtime_chunks_for_rebuild(near_chunk_filter: Dictionary, far_chunk_filter: Dictionary) -> void:
+	if not is_instance_valid(_runtime_container):
+		return
+
+	var children_to_remove: Array[Node] = []
+	for child: Node in _runtime_container.get_children(true):
+		if not (child is MultiMeshInstance3D):
+			continue
+		var lod_tier := int(child.get_meta("forest_lod_tier", 0))
+		var filter := far_chunk_filter if lod_tier >= 2 else near_chunk_filter
+		if _runtime_child_intersects_base_chunks(child, filter):
+			children_to_remove.append(child)
+
+	for child: Node in children_to_remove:
+		_runtime_container.remove_child(child)
+		child.free()
+
+
+func _runtime_child_intersects_base_chunks(child: Node, chunk_filter: Dictionary) -> bool:
+	if chunk_filter.is_empty():
+		return false
+	var packed_keys: Variant = child.get_meta("forest_base_chunk_keys", PackedStringArray())
+	if packed_keys is PackedStringArray:
+		for key: String in packed_keys:
+			var chunk := _chunk_coord_from_key(key)
+			if chunk_filter.has(chunk):
+				return true
+	var chunk_key := str(child.get_meta("forest_chunk_key", ""))
+	if not chunk_key.is_empty():
+		var chunk := _chunk_coord_from_key(chunk_key)
+		return chunk_filter.has(chunk)
+	return false
 
 
 func _remove_dense_grass_layers() -> void:

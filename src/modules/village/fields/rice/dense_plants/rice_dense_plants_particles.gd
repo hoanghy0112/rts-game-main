@@ -9,7 +9,7 @@ class_name RiceDensePlantsParticles
 		terrain = value
 		_create_grid()
 
-@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 0.625:
+@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 0.9375:
 	set(value):
 		instance_spacing = clamp(round(value * 64.0) * 0.015625, 0.125, 2.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -17,7 +17,7 @@ class_name RiceDensePlantsParticles
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(8.0, 256.0, 1.0) var cell_width: float = 120.0:
+@export_range(8.0, 256.0, 1.0) var cell_width: float = 240.0:
 	set(value):
 		cell_width = clamp(value, 8.0, 256.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -35,9 +35,9 @@ class_name RiceDensePlantsParticles
 		min_draw_distance = 1.0
 		_create_grid()
 
-@export_storage var rows: int = 192
+@export_storage var rows: int = 256
 
-@export_storage var amount: int = 36864:
+@export_storage var amount: int = 65536:
 	set(value):
 		amount = maxi(value, 1)
 		particle_count = amount * grid_width * grid_width
@@ -71,12 +71,12 @@ var mesh_material_override: Material:
 			particle_node.material_override = mesh_material_override
 
 @export_group("Info")
-@export var min_draw_distance: float = 180.0:
+@export var min_draw_distance: float = 360.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
 		_mark_static_process_parameters_dirty()
 
-@export var particle_count: int = 331776:
+@export var particle_count: int = 589824:
 	set(value):
 		particle_count = amount * grid_width * grid_width
 

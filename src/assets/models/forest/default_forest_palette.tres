@@ -28,6 +28,7 @@ display_name = "Forest Canopy Tree 01"
 description = "User-derived plant split from res://assets/models/forest/source/trees/canopy-tree/canopy_tree.glb."
 scene = ExtResource("3_s6r1d")
 lod2_scene = ExtResource("2_ktyf2")
+billboard_scene = ExtResource("2_ktyf2")
 density_per_cell = 0.22
 density_jitter = 0.35
 min_scale = 0.85
@@ -36,9 +37,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 terrain3d_mesh_id = 5
 
 [sub_resource type="Resource" id="Resource_green_canopy"]
@@ -48,6 +52,7 @@ display_name = "Forest Canopy Tree Green 01"
 description = "Greener visual variant derived from res://assets/models/forest/plants/forest_canopy_tree_01.tscn."
 scene = ExtResource("12_green_scene")
 lod2_scene = ExtResource("11_green_proxy")
+billboard_scene = ExtResource("11_green_proxy")
 density_per_cell = 0.22
 density_jitter = 0.35
 min_scale = 0.85
@@ -56,9 +61,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 
 [sub_resource type="Resource" id="Resource_of7mo"]
 script = ExtResource("1_tfytm")
@@ -91,6 +99,7 @@ display_name = "Forest Highland Pine 01"
 description = "User-derived plant split from res://assets/models/forest/source/trees/highland-pine/highland_pine.glb."
 scene = ExtResource("6_h4m6j")
 lod2_scene = ExtResource("5_wv2c8")
+billboard_scene = ExtResource("5_wv2c8")
 density_per_cell = 0.22
 density_jitter = 0.35
 min_scale = 0.85
@@ -99,9 +108,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 terrain3d_mesh_id = 7
 
 [sub_resource type="Resource" id="Resource_r5r1p"]
@@ -131,6 +143,7 @@ display_name = "Forest Tree 01"
 description = "Tree model imported from res://assets/models/forest/source/trees/imported-tree/tree.glb."
 scene = ExtResource("13_j4env")
 lod2_scene = ExtResource("12_qhher")
+billboard_scene = ExtResource("12_qhher")
 density_per_cell = 0.075
 density_jitter = 0.35
 min_scale = 0.85
@@ -139,9 +152,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 
 [sub_resource type="Resource" id="Resource_m0hm4"]
 script = ExtResource("1_tfytm")
@@ -150,6 +166,7 @@ display_name = "Forest Anime Tree 01"
 description = "Tree model imported from res://assets/models/forest/source/trees/imported-tree/jabami_anime_tree_v3.glb."
 scene = ExtResource("15_v68gk")
 lod2_scene = ExtResource("14_s8rjl")
+billboard_scene = ExtResource("14_s8rjl")
 density_per_cell = 0.075
 density_jitter = 0.35
 min_scale = 0.85
@@ -158,9 +175,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 
 [sub_resource type="Resource" id="Resource_5i8qo"]
 script = ExtResource("1_tfytm")
@@ -169,6 +189,7 @@ display_name = "Forest Low Poly Tree 01"
 description = "Tree model imported from res://assets/models/forest/source/trees/imported-tree/tree_low-poly.glb."
 scene = ExtResource("17_t4unq")
 lod2_scene = ExtResource("16_pub5q")
+billboard_scene = ExtResource("16_pub5q")
 density_per_cell = 0.075
 density_jitter = 0.35
 min_scale = 0.85
@@ -177,9 +198,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 
 [sub_resource type="Resource" id="Resource_y7mws"]
 script = ExtResource("1_tfytm")
@@ -188,6 +212,7 @@ display_name = "Forest Game Tree 01"
 description = "Tree model imported from res://assets/models/forest/source/trees/imported-tree/lowpoly_tree_game_asset.glb."
 scene = ExtResource("19_v66xn")
 lod2_scene = ExtResource("18_xbfvy")
+billboard_scene = ExtResource("18_xbfvy")
 density_per_cell = 0.075
 density_jitter = 0.35
 min_scale = 0.85
@@ -196,9 +221,12 @@ cell_edge_margin = 0.18
 near_visible_distance = 120.0
 mid_visible_distance = 300.0
 far_visible_distance = 920.0
+billboard_visible_distance = 8000.0
 mid_keep_ratio = 0.95
 far_keep_ratio = 0.55
+billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
+billboard_scale_multiplier = 2.0
 
 [resource]
 script = ExtResource("7_31nr8")

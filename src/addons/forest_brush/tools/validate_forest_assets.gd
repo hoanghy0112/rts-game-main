@@ -10,6 +10,11 @@ const CATEGORY_FERN := 4
 const CATEGORY_GRASS := 5
 const DEFAULT_TREE_LOW_POLY_DISTANCE := 450.0
 const LOD_FADE_BEGIN_RATIO := 0.88
+const TREE_BILLBOARD_VISIBLE_DISTANCE := 8000.0
+const TREE_BILLBOARD_KEEP_RATIO := 0.1
+const TREE_BILLBOARD_SCALE_MULTIPLIER := 2.0
+const TREE_LOD_FADE_MARGIN := 48.0
+const TREE_BILLBOARD_FADE_MARGIN := 240.0
 const RENDER_STRATEGY_MULTIMESH := 0
 const RENDER_STRATEGY_DENSE_GRASS_PARTICLES := 1
 const DENSE_GRASS_ID := "forest_smooth_grass_01"
@@ -30,14 +35,15 @@ const DENSE_PARTICLE_PLANT_CONFIG := {
 			"near_visible_distance": 92.0,
 			"mid_visible_distance": 240.0,
 			"far_visible_distance": 440.0,
-			"particle_instance_spacing": 0.4375,
-			"particle_cell_width": 56.0,
-			"particle_grid_width": 3,
-			"particle_rows": 128,
-			"particle_amount": 16384,
-			"particle_count": 147456,
+			"particle_instance_spacing": 1.0,
+			"particle_cell_width": 48.0,
+			"particle_grid_width": 5,
+			"particle_rows": 48,
+			"particle_amount": 2304,
+			"particle_count": 57600,
 			"particle_process_fixed_fps": 1,
-			"particle_min_draw_distance": 84.0,
+			"particle_min_draw_distance": 120.0,
+			"particle_reposition_threshold_meters": 8.0,
 		},
 		DENSE_GRASS_ID: {
 			"scene": DENSE_GRASS_SCENE,
@@ -46,14 +52,15 @@ const DENSE_PARTICLE_PLANT_CONFIG := {
 			"near_visible_distance": 120.0,
 			"mid_visible_distance": 240.0,
 			"far_visible_distance": 360.0,
-			"particle_instance_spacing": 0.375,
-			"particle_cell_width": 64.0,
-			"particle_grid_width": 3,
-			"particle_rows": 170,
-			"particle_amount": 28900,
-			"particle_count": 260100,
+			"particle_instance_spacing": 0.75,
+			"particle_cell_width": 48.0,
+			"particle_grid_width": 5,
+			"particle_rows": 64,
+			"particle_amount": 4096,
+			"particle_count": 102400,
 			"particle_process_fixed_fps": 1,
-			"particle_min_draw_distance": 96.0,
+			"particle_min_draw_distance": 120.0,
+			"particle_reposition_threshold_meters": 8.0,
 		},
 	}
 const DENSE_GRASS_PARTICLE_RESOURCES := [
@@ -160,9 +167,22 @@ func _validate_plant_type(plant_type: Variant, terrain_assets: Resource, errors:
 			errors.append("Tree plant %s far LOD is not a generated proxy: %s." % [plant_id, far_scene.resource_path])
 		elif terrain_assets and _terrain_assets_has_scene(terrain_assets, far_scene.resource_path):
 			errors.append("Tree far proxy %s should not be registered as a Terrain3D manual mesh asset." % far_scene.resource_path)
+		_validate_tree_billboard_settings(plant_type, errors)
 
 	if render_strategy != RENDER_STRATEGY_MULTIMESH:
 		errors.append("Plant %s should default to chunked MultiMesh render strategy." % plant_id)
+
+
+func _validate_tree_billboard_settings(plant_type: Variant, errors: Array[String]) -> void:
+	var plant_id := StringName(plant_type.get("id"))
+	if not plant_type.get("billboard_scene"):
+		errors.append("Tree plant %s has no ultra-far billboard scene." % plant_id)
+	if not is_equal_approx(float(plant_type.get("billboard_visible_distance")), TREE_BILLBOARD_VISIBLE_DISTANCE):
+		errors.append("Tree plant %s billboard distance should be %.1fm." % [plant_id, TREE_BILLBOARD_VISIBLE_DISTANCE])
+	if not is_equal_approx(float(plant_type.get("billboard_keep_ratio")), TREE_BILLBOARD_KEEP_RATIO):
+		errors.append("Tree plant %s billboard keep ratio should be %.2f." % [plant_id, TREE_BILLBOARD_KEEP_RATIO])
+	if not is_equal_approx(float(plant_type.get("billboard_scale_multiplier")), TREE_BILLBOARD_SCALE_MULTIPLIER):
+		errors.append("Tree plant %s billboard scale multiplier should be %.1f." % [plant_id, TREE_BILLBOARD_SCALE_MULTIPLIER])
 
 
 func _validate_dense_grass_plant_type(
@@ -267,6 +287,7 @@ func _validate_dense_particle_scene_settings(
 	var expected_particle_count := int(dense_config.get("particle_count", -1))
 	var expected_process_fixed_fps := int(dense_config.get("particle_process_fixed_fps", -1))
 	var expected_draw_distance := float(dense_config.get("particle_min_draw_distance", -1.0))
+	var expected_reposition_threshold := float(dense_config.get("particle_reposition_threshold_meters", -1.0))
 	if expected_instance_spacing >= 0.0 and not is_equal_approx(float(instance.get("instance_spacing")), expected_instance_spacing):
 		errors.append("%s particle scene instance_spacing should be %.4fm." % [plant_id, expected_instance_spacing])
 	if expected_cell_width >= 0.0 and not is_equal_approx(float(instance.get("cell_width")), expected_cell_width):
@@ -283,6 +304,8 @@ func _validate_dense_particle_scene_settings(
 		errors.append("%s particle scene process_fixed_fps should be %d." % [plant_id, expected_process_fixed_fps])
 	if expected_draw_distance >= 0.0 and not is_equal_approx(float(instance.get("min_draw_distance")), expected_draw_distance):
 		errors.append("%s particle scene min_draw_distance should be %.1fm." % [plant_id, expected_draw_distance])
+	if expected_reposition_threshold >= 0.0 and not is_equal_approx(float(instance.get("reposition_threshold_meters")), expected_reposition_threshold):
+		errors.append("%s particle scene reposition_threshold_meters should be %.1fm." % [plant_id, expected_reposition_threshold])
 
 	instance.free()
 
@@ -724,6 +747,14 @@ func _validate_runtime_container(container: Node, errors: Array[String]) -> void
 				errors.append("%s has no MultiMesh custom AABB." % instance.name)
 			if instance.custom_aabb.size.length_squared() <= 0.0:
 				errors.append("%s has no GeometryInstance custom AABB." % instance.name)
+			if instance.visibility_range_fade_mode != GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF:
+				errors.append("%s should use visibility range self fade." % instance.name)
+			var lod_tier := int(instance.get_meta("forest_lod_tier", 0))
+			var expected_fade_margin := TREE_BILLBOARD_FADE_MARGIN if lod_tier >= 3 else TREE_LOD_FADE_MARGIN
+			if instance.visibility_range_begin > 0.0 and not is_equal_approx(instance.visibility_range_begin_margin, expected_fade_margin):
+				errors.append("%s begin fade margin should be %.1fm." % [instance.name, expected_fade_margin])
+			if not is_equal_approx(instance.visibility_range_end_margin, expected_fade_margin):
+				errors.append("%s end fade margin should be %.1fm." % [instance.name, expected_fade_margin])
 			var chunk_key := str(instance.get_meta("forest_chunk_key", ""))
 			if chunk_key.is_empty():
 				errors.append("%s has no forest chunk metadata." % instance.name)

@@ -11,7 +11,7 @@ class_name ForestDenseGrassParticles
 
 @export var plant_id: StringName = &"forest_smooth_grass_01"
 
-@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 0.375:
+@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 1.125:
 	set(value):
 		instance_spacing = clamp(round(value * 64.0) * 0.015625, 0.125, 2.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -19,7 +19,7 @@ class_name ForestDenseGrassParticles
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(8.0, 256.0, 1.0) var cell_width: float = 64.0:
+@export_range(8.0, 256.0, 1.0) var cell_width: float = 96.0:
 	set(value):
 		cell_width = clamp(value, 8.0, 256.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -29,7 +29,7 @@ class_name ForestDenseGrassParticles
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(1, 15, 2) var grid_width: int = 3:
+@export_range(1, 15, 2) var grid_width: int = 5:
 	set(value):
 		var odd_value := value if value % 2 == 1 else value + 1
 		grid_width = clampi(odd_value, 1, 15)
@@ -37,9 +37,9 @@ class_name ForestDenseGrassParticles
 		min_draw_distance = 1.0
 		_create_grid()
 
-@export_storage var rows: int = 170
+@export_storage var rows: int = 85
 
-@export_storage var amount: int = 28900:
+@export_storage var amount: int = 7225:
 	set(value):
 		amount = maxi(value, 1)
 		particle_count = amount * grid_width * grid_width
@@ -53,6 +53,8 @@ class_name ForestDenseGrassParticles
 		for particle_node: GPUParticles3D in particle_nodes:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
+
+@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 8.0
 
 @export var process_material: ShaderMaterial
 @export var mesh: Mesh
@@ -73,12 +75,12 @@ var mesh_material_override: Material:
 			particle_node.material_override = mesh_material_override
 
 @export_group("Info")
-@export var min_draw_distance: float = 96.0:
+@export var min_draw_distance: float = 240.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
 		_mark_static_process_parameters_dirty()
 
-@export var particle_count: int = 260100:
+@export var particle_count: int = 180625:
 	set(value):
 		particle_count = amount * grid_width * grid_width
 
@@ -115,7 +117,8 @@ func _physics_process(_delta: float) -> void:
 	if _static_process_parameters_dirty:
 		_upload_static_process_parameters()
 
-	if camera and last_pos.distance_squared_to(camera.global_position) > 1.0:
+	var threshold := maxf(reposition_threshold_meters, instance_spacing)
+	if camera and last_pos.distance_squared_to(camera.global_position) > threshold * threshold:
 		var pos := camera.global_position.snapped(Vector3.ONE)
 		_position_grid(pos)
 		_set_camera_position_parameter(pos)

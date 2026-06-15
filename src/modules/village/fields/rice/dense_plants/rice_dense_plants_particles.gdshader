@@ -31,10 +31,10 @@ uniform vec3 mature_color = vec3(0.83, 0.69, 0.28);
 uniform vec3 stubble_color = vec3(0.62, 0.48, 0.24);
 
 group_uniforms private;
-uniform float max_dist = 180.0;
+uniform float max_dist = 360.0;
 uniform vec3 camera_position = vec3(0.0);
 uniform uint instance_rows = 1u;
-uniform float instance_spacing = 0.625;
+uniform float instance_spacing = 0.9375;
 uniform uint _background_mode = 0u;
 uniform float _vertex_spacing = 1.0;
 uniform float _vertex_density = 1.0;
