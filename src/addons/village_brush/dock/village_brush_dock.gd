@@ -3,8 +3,10 @@ extends PanelContainer
 
 signal village_type_changed(resource: Resource)
 signal wall_type_changed(resource: Resource)
+signal paint_enabled_changed(enabled: bool)
 signal brush_mode_changed(mode: int)
 signal brush_radius_changed(radius: int)
+signal house_density_changed(density: float)
 signal clear_requested(target: int)
 
 const VillageRegionScript = preload("res://addons/village_brush/village_region.gd")
@@ -27,9 +29,12 @@ var _region: VillageRegionScript
 var _syncing := false
 var _village_picker: EditorResourcePicker
 var _wall_picker: EditorResourcePicker
+var _paint_checkbox: CheckBox
+var _paint_enabled := false
 var _selected_mode := BrushMode.HOUSE
 var _mode_buttons: Dictionary = {}
 var _radius_spinbox: SpinBox
+var _house_density_spinbox: SpinBox
 var _clear_house_button: Button
 var _clear_field_button: Button
 var _clear_road_button: Button
@@ -57,9 +62,14 @@ func set_region(region: VillageRegionScript) -> void:
 		_village_picker.editable = has_region
 	if _wall_picker:
 		_wall_picker.editable = has_region
+	if _paint_checkbox:
+		_paint_checkbox.disabled = not has_region
 	_set_mode_buttons_disabled(not has_region)
 	if _radius_spinbox:
 		_radius_spinbox.editable = has_region
+	if _house_density_spinbox:
+		_house_density_spinbox.editable = has_region
+		_house_density_spinbox.value = _region.house_density if has_region else 1.0
 	if _clear_house_button:
 		_clear_house_button.disabled = not has_region
 	if _clear_field_button:
@@ -74,6 +84,17 @@ func set_region(region: VillageRegionScript) -> void:
 
 func get_brush_mode() -> int:
 	return _selected_mode
+
+
+func set_paint_enabled(enabled: bool) -> void:
+	_paint_enabled = enabled
+	if not _paint_checkbox:
+		return
+
+	var was_syncing := _syncing
+	_syncing = true
+	_paint_checkbox.button_pressed = enabled
+	_syncing = was_syncing
 
 
 func set_brush_mode(mode: int) -> void:
@@ -104,6 +125,12 @@ func _build_ui() -> void:
 	title.text = "Village Brush"
 	title.add_theme_font_size_override("font_size", int(16.0 * EditorInterface.get_editor_scale()))
 	root.add_child(title)
+
+	_paint_checkbox = CheckBox.new()
+	_paint_checkbox.text = "Paint Enabled"
+	_paint_checkbox.button_pressed = _paint_enabled
+	_paint_checkbox.toggled.connect(_on_paint_enabled_toggled)
+	root.add_child(_paint_checkbox)
 
 	_village_picker = _add_resource_picker(root, "Village Type", "VillageTypeData")
 	_village_picker.resource_changed.connect(_on_village_type_changed)
@@ -145,6 +172,24 @@ func _build_ui() -> void:
 	_radius_spinbox.allow_greater = true
 	_radius_spinbox.value_changed.connect(_on_radius_changed)
 	radius_row.add_child(_radius_spinbox)
+
+	var density_row := HBoxContainer.new()
+	density_row.add_theme_constant_override("separation", 8)
+	root.add_child(density_row)
+
+	var density_label := Label.new()
+	density_label.text = "House Density"
+	density_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	density_row.add_child(density_label)
+
+	_house_density_spinbox = SpinBox.new()
+	_house_density_spinbox.min_value = 0.25
+	_house_density_spinbox.max_value = 4.0
+	_house_density_spinbox.step = 0.05
+	_house_density_spinbox.value = 1.0
+	_house_density_spinbox.allow_greater = true
+	_house_density_spinbox.value_changed.connect(_on_house_density_changed)
+	density_row.add_child(_house_density_spinbox)
 
 	var separator := HSeparator.new()
 	root.add_child(separator)
@@ -220,6 +265,13 @@ func _on_wall_type_changed(resource: Resource) -> void:
 	wall_type_changed.emit(resource)
 
 
+func _on_paint_enabled_toggled(pressed: bool) -> void:
+	if _syncing:
+		return
+	_paint_enabled = pressed
+	paint_enabled_changed.emit(pressed)
+
+
 func _on_mode_button_toggled(pressed: bool, mode: int) -> void:
 	if _syncing:
 		return
@@ -234,6 +286,12 @@ func _on_radius_changed(value: float) -> void:
 	if _syncing:
 		return
 	brush_radius_changed.emit(int(value))
+
+
+func _on_house_density_changed(value: float) -> void:
+	if _syncing:
+		return
+	house_density_changed.emit(value)
 
 
 func _on_clear_house_pressed() -> void:

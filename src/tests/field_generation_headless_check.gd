@@ -2,14 +2,14 @@ extends SceneTree
 
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const FieldTerrainRegistryScript = preload("res://modules/village/fields/field_terrain_registry.gd")
-const RiceFieldScene = preload("res://modules/village/fields/rice_field.tscn")
-const RiceDensePlantsScene = preload("res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.tscn")
-const ForestDenseGrassScene = preload("res://assets/models/forest/grass/smooth_dense/forest_dense_grass_particles.tscn")
-const ForestFlowerGrassScene = preload("res://assets/models/forest/grass/flower_dense/forest_flower_grass_particles.tscn")
+const RTSCameraScene = preload("res://modules/camera/rts_camera.tscn")
 const VillageRegionScript = preload("res://addons/village_brush/village_region.gd")
 const VILLAGE_RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
-const RICE_DENSE_LAYER_META := &"village_rice_dense_plants_layer"
-const BALANCED_DENSE_PARTICLE_BUDGET := 739332
+const VILLAGE_VISIBLE_DISTANCE_METERS := 800.0
+const VILLAGE_VISIBILITY_FADE_MARGIN_METERS := 80.0
+const FIELD_SIZE_MULTIPLIER := 4.0
+const CAMERA_MAX_DISTANCE := 440.0
+const CAMERA_MAX_ZOOM_MOVE_SCALE := 14.0
 
 
 func _init() -> void:
@@ -27,15 +27,13 @@ func _init() -> void:
 
 func _run_checks(failures: Array[String]) -> void:
 	_expect(FieldTerrainRegistryScript != null, "field terrain registry script failed to preload", failures)
-	_expect(RiceFieldScene != null, "rice field scene failed to preload", failures)
 	_expect(VillageRegionScript != null, "village region script failed to preload", failures)
 	_expect(_draft_scene_loads_with_startup_safe_terrain(), "draft scene should load with runtime terrain edits disabled for startup", failures)
 	_expect(_balanced_render_defaults_are_configured(), "balanced render defaults should be configured", failures)
-	_expect(_rice_field_rebuilds_far_view_meshes(), "rice field should rebuild procedural far-view meshes", failures)
-	_expect(_dense_rice_resources_load(), "dense rice particle resources should load and expose configure API", failures)
-	_expect(_dense_vegetation_resources_match_balanced_budget(), "dense vegetation particle resources should match the balanced budget", failures)
-	_expect(_dense_vegetation_shaders_are_static(), "dense vegetation shaders should not contain wind, time-based animation paths, or blended blade rendering", failures)
-	_expect(_village_region_creates_single_rice_particle_layer(), "village region should create one dense rice particle layer", failures)
+	_expect(_camera_zoom_defaults_are_configured(), "camera should allow 2x farther max zoom", failures)
+	_expect(_village_field_size_defaults_are_scaled(), "village rice field plot defaults should be 4x larger", failures)
+	_expect(_village_region_uses_macro_field_data_without_runtime_fields(), "village fields should be macro detail data without runtime field scenes", failures)
+	_expect(_village_region_configures_house_visibility(), "village region should configure house distance fade", failures)
 
 	var field_cells := _make_field_cells(20, 14)
 	var roads := _make_road_polylines()
@@ -66,7 +64,11 @@ func _draft_scene_loads_with_startup_safe_terrain() -> bool:
 		return false
 
 	var village_region := draft.get_node_or_null("VillageRegion")
-	var valid := village_region != null and not bool(village_region.get("apply_runtime_terrain_edits"))
+	var valid := (
+		village_region != null
+		and not bool(village_region.get("apply_runtime_terrain_edits"))
+		and bool(village_region.get("auto_apply_terrain_textures"))
+	)
 	draft.free()
 	return valid
 
@@ -77,206 +79,69 @@ func _balanced_render_defaults_are_configured() -> bool:
 	return (
 		project_source.contains('run/main_scene="res://modules/loading/boot.tscn"')
 		and project_source.contains("run/max_fps=60")
-		and project_source.contains("anti_aliasing/quality/msaa_3d=0")
-		and project_source.contains("anti_aliasing/quality/screen_space_aa=0")
-		and project_source.contains("anti_aliasing/quality/use_taa=true")
+		and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)) == 0
+		and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/screen_space_aa", 0)) == 0
+		and bool(ProjectSettings.get_setting("rendering/anti_aliasing/quality/use_taa", false))
 		and environment_source.contains("sdfgi_enabled = false")
 		and environment_source.contains("volumetric_fog_density = 0.0")
 		and environment_source.contains("directional_shadow_max_distance = 220.0")
 	)
 
 
-func _rice_field_rebuilds_far_view_meshes() -> bool:
-	var field := RiceFieldScene.instantiate() as RiceField
-	if not field:
+func _camera_zoom_defaults_are_configured() -> bool:
+	var camera_rig := RTSCameraScene.instantiate() if RTSCameraScene else null
+	if not camera_rig:
 		return false
 
-	var footprint := PackedVector2Array([
-		Vector2(-4.0, -2.4),
-		Vector2(4.0, -2.4),
-		Vector2(4.0, 2.4),
-		Vector2(-4.0, 2.4),
-	])
-	var plot := FieldPlotData.new()
-	plot.configure(
-		&"visual_polygon_check",
-		Vector3.ZERO,
-		Vector3.RIGHT,
-		Vector3.FORWARD,
-		8.0,
-		4.8,
-		footprint
-	)
-	plot.stage = &"flooded_green"
-	field.configure_field(plot, null, null)
-	field.apply_environment({"rain_intensity": 0.35})
-	field.rebuild_visuals()
-
-	var ground_mesh := field.get_node_or_null("VisualRoot/Ground") as MeshInstance3D
-	var water_mesh := field.get_node_or_null("VisualRoot/Water") as MeshInstance3D
-	var bund_edges_mesh := field.get_node_or_null("VisualRoot/BundEdges") as MeshInstance3D
-	var canopy_mesh := field.get_node_or_null("VisualRoot/CropCanopy") as MeshInstance3D
-	var row_bands_mesh := field.get_node_or_null("VisualRoot/RowBands") as MeshInstance3D
-	var crop_multimesh := field.get_node_or_null("VisualRoot/CropMultiMesh") as MultiMeshInstance3D
 	var valid := (
-		ground_mesh != null and ground_mesh.mesh != null and ground_mesh.mesh.get_surface_count() == 1
-		and water_mesh != null and water_mesh.mesh != null and water_mesh.visible
-		and bund_edges_mesh != null and bund_edges_mesh.mesh != null and bund_edges_mesh.visible
-		and canopy_mesh == null
-		and row_bands_mesh == null
-		and crop_multimesh == null
-		and _has_only_surface_visual_children(field)
+		is_equal_approx(float(camera_rig.get("max_distance")), CAMERA_MAX_DISTANCE)
+		and is_equal_approx(float(camera_rig.get("max_zoom_move_scale")), CAMERA_MAX_ZOOM_MOVE_SCALE)
 	)
-	field.free()
+	camera_rig.free()
 	return valid
 
 
-func _dense_rice_resources_load() -> bool:
-	if not RiceDensePlantsScene:
-		return false
-
-	var instance := RiceDensePlantsScene.instantiate()
-	if not instance:
-		return false
-
-	var normal_grass := ForestDenseGrassScene.instantiate() if ForestDenseGrassScene else null
-	var process_material := instance.get("process_material") as ShaderMaterial
-	var min_scale := Vector3.ZERO
-	var max_scale := Vector3.ZERO
-	var position_offset := Vector3.ZERO
-	if process_material:
-		min_scale = process_material.get_shader_parameter("min_scale")
-		max_scale = process_material.get_shader_parameter("max_scale")
-		position_offset = process_material.get_shader_parameter("position_offset")
-
-	var rice_draw_distance := float(instance.get("min_draw_distance"))
-	var normal_grass_draw_distance := float(normal_grass.get("min_draw_distance")) if normal_grass else 0.0
-	var valid := (
-		instance.has_method("configure_from_plot_mask")
-		and instance.has_method("configure_from_plots")
-		and is_equal_approx(float(instance.get("instance_spacing")), 0.625)
-		and is_equal_approx(float(instance.get("cell_width")), 120.0)
-		and int(instance.get("grid_width")) == 3
-		and int(instance.get("rows")) == 192
-		and is_equal_approx(rice_draw_distance, 180.0)
-		and rice_draw_distance > normal_grass_draw_distance
-		and int(instance.get("amount")) == 36864
-		and int(instance.get("particle_count")) == 331776
-		and int(instance.get("process_fixed_fps")) == 1
-		and process_material != null
-		and is_equal_approx(min_scale.x, 0.045 * 1.5)
-		and is_equal_approx(min_scale.z, 0.045 * 1.5)
-		and is_equal_approx(max_scale.x, 0.085 * 1.5)
-		and is_equal_approx(max_scale.z, 0.085 * 1.5)
-		and is_equal_approx(min_scale.y, 1.5)
-		and is_equal_approx(max_scale.y, 1.5)
-		and is_equal_approx(min_scale.y, max_scale.y)
-		and is_equal_approx(position_offset.y, 0.75)
-	)
-	if normal_grass:
-		normal_grass.free()
-	instance.free()
-
-	return (
-		valid
-		and ResourceLoader.load("res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.gd") != null
-		and ResourceLoader.load("res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.gdshader") != null
-		and ResourceLoader.load("res://modules/village/fields/rice/dense_plants/rice_dense_plants_blade.gdshader") != null
-		and ResourceLoader.load("res://modules/village/fields/rice/dense_plants/rice_dense_plants_process_material.tres") != null
-		and ResourceLoader.load("res://modules/village/fields/rice/dense_plants/rice_dense_plants_material.tres") != null
-	)
-
-
-func _dense_vegetation_resources_match_balanced_budget() -> bool:
-	var rice := RiceDensePlantsScene.instantiate() if RiceDensePlantsScene else null
-	var smooth_grass := ForestDenseGrassScene.instantiate() if ForestDenseGrassScene else null
-	var flower_grass := ForestFlowerGrassScene.instantiate() if ForestFlowerGrassScene else null
-	if not rice or not smooth_grass or not flower_grass:
-		if rice:
-			rice.free()
-		if smooth_grass:
-			smooth_grass.free()
-		if flower_grass:
-			flower_grass.free()
-		return false
-
-	var total_particles := int(rice.get("particle_count")) + int(smooth_grass.get("particle_count")) + int(flower_grass.get("particle_count"))
-	var valid := (
-		is_equal_approx(float(rice.get("instance_spacing")), 0.625)
-		and int(rice.get("rows")) == 192
-		and int(rice.get("amount")) == 36864
-		and int(rice.get("particle_count")) == 331776
-		and int(rice.get("process_fixed_fps")) == 1
-		and is_equal_approx(float(smooth_grass.get("instance_spacing")), 0.375)
-		and is_equal_approx(float(smooth_grass.get("cell_width")), 64.0)
-		and int(smooth_grass.get("grid_width")) == 3
-		and int(smooth_grass.get("rows")) == 170
-		and int(smooth_grass.get("amount")) == 28900
-		and int(smooth_grass.get("particle_count")) == 260100
-		and int(smooth_grass.get("process_fixed_fps")) == 1
-		and is_equal_approx(float(flower_grass.get("instance_spacing")), 0.4375)
-		and is_equal_approx(float(flower_grass.get("cell_width")), 56.0)
-		and int(flower_grass.get("grid_width")) == 3
-		and int(flower_grass.get("rows")) == 128
-		and int(flower_grass.get("amount")) == 16384
-		and int(flower_grass.get("particle_count")) == 147456
-		and int(flower_grass.get("process_fixed_fps")) == 1
-		and total_particles == BALANCED_DENSE_PARTICLE_BUDGET
-	)
-
-	rice.free()
-	smooth_grass.free()
-	flower_grass.free()
-	return valid
-
-
-func _dense_vegetation_shaders_are_static() -> bool:
-	var shader_paths := [
-		"res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.gdshader",
-		"res://modules/village/fields/rice/dense_plants/rice_dense_plants_blade.gdshader",
-		"res://assets/models/forest/grass/smooth_dense/forest_dense_grass_particles.gdshader",
-		"res://assets/models/forest/grass/smooth_dense/forest_dense_grass_blade.gdshader",
-		"res://assets/models/forest/grass/flower_dense/forest_flower_grass_blade.gdshader",
-	]
-	var forbidden_tokens := [
-		"TIME",
-		"wind_strength",
-		"wind_speed",
-		"wind_direction",
-		"CUSTOM[2]",
-		"INSTANCE_CUSTOM[2]",
-		"blend_mix",
-	]
-	for shader_path: String in shader_paths:
-		var source := FileAccess.get_file_as_string(shader_path)
-		if source.is_empty():
-			return false
-		for token: String in forbidden_tokens:
-			if source.contains(token):
-				return false
-	return true
-
-
-func _village_region_creates_single_rice_particle_layer() -> bool:
+func _village_field_size_defaults_are_scaled() -> bool:
 	var region := VillageRegionScript.new() as VillageRegion
 	if not region:
 		return false
 
-	region.field_cells = _make_field_cells(6, 4)
+	var valid := (
+		is_equal_approx(float(region.get("field_min_plot_width")), 4.8 * FIELD_SIZE_MULTIPLIER)
+		and is_equal_approx(float(region.get("field_max_plot_width")), 11.2 * FIELD_SIZE_MULTIPLIER)
+		and is_equal_approx(float(region.get("field_min_plot_length")), 8.0 * FIELD_SIZE_MULTIPLIER)
+		and is_equal_approx(float(region.get("field_max_plot_length")), 24.0 * FIELD_SIZE_MULTIPLIER)
+	)
+	region.free()
+	return valid
+
+
+func _village_region_uses_macro_field_data_without_runtime_fields() -> bool:
+	var region := VillageRegionScript.new() as VillageRegion
+	if not region:
+		return false
+
+	region.set_cell_arrays([], _make_field_cells(16, 12), [])
 	region.generation_seed = 2468
+	region.auto_apply_terrain_textures = false
 	root.add_child(region)
 	region.rebuild_runtime_preview()
 
 	var container := region.get_node_or_null(VILLAGE_RUNTIME_CONTAINER_NAME)
-	var dense_layers := _get_nodes_with_meta(container, RICE_DENSE_LAYER_META) if container else []
+	var macro_data := region.get_macro_detail_data()
+	var field_generation := macro_data.get("field_generation", {}) as Dictionary
+	var plots: Array = field_generation.get("plots", [])
+	var generated_cells: Array = field_generation.get("field_cells", [])
+	var dense_layers := _get_nodes_with_meta(container, &"village_rice_dense_plants_layer") if container else []
 	var emitters := _count_descendants_of_type(container, "GPUParticles3D") if container else 0
 	var valid := (
 		container != null
 		and container.get_parent() == region
-		and dense_layers.size() == 1
-		and emitters == 9
-		and _dense_rice_layer_has_mask(dense_layers[0])
-		and not _has_runtime_rice_plant_nodes(container)
+		and not plots.is_empty()
+		and generated_cells.size() == region.get_field_cells().size()
+		and dense_layers.is_empty()
+		and emitters == 0
+		and not _has_descendant_name_prefix(container, "Field_")
 	)
 
 	region.clear_runtime_instances()
@@ -285,31 +150,88 @@ func _village_region_creates_single_rice_particle_layer() -> bool:
 	return valid
 
 
-func _has_only_surface_visual_children(field: Node) -> bool:
-	var visual_root := field.get_node_or_null("VisualRoot")
-	if not visual_root:
+func _village_region_configures_house_visibility() -> bool:
+	var region := VillageRegionScript.new() as VillageRegion
+	if not region:
 		return false
 
-	var expected := {
-		"Ground": true,
-		"Water": true,
-		"BundEdges": true,
-	}
-	for child: Node in visual_root.get_children():
-		if not expected.has(child.name):
-			return false
-	return visual_root.get_child_count() == expected.size()
+	region.house_cells = _make_field_cells(4, 4)
+	region.generation_seed = 1357
+	region.auto_apply_terrain_textures = false
+	root.add_child(region)
+	region.rebuild_runtime_preview()
+
+	var container := region.get_node_or_null(VILLAGE_RUNTIME_CONTAINER_NAME)
+	var house_visibility_checked := false
+	var valid := container != null
+	if valid:
+		for instance: GeometryInstance3D in _collect_geometry_instances(container):
+			if not _has_ancestor_name_prefix(instance, "House_"):
+				continue
+			house_visibility_checked = true
+			if not _geometry_visibility_matches(
+				instance,
+				0.0,
+				0.0,
+				VILLAGE_VISIBLE_DISTANCE_METERS,
+				VILLAGE_VISIBILITY_FADE_MARGIN_METERS
+			):
+				valid = false
+				break
+
+	valid = valid and house_visibility_checked
+	region.clear_runtime_instances()
+	root.remove_child(region)
+	region.free()
+	return valid
 
 
-func _dense_rice_layer_has_mask(layer: Node) -> bool:
+func _collect_geometry_instances(root_node: Node) -> Array[GeometryInstance3D]:
+	var instances: Array[GeometryInstance3D] = []
+	if not root_node:
+		return instances
+
+	if root_node is GeometryInstance3D:
+		instances.append(root_node as GeometryInstance3D)
+	for child: Node in root_node.get_children(true):
+		instances.append_array(_collect_geometry_instances(child))
+	return instances
+
+
+func _geometry_visibility_matches(
+	instance: GeometryInstance3D,
+	begin_distance: float,
+	begin_margin: float,
+	end_distance: float,
+	end_margin: float
+) -> bool:
 	return (
-		layer != null
-		and bool(layer.get_meta(RICE_DENSE_LAYER_META, false))
-		and layer.has_method("has_rice_mask")
-		and bool(layer.call("has_rice_mask"))
-		and layer.has_method("get_mask_plot_count")
-		and int(layer.call("get_mask_plot_count")) > 0
+		is_equal_approx(instance.visibility_range_begin, begin_distance)
+		and is_equal_approx(instance.visibility_range_begin_margin, begin_margin)
+		and is_equal_approx(instance.visibility_range_end, end_distance)
+		and is_equal_approx(instance.visibility_range_end_margin, end_margin)
+		and instance.visibility_range_fade_mode == GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	)
+
+
+func _has_ancestor_name_prefix(node: Node, prefix: String) -> bool:
+	var current := node
+	while current:
+		if String(current.name).begins_with(prefix):
+			return true
+		current = current.get_parent()
+	return false
+
+
+func _has_descendant_name_prefix(root_node: Node, prefix: String) -> bool:
+	if not root_node:
+		return false
+	for child: Node in root_node.get_children(true):
+		if String(child.name).begins_with(prefix):
+			return true
+		if _has_descendant_name_prefix(child, prefix):
+			return true
+	return false
 
 
 func _get_nodes_with_meta(root_node: Node, meta_key: StringName) -> Array[Node]:
@@ -334,16 +256,6 @@ func _count_descendants_of_type(root_node: Node, class_name_value: String) -> in
 			count += 1
 		count += _count_descendants_of_type(child, class_name_value)
 	return count
-
-
-func _has_runtime_rice_plant_nodes(root_node: Node) -> bool:
-	for child: Node in root_node.get_children(true):
-		var child_name := String(child.name).to_lower()
-		if child_name.begins_with("rice_") or child_name.contains("seedling") or child_name.contains("tillering"):
-			return true
-		if _has_runtime_rice_plant_nodes(child):
-			return true
-	return false
 
 
 func _generate_plots(seed: int, field_cells: Array[Vector2i], roads: Array) -> Array[FieldPlotData]:

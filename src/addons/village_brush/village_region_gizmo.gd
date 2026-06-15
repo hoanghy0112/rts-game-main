@@ -87,9 +87,9 @@ func _redraw(gizmo: EditorNode3DGizmo) -> void:
 	var terrain := _get_terrain(region)
 	if is_instance_valid(terrain) and not _is_terrain_ready_for_height_queries(region, terrain):
 		terrain = null
-	_draw_cached_cells(gizmo, region, terrain, region.house_cells, material, HOUSE_COLOR, CellDrawStyle.HOUSE)
-	_draw_cached_cells(gizmo, region, terrain, region.field_cells, material, FIELD_COLOR, CellDrawStyle.FIELD)
-	_draw_cached_cells(gizmo, region, terrain, region.road_cells, material, ROAD_COLOR, CellDrawStyle.ROAD)
+	_draw_cached_cells(gizmo, region, terrain, region.get_house_cells(), material, HOUSE_COLOR, CellDrawStyle.HOUSE)
+	_draw_cached_cells(gizmo, region, terrain, region.get_field_cells(), material, FIELD_COLOR, CellDrawStyle.FIELD)
+	_draw_cached_cells(gizmo, region, terrain, region.get_road_cells(), material, ROAD_COLOR, CellDrawStyle.ROAD)
 
 	if _preview_visible and _preview_region_id == region.get_instance_id():
 		var preview_color := ERASE_PREVIEW_COLOR if _preview_mode == VillageRegionScript.PaintMode.ERASE else PREVIEW_COLOR

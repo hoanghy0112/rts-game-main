@@ -2,6 +2,7 @@
 extends EditorPlugin
 
 const VillageRegionScript = preload("res://addons/village_brush/village_region.gd")
+const VillageCellDataScript = preload("res://addons/village_brush/village_cell_data.gd")
 const VillageTypeDataScript = preload("res://addons/village_brush/village_type_data.gd")
 const WallTypeDataScript = preload("res://addons/village_brush/wall_type_data.gd")
 const VillageRegionGizmo = preload("res://addons/village_brush/village_region_gizmo.gd")
@@ -16,6 +17,7 @@ var _dock_added := false
 var _gizmo_plugin
 var _region: VillageRegionScript
 
+var _paint_enabled := false
 var _brush_mode := VillageRegionScript.PaintMode.HOUSE
 var _brush_radius := 0
 var _has_hover_cell := false
@@ -34,10 +36,15 @@ var _stroke_centers: Dictionary = {}
 var _stroke_before_house: Array[Vector2i] = []
 var _stroke_before_field: Array[Vector2i] = []
 var _stroke_before_road: Array[Vector2i] = []
+var _stroke_house_lookup: Dictionary = {}
+var _stroke_field_lookup: Dictionary = {}
+var _stroke_road_lookup: Dictionary = {}
+var _stroke_dirty := false
 
 
 func _enter_tree() -> void:
 	add_custom_type("VillageRegion", "Node3D", VillageRegionScript, VillageIcon)
+	add_custom_type("VillageCellData", "Resource", VillageCellDataScript, VillageIcon)
 	add_custom_type("VillageTypeData", "Resource", VillageTypeDataScript, VillageIcon)
 	add_custom_type("WallTypeData", "Resource", WallTypeDataScript, VillageIcon)
 
@@ -48,8 +55,10 @@ func _enter_tree() -> void:
 	_dock.name = "Village Brush"
 	_dock.village_type_changed.connect(_on_dock_village_type_changed)
 	_dock.wall_type_changed.connect(_on_dock_wall_type_changed)
+	_dock.paint_enabled_changed.connect(_on_dock_paint_enabled_changed)
 	_dock.brush_mode_changed.connect(_on_dock_brush_mode_changed)
 	_dock.brush_radius_changed.connect(_on_dock_brush_radius_changed)
+	_dock.house_density_changed.connect(_on_dock_house_density_changed)
 	_dock.clear_requested.connect(_on_dock_clear_requested)
 	_show_dock()
 
@@ -82,6 +91,7 @@ func _exit_tree() -> void:
 		_gizmo_plugin = null
 
 	remove_custom_type("VillageRegion")
+	remove_custom_type("VillageCellData")
 	remove_custom_type("VillageTypeData")
 	remove_custom_type("WallTypeData")
 
@@ -104,6 +114,13 @@ func _make_visible(visible: bool) -> void:
 
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> AfterGUIInput:
 	if not is_instance_valid(_region):
+		return AFTER_GUI_INPUT_PASS
+
+	if not _paint_enabled:
+		if _stroke_active:
+			_finish_stroke()
+		if _preview_active or _has_hover_cell:
+			_clear_brush_preview()
 		return AFTER_GUI_INPUT_PASS
 
 	if event is InputEventMouseMotion:
@@ -176,6 +193,7 @@ func _set_region(region: VillageRegionScript) -> void:
 		_sync_dock_region(_region)
 		return
 
+	_paint_enabled = false
 	_region = region
 	if is_instance_valid(_region):
 		_show_dock()
@@ -208,6 +226,8 @@ func _hide_dock() -> void:
 func _sync_dock_region(region: VillageRegionScript) -> void:
 	if is_instance_valid(_dock):
 		_dock.set_region(region)
+		if _dock.has_method("set_paint_enabled"):
+			_dock.call("set_paint_enabled", _paint_enabled)
 
 
 func _on_dock_village_type_changed(resource: Resource) -> void:
@@ -236,6 +256,20 @@ func _on_dock_wall_type_changed(resource: Resource) -> void:
 	undo.commit_action()
 
 
+func _on_dock_paint_enabled_changed(enabled: bool) -> void:
+	if _paint_enabled == enabled:
+		return
+
+	_paint_enabled = enabled
+	if _paint_enabled:
+		_refresh_brush_preview()
+		return
+
+	if _stroke_active:
+		_finish_stroke()
+	_clear_brush_preview()
+
+
 func _on_dock_brush_mode_changed(mode: int) -> void:
 	if _brush_mode == mode:
 		return
@@ -251,13 +285,30 @@ func _on_dock_brush_radius_changed(radius: int) -> void:
 	_refresh_brush_preview()
 
 
+func _on_dock_house_density_changed(density: float) -> void:
+	if not is_instance_valid(_region):
+		return
+
+	var clamped_density := maxf(density, 0.25)
+	if is_equal_approx(_region.house_density, clamped_density):
+		return
+
+	var undo := get_undo_redo()
+	undo.create_action("Set Village House Density")
+	undo.add_do_property(_region, "house_density", clamped_density)
+	undo.add_do_method(self, "_sync_dock_region", _region)
+	undo.add_undo_property(_region, "house_density", _region.house_density)
+	undo.add_undo_method(self, "_sync_dock_region", _region)
+	undo.commit_action()
+
+
 func _on_dock_clear_requested(target: int) -> void:
 	if not is_instance_valid(_region):
 		return
 
-	var before_house := _copy_cells(_region.house_cells)
-	var before_field := _copy_cells(_region.field_cells)
-	var before_road := _copy_cells(_region.road_cells)
+	var before_house := _copy_cells(_region.get_house_cells())
+	var before_field := _copy_cells(_region.get_field_cells())
+	var before_road := _copy_cells(_region.get_road_cells())
 	var after_house := _copy_cells(before_house)
 	var after_field := _copy_cells(before_field)
 	var after_road := _copy_cells(before_road)
@@ -285,13 +336,20 @@ func _on_dock_clear_requested(target: int) -> void:
 
 
 func _start_stroke() -> void:
+	if not _paint_enabled or not is_instance_valid(_region):
+		return
+
 	_stroke_active = true
 	_stroke_mode = _brush_mode
 	_stroke_radius = _brush_radius
 	_stroke_centers.clear()
-	_stroke_before_house = _copy_cells(_region.house_cells)
-	_stroke_before_field = _copy_cells(_region.field_cells)
-	_stroke_before_road = _copy_cells(_region.road_cells)
+	_stroke_before_house = _copy_cells(_region.get_house_cells())
+	_stroke_before_field = _copy_cells(_region.get_field_cells())
+	_stroke_before_road = _copy_cells(_region.get_road_cells())
+	_stroke_house_lookup = _to_cell_lookup(_stroke_before_house)
+	_stroke_field_lookup = _to_cell_lookup(_stroke_before_field)
+	_stroke_road_lookup = _to_cell_lookup(_stroke_before_road)
+	_stroke_dirty = false
 
 
 func _finish_stroke() -> void:
@@ -300,13 +358,20 @@ func _finish_stroke() -> void:
 
 	_stroke_active = false
 	_stroke_centers.clear()
+	var stroke_dirty := _stroke_dirty
 
 	if not is_instance_valid(_region):
+		_clear_stroke_cell_state()
 		return
 
-	var after_house := _copy_cells(_region.house_cells)
-	var after_field := _copy_cells(_region.field_cells)
-	var after_road := _copy_cells(_region.road_cells)
+	if not stroke_dirty:
+		_clear_stroke_cell_state()
+		return
+
+	var after_house := _lookup_to_cells(_stroke_house_lookup)
+	var after_field := _lookup_to_cells(_stroke_field_lookup)
+	var after_road := _lookup_to_cells(_stroke_road_lookup)
+	_clear_stroke_cell_state()
 	if _stroke_before_house == after_house and _stroke_before_field == after_field and _stroke_before_road == after_road:
 		return
 
@@ -324,7 +389,7 @@ func _update_brush_preview_at_position(world_position: Vector3) -> void:
 
 
 func _refresh_brush_preview() -> void:
-	if not is_instance_valid(_region) or not _has_hover_cell:
+	if not _paint_enabled or not is_instance_valid(_region) or not _has_hover_cell:
 		_clear_brush_preview()
 		return
 
@@ -372,7 +437,7 @@ func _clear_brush_preview() -> void:
 
 
 func _paint_at_cell(center_cell: Vector2i) -> void:
-	if not is_instance_valid(_region):
+	if not _paint_enabled or not is_instance_valid(_region) or not _stroke_active:
 		return
 
 	if _stroke_centers.has(center_cell):
@@ -380,7 +445,8 @@ func _paint_at_cell(center_cell: Vector2i) -> void:
 	_stroke_centers[center_cell] = true
 
 	var cells := _get_brush_cells(center_cell, _stroke_radius)
-	_region.paint_cells(cells, _stroke_mode)
+	if _apply_cells_to_stroke_lookups(cells, _stroke_mode):
+		_stroke_dirty = true
 
 
 func _get_brush_cells(center_cell: Vector2i, radius: int) -> Array[Vector2i]:
@@ -494,6 +560,64 @@ func _copy_cells(cells: Array[Vector2i]) -> Array[Vector2i]:
 	for cell: Vector2i in cells:
 		copied.append(cell)
 	return copied
+
+
+func _to_cell_lookup(cells: Array[Vector2i]) -> Dictionary:
+	var lookup: Dictionary = {}
+	for cell: Vector2i in cells:
+		lookup[cell] = true
+	return lookup
+
+
+func _lookup_to_cells(lookup: Dictionary) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for key: Variant in lookup.keys():
+		if key is Vector2i:
+			var cell: Vector2i = key
+			cells.append(cell)
+	return VillageRegionScript.normalize_cells(cells)
+
+
+func _clear_stroke_cell_state() -> void:
+	_stroke_house_lookup.clear()
+	_stroke_field_lookup.clear()
+	_stroke_road_lookup.clear()
+	_stroke_dirty = false
+
+
+func _apply_cells_to_stroke_lookups(cells: Array[Vector2i], mode: int) -> bool:
+	var changed := false
+	for cell: Vector2i in cells:
+		match mode:
+			VillageRegionScript.PaintMode.HOUSE:
+				if not _stroke_house_lookup.has(cell):
+					changed = true
+				_stroke_house_lookup[cell] = true
+				if _stroke_field_lookup.has(cell):
+					_stroke_field_lookup.erase(cell)
+					changed = true
+			VillageRegionScript.PaintMode.FIELD:
+				if not _stroke_field_lookup.has(cell):
+					changed = true
+				_stroke_field_lookup[cell] = true
+				if _stroke_house_lookup.has(cell):
+					_stroke_house_lookup.erase(cell)
+					changed = true
+			VillageRegionScript.PaintMode.ROAD:
+				if not _stroke_road_lookup.has(cell):
+					changed = true
+				_stroke_road_lookup[cell] = true
+			VillageRegionScript.PaintMode.ERASE:
+				if _stroke_house_lookup.has(cell):
+					_stroke_house_lookup.erase(cell)
+					changed = true
+				if _stroke_field_lookup.has(cell):
+					_stroke_field_lookup.erase(cell)
+					changed = true
+				if _stroke_road_lookup.has(cell):
+					_stroke_road_lookup.erase(cell)
+					changed = true
+	return changed
 
 
 func _cells_equal(a: Array[Vector2i], b: Array[Vector2i]) -> bool:

@@ -4,12 +4,10 @@ class_name VillageRegion
 
 const DEFAULT_HOUSE_SCENE: PackedScene = preload("res://addons/village_brush/defaults/default_house.tscn")
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
-const RICE_DENSE_PLANTS_SCENE: PackedScene = preload("res://modules/village/fields/rice/dense_plants/rice_dense_plants_particles.tscn")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
+const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
-const RICE_DENSE_LAYER_META := &"village_rice_dense_plants_layer"
-const RICE_MASK_SAMPLE_SIZE := 0.5
-const RICE_MASK_MAX_DIMENSION := 2048
+const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 const ROAD_NEIGHBOR_OFFSETS := [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
@@ -63,10 +61,12 @@ enum PaintMode {
 @export var season_weather_path: NodePath
 @export var field_terrain_registry_path: NodePath
 @export var apply_runtime_terrain_edits := false
+@export var auto_apply_terrain_textures := true
+@export var auto_apply_field_road_textures := false
 @export var async_runtime_preview_on_ready := true
 @export_range(1, 64, 1, "or_greater") var runtime_house_batch_size: int = 6
-@export_range(1, 64, 1, "or_greater") var runtime_field_batch_size: int = 4
-@export_range(1, 256, 1, "or_greater") var runtime_mask_rows_per_frame: int = 32
+@export_range(0.0, 10000.0, 1.0, "or_greater") var village_visible_distance_meters: float = 800.0
+@export_range(0.0, 2048.0, 1.0, "or_greater") var village_visibility_fade_margin_meters: float = 80.0
 
 @export var road_texture_id: int = 2
 @export_range(0.1, 64.0, 0.1, "or_greater") var road_width: float = 3.2
@@ -76,26 +76,27 @@ enum PaintMode {
 @export_range(0.0, 1.0, 0.01) var road_texture_strength: float = 0.9
 @export_range(0.0, 1.0, 0.01) var road_edge_feather: float = 0.72
 @export var field_road_texture_id: int = -1
-@export var house_sand_texture_id: int = 5
+@export var house_sand_texture_id: int = 2
 @export_range(0.0, 1.0, 0.01) var house_texture_strength: float = 0.68
 @export_range(0.0, 1.0, 0.01) var house_edge_feather: float = 0.58
 @export var field_mud_texture_id: int = 4
 @export_range(0.0, 1.0, 0.01) var field_texture_strength: float = 0.88
 @export_range(0.0, 1.0, 0.01) var field_edge_feather: float = 0.22
 
-@export_range(0.0, 64.0, 0.1, "or_greater") var house_min_spacing: float = 3.6
-@export_range(1.0, 4.0, 0.05, "or_greater") var house_size_spacing_multiplier: float = 1.15
+@export_range(0.0, 64.0, 0.1, "or_greater") var house_min_spacing: float = 3.0
+@export_range(1.0, 4.0, 0.05, "or_greater") var house_size_spacing_multiplier: float = 1.05
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_footprint_padding: float = 0.2
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_region_margin: float = 0.75
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_road_clearance: float = 2.0
-@export_range(0, 512, 1, "or_greater") var house_max_count: int = 14
+@export_range(0, 512, 1, "or_greater") var house_max_count: int = 18
+@export_range(0.25, 4.0, 0.05, "or_greater") var house_density: float = 1.5
 
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_width: float = 4.8
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_max_plot_width: float = 11.2
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_width: float = 19.2
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_max_plot_width: float = 44.8
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_bund_gap: float = 0.35
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_road_gap_width: float = 1.2
-@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_length: float = 8.0
-@export_range(0.1, 128.0, 0.1, "or_greater") var field_max_plot_length: float = 24.0
+@export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_length: float = 32.0
+@export_range(0.1, 128.0, 0.1, "or_greater") var field_max_plot_length: float = 96.0
 @export_range(0.1, 16.0, 0.1, "or_greater") var field_sample_step: float = 1.0
 @export_range(0.0, 32.0, 0.1, "or_greater") var field_road_clearance: float = 1.0
 @export_range(0.0, 1.0, 0.01) var field_horizontal_split_bias: float = 1.0
@@ -115,19 +116,38 @@ enum PaintMode {
 		origin = value
 		_notify_cells_changed()
 
+var _cell_data: VillageCellData
+@export var cell_data: VillageCellData:
+	get:
+		return _cell_data
+	set(value):
+		_set_cell_data(value)
+
 @export var house_cells: Array[Vector2i] = []:
 	set(value):
-		house_cells = normalize_cells(value)
+		if _cell_data:
+			var empty_cells: Array[Vector2i] = []
+			house_cells = empty_cells
+		else:
+			house_cells = normalize_cells(value)
 		_notify_cells_changed()
 
 @export var field_cells: Array[Vector2i] = []:
 	set(value):
-		field_cells = normalize_cells(value)
+		if _cell_data:
+			var empty_cells: Array[Vector2i] = []
+			field_cells = empty_cells
+		else:
+			field_cells = normalize_cells(value)
 		_notify_cells_changed()
 
 @export var road_cells: Array[Vector2i] = []:
 	set(value):
-		road_cells = normalize_cells(value)
+		if _cell_data:
+			var empty_cells: Array[Vector2i] = []
+			road_cells = empty_cells
+		else:
+			road_cells = normalize_cells(value)
 		_notify_cells_changed()
 
 @export var generation_seed: int = 0
@@ -186,6 +206,83 @@ static func copy_cells(value: Array[Vector2i]) -> Array[Vector2i]:
 	return copied
 
 
+func get_house_cells() -> Array[Vector2i]:
+	if _cell_data:
+		return _cell_data.to_house_cells()
+	return copy_cells(house_cells)
+
+
+func get_field_cells() -> Array[Vector2i]:
+	if _cell_data:
+		return _cell_data.to_field_cells()
+	return copy_cells(field_cells)
+
+
+func get_road_cells() -> Array[Vector2i]:
+	if _cell_data:
+		return _cell_data.to_road_cells()
+	return copy_cells(road_cells)
+
+
+func has_cell_data() -> bool:
+	return _cell_data != null
+
+
+func _set_cell_data(value: VillageCellData) -> void:
+	if _cell_data == value:
+		return
+
+	var legacy_house_cells := copy_cells(house_cells)
+	var legacy_field_cells := copy_cells(field_cells)
+	var legacy_road_cells := copy_cells(road_cells)
+	_cell_data = value
+
+	if _cell_data:
+		if (
+			_cell_data.is_empty()
+			and (
+				not legacy_house_cells.is_empty()
+				or not legacy_field_cells.is_empty()
+				or not legacy_road_cells.is_empty()
+			)
+		):
+			_cell_data.encode_from_cells(legacy_house_cells, legacy_field_cells, legacy_road_cells)
+			if _save_cell_data_resource_if_external():
+				_clear_inline_cell_arrays()
+		else:
+			_clear_inline_cell_arrays()
+
+	_notify_cells_changed()
+
+
+func _clear_inline_cell_arrays() -> void:
+	_suspend_cell_notifications = true
+	house_cells = []
+	field_cells = []
+	road_cells = []
+	_suspend_cell_notifications = false
+
+
+func _save_cell_data_resource_if_external() -> bool:
+	if not Engine.is_editor_hint() or not _cell_data:
+		return false
+
+	# Property setters can run while Godot is still loading scenes and refreshing script classes.
+	# Saving then can recursively trigger the editor filesystem scanner.
+	if not is_inside_tree():
+		return false
+
+	var resource_path := _cell_data.resource_path
+	if resource_path.is_empty() or not resource_path.begins_with("res://"):
+		return false
+
+	var error := ResourceSaver.save(_cell_data, resource_path)
+	if error != OK:
+		push_warning("VillageRegion could not save cell_data resource %s: %d" % [resource_path, error])
+		return false
+	return true
+
+
 static func _compare_cells(a: Vector2i, b: Vector2i) -> bool:
 	if a.x == b.x:
 		return a.y < b.y
@@ -197,18 +294,36 @@ func set_cell_arrays(
 	new_field_cells: Array[Vector2i],
 	new_road_cells: Array[Vector2i] = []
 ) -> void:
+	var normalized_house_cells := normalize_cells(new_house_cells)
+	var normalized_field_cells := normalize_cells(new_field_cells)
+	var normalized_road_cells := normalize_cells(new_road_cells)
+
+	if _cell_data:
+		_suspend_cell_notifications = true
+		_cell_data.encode_from_cells(normalized_house_cells, normalized_field_cells, normalized_road_cells)
+		house_cells = []
+		field_cells = []
+		road_cells = []
+		_suspend_cell_notifications = false
+		_save_cell_data_resource_if_external()
+		_notify_cells_changed()
+		return
+
 	_suspend_cell_notifications = true
-	house_cells = normalize_cells(new_house_cells)
-	field_cells = normalize_cells(new_field_cells)
-	road_cells = normalize_cells(new_road_cells)
+	house_cells = normalized_house_cells
+	field_cells = normalized_field_cells
+	road_cells = normalized_road_cells
 	_suspend_cell_notifications = false
 	_notify_cells_changed()
 
 
 func paint_cells(cells: Array[Vector2i], mode: int) -> bool:
-	var house_lookup := _to_cell_lookup(house_cells)
-	var field_lookup := _to_cell_lookup(field_cells)
-	var road_lookup := _to_cell_lookup(road_cells)
+	var active_house_cells := get_house_cells()
+	var active_field_cells := get_field_cells()
+	var active_road_cells := get_road_cells()
+	var house_lookup := _to_cell_lookup(active_house_cells)
+	var field_lookup := _to_cell_lookup(active_field_cells)
+	var road_lookup := _to_cell_lookup(active_road_cells)
 
 	for cell: Vector2i in cells:
 		match mode:
@@ -228,7 +343,11 @@ func paint_cells(cells: Array[Vector2i], mode: int) -> bool:
 	var new_house_cells := _lookup_to_cells(house_lookup)
 	var new_field_cells := _lookup_to_cells(field_lookup)
 	var new_road_cells := _lookup_to_cells(road_lookup)
-	if new_house_cells == house_cells and new_field_cells == field_cells and new_road_cells == road_cells:
+	if (
+		new_house_cells == active_house_cells
+		and new_field_cells == active_field_cells
+		and new_road_cells == active_road_cells
+	):
 		return false
 
 	set_cell_arrays(new_house_cells, new_field_cells, new_road_cells)
@@ -254,6 +373,9 @@ func cell_to_local_center(cell: Vector2i) -> Vector3:
 
 
 func to_runtime_data() -> Dictionary:
+	var active_house_cells := get_house_cells()
+	var active_field_cells := get_field_cells()
+	var active_road_cells := get_road_cells()
 	return {
 		"village_type": village_type,
 		"wall_type": wall_type,
@@ -264,6 +386,10 @@ func to_runtime_data() -> Dictionary:
 		"season_weather_path": season_weather_path,
 		"field_terrain_registry_path": field_terrain_registry_path,
 		"apply_runtime_terrain_edits": apply_runtime_terrain_edits,
+		"auto_apply_terrain_textures": auto_apply_terrain_textures,
+		"auto_apply_field_road_textures": auto_apply_field_road_textures,
+		"village_visible_distance_meters": village_visible_distance_meters,
+		"village_visibility_fade_margin_meters": village_visibility_fade_margin_meters,
 		"road_texture_id": road_texture_id,
 		"road_width": road_width,
 		"road_sample_spacing": road_sample_spacing,
@@ -284,6 +410,7 @@ func to_runtime_data() -> Dictionary:
 		"house_region_margin": house_region_margin,
 		"house_road_clearance": house_road_clearance,
 		"house_max_count": house_max_count,
+		"house_density": house_density,
 		"field_min_plot_width": field_min_plot_width,
 		"field_max_plot_width": field_max_plot_width,
 		"field_bund_gap": field_bund_gap,
@@ -300,12 +427,21 @@ func to_runtime_data() -> Dictionary:
 		"field_edge_slope_width": field_edge_slope_width,
 		"cell_size": cell_size,
 		"origin": origin,
-		"house_cells": copy_cells(house_cells),
-		"field_cells": copy_cells(field_cells),
-		"road_cells": copy_cells(road_cells),
+		"house_cells": active_house_cells,
+		"field_cells": active_field_cells,
+		"road_cells": active_road_cells,
 		"generation_seed": generation_seed,
 		"global_transform": global_transform if is_inside_tree() else transform,
 	}
+
+
+func get_macro_detail_data() -> Dictionary:
+	var data := to_runtime_data()
+	var road_polylines := _build_road_polylines()
+	var field_generation := _build_field_generation(road_polylines)
+	data["road_polylines"] = _duplicate_polylines(road_polylines)
+	data["field_generation"] = _duplicate_field_generation(field_generation)
+	return data
 
 
 func rebuild_runtime_preview() -> void:
@@ -314,7 +450,10 @@ func rebuild_runtime_preview() -> void:
 
 	clear_runtime_instances()
 
-	if house_cells.is_empty() and field_cells.is_empty() and road_cells.is_empty():
+	var active_house_cells := get_house_cells()
+	var active_field_cells := get_field_cells()
+	var active_road_cells := get_road_cells()
+	if active_house_cells.is_empty() and active_field_cells.is_empty() and active_road_cells.is_empty():
 		return
 
 	_runtime_container = Node3D.new()
@@ -329,8 +468,15 @@ func rebuild_runtime_preview() -> void:
 	rng.seed = absi(generation_seed)
 	var house_placements := _build_house_placements(road_polylines, rng)
 
-	if apply_runtime_terrain_edits:
-		_apply_field_terrain_and_road_texture(terrain, road_polylines, field_generation, house_placements)
+	if apply_runtime_terrain_edits or auto_apply_terrain_textures:
+		_apply_field_terrain_and_road_texture(
+			terrain,
+			road_polylines,
+			field_generation,
+			house_placements,
+			apply_runtime_terrain_edits,
+			apply_runtime_terrain_edits or auto_apply_field_road_textures
+		)
 	else:
 		_runtime_field_terrain_shape_applied = false
 	_generate_houses(terrain, house_placements)
@@ -354,7 +500,10 @@ func rebuild_runtime_preview_async() -> void:
 
 	clear_runtime_instances()
 
-	if house_cells.is_empty() and field_cells.is_empty() and road_cells.is_empty():
+	var active_house_cells := get_house_cells()
+	var active_field_cells := get_field_cells()
+	var active_road_cells := get_road_cells()
+	if active_house_cells.is_empty() and active_field_cells.is_empty() and active_road_cells.is_empty():
 		_mark_startup_phase("village_ready", {"cells": 0})
 		return
 
@@ -365,9 +514,9 @@ func rebuild_runtime_preview_async() -> void:
 
 	var terrain := _get_terrain_node()
 	_mark_startup_phase("village_build_start", {
-		"field_cells": field_cells.size(),
-		"house_cells": house_cells.size(),
-		"road_cells": road_cells.size(),
+		"field_cells": active_field_cells.size(),
+		"house_cells": active_house_cells.size(),
+		"road_cells": active_road_cells.size(),
 	})
 
 	var road_polylines := _build_road_polylines()
@@ -388,8 +537,15 @@ func rebuild_runtime_preview_async() -> void:
 		"plots": (field_generation.get("plots", []) as Array).size(),
 	})
 
-	if apply_runtime_terrain_edits:
-		_apply_field_terrain_and_road_texture(terrain, road_polylines, field_generation, house_placements)
+	if apply_runtime_terrain_edits or auto_apply_terrain_textures:
+		_apply_field_terrain_and_road_texture(
+			terrain,
+			road_polylines,
+			field_generation,
+			house_placements,
+			apply_runtime_terrain_edits,
+			apply_runtime_terrain_edits or auto_apply_field_road_textures
+		)
 	else:
 		_runtime_field_terrain_shape_applied = false
 	await get_tree().process_frame
@@ -400,7 +556,7 @@ func rebuild_runtime_preview_async() -> void:
 	if not is_inside_tree():
 		return
 
-	await _generate_fields_async(terrain, field_generation)
+	_generate_fields_async(terrain, field_generation)
 	_mark_startup_phase("village_ready", {
 		"houses": house_placements.size(),
 		"plots": (field_generation.get("plots", []) as Array).size(),
@@ -442,17 +598,22 @@ func _lookup_to_cells(lookup: Dictionary) -> Array[Vector2i]:
 func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) -> Array[Dictionary]:
 	var placements: Array[Dictionary] = []
 	var scenes := _get_house_scenes()
-	if scenes.is_empty() or house_cells.is_empty() or house_max_count <= 0:
+	var active_house_cells := get_house_cells()
+	if scenes.is_empty() or active_house_cells.is_empty() or house_max_count <= 0:
 		return placements
 
-	var house_lookup := _to_cell_lookup(house_cells)
-	var attempts := maxi(house_max_count * HOUSE_ATTEMPT_MULTIPLIER, house_cells.size() * 12)
+	var house_lookup := _to_cell_lookup(active_house_cells)
+	var target_house_count := _get_effective_house_max_count()
+	var attempts := maxi(
+		target_house_count * HOUSE_ATTEMPT_MULTIPLIER,
+		ceili(float(active_house_cells.size()) * 12.0 * _get_safe_house_density())
+	)
 
 	for _attempt: int in range(attempts):
-		if placements.size() >= house_max_count:
+		if placements.size() >= target_house_count:
 			break
 
-		var cell := house_cells[rng.randi_range(0, house_cells.size() - 1)]
+		var cell := active_house_cells[rng.randi_range(0, active_house_cells.size() - 1)]
 		var local_point := _get_random_point_in_cell(cell, rng)
 
 		var scene := _get_house_scene_for_index(placements.size(), rng)
@@ -497,6 +658,11 @@ func _generate_houses(terrain: Node3D, house_placements: Array[Dictionary]) -> v
 		var local_point: Vector2 = placement.get("position", Vector2.ZERO)
 		_set_runtime_node_position(spatial, local_point, terrain)
 		spatial.rotation.y = float(placement.get("rotation_y", 0.0))
+		_configure_runtime_visibility_recursive(
+			spatial,
+			village_visible_distance_meters,
+			village_visibility_fade_margin_meters
+		)
 
 
 func _generate_houses_async(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
@@ -516,6 +682,11 @@ func _generate_houses_async(terrain: Node3D, house_placements: Array[Dictionary]
 		var local_point: Vector2 = placement.get("position", Vector2.ZERO)
 		_set_runtime_node_position(spatial, local_point, terrain)
 		spatial.rotation.y = float(placement.get("rotation_y", 0.0))
+		_configure_runtime_visibility_recursive(
+			spatial,
+			village_visible_distance_meters,
+			village_visibility_fade_margin_meters
+		)
 
 		if (placement_index + 1) % runtime_house_batch_size == 0:
 			await get_tree().process_frame
@@ -534,7 +705,8 @@ func _build_field_generation(road_polylines: Array) -> Dictionary:
 
 
 func _build_field_generation_uncached(crop_type: CropTypeData, road_polylines: Array) -> Dictionary:
-	if not crop_type or not crop_type.field_scene or field_cells.is_empty():
+	var active_field_cells := get_field_cells()
+	if not crop_type or active_field_cells.is_empty():
 		return {
 			"crop_type": crop_type,
 			"plots": [],
@@ -558,441 +730,29 @@ func _build_field_generation_uncached(crop_type: CropTypeData, road_polylines: A
 	generator.horizontal_split_bias = field_horizontal_split_bias
 	generator.field_shape_variation = field_shape_variation
 
-	var plots: Array[FieldPlotData] = generator.generate(field_cells, road_polylines)
+	var plots: Array[FieldPlotData] = generator.generate(active_field_cells, road_polylines)
 	return {
 		"crop_type": crop_type,
 		"plots": plots,
 		"field_road_polylines": generator.generated_road_polylines.duplicate(true),
-		"field_cells": copy_cells(field_cells),
+		"field_cells": active_field_cells,
 	}
 
 
-func _generate_fields(terrain: Node3D, field_generation: Dictionary) -> void:
-	var season_weather := _get_season_weather_node()
+func _generate_fields(_terrain: Node3D, _field_generation: Dictionary) -> void:
+	_clear_runtime_field_registry()
+
+
+func _generate_fields_async(_terrain: Node3D, _field_generation: Dictionary) -> void:
+	_clear_runtime_field_registry()
+
+
+func _clear_runtime_field_registry() -> void:
 	var terrain_registry := _get_field_terrain_registry_node()
 	if terrain_registry and terrain_registry.has_method("clear"):
 		terrain_registry.call("clear")
-
-	var crop_type := field_generation.get("crop_type") as CropTypeData
-	var plots: Array = field_generation.get("plots", [])
-	if not crop_type or not crop_type.field_scene or plots.is_empty():
-		return
-
-	for plot_index: int in range(plots.size()):
-		var plot := plots[plot_index] as FieldPlotData
-		if not plot:
-			continue
-		var spatial := _instantiate_runtime_scene(crop_type.field_scene, "Field", plot_index)
-		if not spatial:
-			return
-
-		var local_point := Vector2(plot.center.x, plot.center.z)
-		_set_runtime_node_position(spatial, local_point, terrain)
-		if not _runtime_field_terrain_shape_applied:
-			spatial.position.y += maxf(field_visual_surface_offset, 0.0)
-		spatial.rotation.y = _yaw_for_plus_x(Vector2(plot.row_direction.x, plot.row_direction.z).normalized())
-
-		if spatial.has_method("configure_field"):
-			spatial.call("configure_field", plot, crop_type, season_weather)
-		else:
-			push_warning("%s must implement configure_field(plot_data, crop_type, season_weather)." % crop_type.field_scene.resource_path)
-
-		if terrain_registry and terrain_registry.has_method("register_field"):
-			terrain_registry.call("register_field", plot, spatial)
-
-	_generate_dense_rice_layer(terrain, crop_type, plots)
-
-
-func _generate_fields_async(terrain: Node3D, field_generation: Dictionary) -> void:
-	var season_weather := _get_season_weather_node()
-	var terrain_registry := _get_field_terrain_registry_node()
-	if terrain_registry and terrain_registry.has_method("clear"):
-		terrain_registry.call("clear")
-
-	var crop_type := field_generation.get("crop_type") as CropTypeData
-	var plots: Array = field_generation.get("plots", [])
-	if not crop_type or not crop_type.field_scene or plots.is_empty():
-		return
-
-	for plot_index: int in range(plots.size()):
-		if not is_inside_tree():
-			return
-
-		var plot := plots[plot_index] as FieldPlotData
-		if not plot:
-			continue
-		var spatial := _instantiate_runtime_scene(crop_type.field_scene, "Field", plot_index)
-		if not spatial:
-			return
-
-		var local_point := Vector2(plot.center.x, plot.center.z)
-		_set_runtime_node_position(spatial, local_point, terrain)
-		if not _runtime_field_terrain_shape_applied:
-			spatial.position.y += maxf(field_visual_surface_offset, 0.0)
-		spatial.rotation.y = _yaw_for_plus_x(Vector2(plot.row_direction.x, plot.row_direction.z).normalized())
-
-		if spatial.has_method("configure_field"):
-			spatial.call("configure_field", plot, crop_type, season_weather)
-		else:
-			push_warning("%s must implement configure_field(plot_data, crop_type, season_weather)." % crop_type.field_scene.resource_path)
-
-		if terrain_registry and terrain_registry.has_method("register_field"):
-			terrain_registry.call("register_field", plot, spatial)
-
-		if (plot_index + 1) % runtime_field_batch_size == 0:
-			await get_tree().process_frame
-
-	await _generate_dense_rice_layer_async(terrain, crop_type, plots)
-
-
-func _generate_dense_rice_layer(terrain: Node3D, crop_type: CropTypeData, plots: Array) -> void:
-	if not _is_rice_crop(crop_type):
-		return
-
-	var mask_info := _build_dense_rice_plot_mask(plots)
-	if mask_info.is_empty():
-		return
-
-	var layer := RICE_DENSE_PLANTS_SCENE.instantiate() as Node3D
-	if not layer:
-		return
-
-	layer.name = "RiceDensePlants"
-	layer.set_meta(RICE_DENSE_LAYER_META, true)
-	layer.set_meta(&"rice_plot_count", int(mask_info.get("plot_count", 0)))
-	_runtime_container.add_child(layer, false, INTERNAL_MODE_BACK)
-	layer.owner = null
-
-	if layer.has_method("configure_from_plot_mask"):
-		layer.call(
-			"configure_from_plot_mask",
-			terrain,
-			self,
-			mask_info.get("texture"),
-			mask_info.get("origin", Vector2.ZERO),
-			float(mask_info.get("sample_size", RICE_MASK_SAMPLE_SIZE)),
-			mask_info.get("texture_size", Vector2i.ONE),
-			int(mask_info.get("plot_count", 0))
-		)
-	elif layer.has_method("configure_from_plots"):
-		layer.call("configure_from_plots", terrain, self, mask_info)
-	else:
-		layer.set("terrain", terrain)
-
-
-func _generate_dense_rice_layer_async(terrain: Node3D, crop_type: CropTypeData, plots: Array) -> void:
-	if not _is_rice_crop(crop_type):
-		return
-
-	var mask_info: Dictionary = await _build_dense_rice_plot_mask_async(plots)
-	if mask_info.is_empty() or not is_inside_tree():
-		return
-
-	var layer := RICE_DENSE_PLANTS_SCENE.instantiate() as Node3D
-	if not layer:
-		return
-
-	layer.name = "RiceDensePlants"
-	layer.set_meta(RICE_DENSE_LAYER_META, true)
-	layer.set_meta(&"rice_plot_count", int(mask_info.get("plot_count", 0)))
-	_runtime_container.add_child(layer, false, INTERNAL_MODE_BACK)
-	layer.owner = null
-
-	if layer.has_method("configure_from_plot_mask"):
-		layer.call(
-			"configure_from_plot_mask",
-			terrain,
-			self,
-			mask_info.get("texture"),
-			mask_info.get("origin", Vector2.ZERO),
-			float(mask_info.get("sample_size", RICE_MASK_SAMPLE_SIZE)),
-			mask_info.get("texture_size", Vector2i.ONE),
-			int(mask_info.get("plot_count", 0))
-		)
-	elif layer.has_method("configure_from_plots"):
-		layer.call("configure_from_plots", terrain, self, mask_info)
-	else:
-		layer.set("terrain", terrain)
-
-	_mark_startup_phase("village_dense_vegetation_ready", {
-		"rice_particles": int(layer.get("particle_count")),
-	})
-
-
-func _is_rice_crop(crop_type: CropTypeData) -> bool:
-	return crop_type != null and crop_type.crop_id == &"rice"
-
-
-func _build_dense_rice_plot_mask(plots: Array) -> Dictionary:
-	var active_plots: Array[FieldPlotData] = []
-	var stage_codes: Array[int] = []
-	var min_point := Vector2(INF, INF)
-	var max_point := Vector2(-INF, -INF)
-
-	for plot_variant: Variant in plots:
-		if not (plot_variant is FieldPlotData):
-			continue
-
-		var plot := plot_variant as FieldPlotData
-		var stage_code := _get_rice_stage_mask_code(plot.stage)
-		if stage_code <= 0:
-			continue
-
-		var outline := plot.get_region_outline_2d()
-		if outline.size() < 3:
-			continue
-
-		active_plots.append(plot)
-		stage_codes.append(stage_code)
-		for point: Vector2 in outline:
-			min_point.x = minf(min_point.x, point.x)
-			min_point.y = minf(min_point.y, point.y)
-			max_point.x = maxf(max_point.x, point.x)
-			max_point.y = maxf(max_point.y, point.y)
-
-	if active_plots.is_empty():
-		return {}
-
-	var edge_inset := _get_dense_rice_edge_inset()
-	var sample_size := RICE_MASK_SAMPLE_SIZE
-	min_point -= Vector2(edge_inset + sample_size, edge_inset + sample_size)
-	max_point += Vector2(edge_inset + sample_size, edge_inset + sample_size)
-
-	var texture_size := _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
-	if texture_size.x > RICE_MASK_MAX_DIMENSION or texture_size.y > RICE_MASK_MAX_DIMENSION:
-		var scale := maxf(
-			float(texture_size.x) / float(RICE_MASK_MAX_DIMENSION),
-			float(texture_size.y) / float(RICE_MASK_MAX_DIMENSION)
-		)
-		sample_size *= scale
-		texture_size = _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
-
-	var image := Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_R8)
-	image.fill(Color.BLACK)
-	var filled_samples := 0
-
-	for index: int in range(active_plots.size()):
-		filled_samples += _rasterize_dense_rice_plot_mask(
-			image,
-			active_plots[index],
-			stage_codes[index],
-			min_point,
-			sample_size,
-			edge_inset
-		)
-
-	if filled_samples <= 0:
-		return {}
-
-	return {
-		"texture": ImageTexture.create_from_image(image),
-		"origin": min_point,
-		"sample_size": sample_size,
-		"texture_size": texture_size,
-		"plot_count": active_plots.size(),
-		"filled_samples": filled_samples,
-	}
-
-
-func _build_dense_rice_plot_mask_async(plots: Array) -> Dictionary:
-	var active_plots: Array[FieldPlotData] = []
-	var stage_codes: Array[int] = []
-	var min_point := Vector2(INF, INF)
-	var max_point := Vector2(-INF, -INF)
-
-	for plot_variant: Variant in plots:
-		if not (plot_variant is FieldPlotData):
-			continue
-
-		var plot := plot_variant as FieldPlotData
-		var stage_code := _get_rice_stage_mask_code(plot.stage)
-		if stage_code <= 0:
-			continue
-
-		var outline := plot.get_region_outline_2d()
-		if outline.size() < 3:
-			continue
-
-		active_plots.append(plot)
-		stage_codes.append(stage_code)
-		for point: Vector2 in outline:
-			min_point.x = minf(min_point.x, point.x)
-			min_point.y = minf(min_point.y, point.y)
-			max_point.x = maxf(max_point.x, point.x)
-			max_point.y = maxf(max_point.y, point.y)
-
-	if active_plots.is_empty():
-		return {}
-
-	var edge_inset := _get_dense_rice_edge_inset()
-	var sample_size := RICE_MASK_SAMPLE_SIZE
-	min_point -= Vector2(edge_inset + sample_size, edge_inset + sample_size)
-	max_point += Vector2(edge_inset + sample_size, edge_inset + sample_size)
-
-	var texture_size := _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
-	if texture_size.x > RICE_MASK_MAX_DIMENSION or texture_size.y > RICE_MASK_MAX_DIMENSION:
-		var scale := maxf(
-			float(texture_size.x) / float(RICE_MASK_MAX_DIMENSION),
-			float(texture_size.y) / float(RICE_MASK_MAX_DIMENSION)
-		)
-		sample_size *= scale
-		texture_size = _get_dense_rice_mask_texture_size(min_point, max_point, sample_size)
-
-	var image := Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_R8)
-	image.fill(Color.BLACK)
-	var filled_samples := 0
-
-	for index: int in range(active_plots.size()):
-		var plot_filled_samples: int = await _rasterize_dense_rice_plot_mask_async(
-			image,
-			active_plots[index],
-			stage_codes[index],
-			min_point,
-			sample_size,
-			edge_inset
-		)
-		filled_samples += plot_filled_samples
-		if not is_inside_tree():
-			return {}
-
-	if filled_samples <= 0:
-		return {}
-
-	return {
-		"texture": ImageTexture.create_from_image(image),
-		"origin": min_point,
-		"sample_size": sample_size,
-		"texture_size": texture_size,
-		"plot_count": active_plots.size(),
-		"filled_samples": filled_samples,
-	}
-
-
-func _rasterize_dense_rice_plot_mask(
-	image: Image,
-	plot: FieldPlotData,
-	stage_code: int,
-	mask_origin: Vector2,
-	sample_size: float,
-	edge_inset: float
-) -> int:
-	if not plot or stage_code <= 0:
-		return 0
-
-	var pixel_bounds := _get_plot_mask_pixel_bounds(plot, image.get_size(), mask_origin, sample_size)
-	var filled_samples := 0
-	for y: int in range(pixel_bounds.position.y, pixel_bounds.end.y):
-		for x: int in range(pixel_bounds.position.x, pixel_bounds.end.x):
-			if image.get_pixel(x, y).r > 0.0:
-				continue
-			var local_point := mask_origin + Vector2(float(x) + 0.5, float(y) + 0.5) * sample_size
-			if not plot.contains_region_point(local_point, edge_inset):
-				continue
-			image.set_pixel(x, y, Color(float(stage_code) / 255.0, 0.0, 0.0, 1.0))
-			filled_samples += 1
-	return filled_samples
-
-
-func _rasterize_dense_rice_plot_mask_async(
-	image: Image,
-	plot: FieldPlotData,
-	stage_code: int,
-	mask_origin: Vector2,
-	sample_size: float,
-	edge_inset: float
-) -> int:
-	if not plot or stage_code <= 0:
-		return 0
-
-	var pixel_bounds := _get_plot_mask_pixel_bounds(plot, image.get_size(), mask_origin, sample_size)
-	var filled_samples := 0
-	var rows_since_yield := 0
-	for y: int in range(pixel_bounds.position.y, pixel_bounds.end.y):
-		for x: int in range(pixel_bounds.position.x, pixel_bounds.end.x):
-			if image.get_pixel(x, y).r > 0.0:
-				continue
-			var local_point := mask_origin + Vector2(float(x) + 0.5, float(y) + 0.5) * sample_size
-			if not plot.contains_region_point(local_point, edge_inset):
-				continue
-			image.set_pixel(x, y, Color(float(stage_code) / 255.0, 0.0, 0.0, 1.0))
-			filled_samples += 1
-
-		rows_since_yield += 1
-		if rows_since_yield >= runtime_mask_rows_per_frame:
-			rows_since_yield = 0
-			await get_tree().process_frame
-			if not is_inside_tree():
-				return filled_samples
-	return filled_samples
-
-
-func _get_plot_mask_pixel_bounds(
-	plot: FieldPlotData,
-	texture_size: Vector2i,
-	mask_origin: Vector2,
-	sample_size: float
-) -> Rect2i:
-	var outline := plot.get_region_outline_2d()
-	var min_point := Vector2(INF, INF)
-	var max_point := Vector2(-INF, -INF)
-	for point: Vector2 in outline:
-		min_point.x = minf(min_point.x, point.x)
-		min_point.y = minf(min_point.y, point.y)
-		max_point.x = maxf(max_point.x, point.x)
-		max_point.y = maxf(max_point.y, point.y)
-
-	var safe_sample_size := maxf(sample_size, 0.01)
-	var min_pixel := Vector2i(
-		clampi(floori((min_point.x - mask_origin.x) / safe_sample_size) - 1, 0, texture_size.x - 1),
-		clampi(floori((min_point.y - mask_origin.y) / safe_sample_size) - 1, 0, texture_size.y - 1)
-	)
-	var max_pixel := Vector2i(
-		clampi(ceili((max_point.x - mask_origin.x) / safe_sample_size) + 1, 0, texture_size.x - 1),
-		clampi(ceili((max_point.y - mask_origin.y) / safe_sample_size) + 1, 0, texture_size.y - 1)
-	)
-	return Rect2i(min_pixel, max_pixel - min_pixel + Vector2i.ONE)
-
-
-func _get_dense_rice_mask_texture_size(min_point: Vector2, max_point: Vector2, sample_size: float) -> Vector2i:
-	var safe_sample_size := maxf(sample_size, 0.01)
-	return Vector2i(
-		maxi(ceili((max_point.x - min_point.x) / safe_sample_size), 1),
-		maxi(ceili((max_point.y - min_point.y) / safe_sample_size), 1)
-	)
-
-
-func _get_rice_stage_code_at_point(
-	local_point: Vector2,
-	plots: Array[FieldPlotData],
-	stage_codes: Array[int],
-	edge_inset: float
-) -> int:
-	for index: int in range(plots.size()):
-		if plots[index].contains_region_point(local_point, edge_inset):
-			return stage_codes[index]
-	return 0
-
-
-func _get_rice_stage_mask_code(stage_id: StringName) -> int:
-	match stage_id:
-		&"", &"empty":
-			return 0
-		&"seedling":
-			return 1
-		&"flooded_green":
-			return 2
-		&"tillering", &"growth":
-			return 3
-		&"mature_gold":
-			return 4
-		&"harvested_stubble", &"harvest", &"maintenance":
-			return 5
-		_:
-			return 3
-
-
-func _get_dense_rice_edge_inset() -> float:
-	return maxf(0.22, maxf(field_bund_gap * 0.5, field_edge_slope_width + 0.08))
+	if terrain_registry and terrain_registry.has_method("rebuild"):
+		terrain_registry.call("rebuild")
 
 
 func _instantiate_runtime_scene(scene: PackedScene, name_prefix: String, index: int) -> Node3D:
@@ -1010,6 +770,30 @@ func _instantiate_runtime_scene(scene: PackedScene, name_prefix: String, index: 
 	_runtime_container.add_child(spatial)
 	spatial.owner = null
 	return spatial
+
+
+func _configure_runtime_visibility_recursive(root_node: Node, end_distance: float, fade_margin: float) -> void:
+	if not root_node or end_distance <= 0.0:
+		return
+
+	var safe_fade_margin := clampf(fade_margin, 0.0, end_distance)
+	if root_node is GeometryInstance3D and not bool(root_node.get_meta(PRESERVE_VISIBILITY_RANGE_META, false)):
+		_configure_runtime_visibility_instance(root_node as GeometryInstance3D, end_distance, safe_fade_margin)
+
+	for child: Node in root_node.get_children(true):
+		_configure_runtime_visibility_recursive(child, end_distance, safe_fade_margin)
+
+
+func _configure_runtime_visibility_instance(
+	instance: GeometryInstance3D,
+	end_distance: float,
+	fade_margin: float
+) -> void:
+	instance.visibility_range_begin = 0.0
+	instance.visibility_range_begin_margin = 0.0
+	instance.visibility_range_end = end_distance
+	instance.visibility_range_end_margin = fade_margin
+	instance.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 func _set_runtime_node_position(spatial: Node3D, local_point: Vector2, terrain: Node3D) -> void:
@@ -1058,20 +842,21 @@ func _build_road_polylines() -> Array:
 
 func _build_road_polylines_uncached() -> Array:
 	var polylines: Array = []
-	if road_cells.is_empty():
+	var active_road_cells := get_road_cells()
+	if active_road_cells.is_empty():
 		return polylines
 
-	var road_lookup := _to_cell_lookup(road_cells)
+	var road_lookup := _to_cell_lookup(active_road_cells)
 	var visited_edges: Dictionary = {}
 
-	for cell: Vector2i in road_cells:
+	for cell: Vector2i in active_road_cells:
 		var neighbors := _get_road_neighbors(cell, road_lookup)
 		if neighbors.is_empty():
 			var point_polyline := PackedVector2Array()
 			point_polyline.append(_cell_to_local_2d_center(cell))
 			polylines.append(point_polyline)
 
-	for cell: Vector2i in road_cells:
+	for cell: Vector2i in active_road_cells:
 		var neighbors := _get_road_neighbors(cell, road_lookup)
 		if neighbors.size() > 1:
 			continue
@@ -1080,7 +865,7 @@ func _build_road_polylines_uncached() -> Array:
 			if not visited_edges.has(_edge_key(cell, neighbor)):
 				polylines.append(_trace_road_polyline(cell, neighbor, road_lookup, visited_edges))
 
-	for cell: Vector2i in road_cells:
+	for cell: Vector2i in active_road_cells:
 		for neighbor: Vector2i in _get_road_neighbors(cell, road_lookup):
 			if not visited_edges.has(_edge_key(cell, neighbor)):
 				polylines.append(_trace_road_polyline(cell, neighbor, road_lookup, visited_edges))
@@ -1157,7 +942,7 @@ func _append_road_curve_point(polyline: PackedVector2Array, point: Vector2) -> v
 
 func _get_road_polylines_cache_key() -> String:
 	return "roads|%s|%.4f|%s|%d|%.4f" % [
-		_get_cells_cache_key(road_cells),
+		_get_cells_cache_key(get_road_cells()),
 		cell_size,
 		str(origin),
 		road_curve_iterations,
@@ -1166,11 +951,9 @@ func _get_road_polylines_cache_key() -> String:
 
 
 func _get_field_generation_cache_key(crop_type: CropTypeData, road_polylines: Array) -> String:
-	var field_scene := crop_type.field_scene if crop_type else null
-	return "fields|%s|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
-		_get_cells_cache_key(field_cells),
+	return "fields|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
+		_get_cells_cache_key(get_field_cells()),
 		_get_resource_cache_key(crop_type),
-		_get_resource_cache_key(field_scene),
 		cell_size,
 		str(origin),
 		generation_seed,
@@ -1234,8 +1017,18 @@ func _duplicate_field_generation(field_generation: Dictionary) -> Dictionary:
 		"crop_type": field_generation.get("crop_type"),
 		"plots": duplicated_plots,
 		"field_road_polylines": _duplicate_polylines(field_generation.get("field_road_polylines", [])),
-		"field_cells": copy_cells(field_generation.get("field_cells", [])),
+		"field_cells": _copy_cells_from_variant(field_generation.get("field_cells", [])),
 	}
+
+
+func _copy_cells_from_variant(value: Variant) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	if not (value is Array):
+		return cells
+	for cell_variant: Variant in value:
+		if cell_variant is Vector2i:
+			cells.append(cell_variant as Vector2i)
+	return copy_cells(cells)
 
 
 func _get_road_neighbors(cell: Vector2i, road_lookup: Dictionary) -> Array[Vector2i]:
@@ -1277,15 +1070,26 @@ func _apply_field_terrain_and_road_texture(
 	terrain: Node3D,
 	road_polylines: Array,
 	field_generation: Dictionary,
-	house_placements: Array[Dictionary] = []
+	house_placements: Array[Dictionary] = [],
+	shape_field_surface: bool = true,
+	paint_field_roads: bool = true
 ) -> void:
 	var plots: Array = field_generation.get("plots", [])
 	var field_generation_cells: Array = field_generation.get("field_cells", [])
 	var generated_field_road_polylines: Array = field_generation.get("field_road_polylines", [])
-	var has_field_surface := not field_generation_cells.is_empty() and not plots.is_empty()
+	var has_field_layout := not field_generation_cells.is_empty() and not plots.is_empty()
+	var should_shape_field_surface := shape_field_surface and has_field_layout
+	var should_paint_field_roads := paint_field_roads and has_field_layout
 	var has_generated_field_roads := not generated_field_road_polylines.is_empty()
+	var should_paint_generated_field_roads := paint_field_roads and has_generated_field_roads
 	var has_house_surface := not house_placements.is_empty()
-	if road_polylines.is_empty() and not has_field_surface and not has_generated_field_roads and not has_house_surface:
+	if (
+		road_polylines.is_empty()
+		and not should_shape_field_surface
+		and not should_paint_field_roads
+		and not should_paint_generated_field_roads
+		and not has_house_surface
+	):
 		return
 
 	if not is_instance_valid(terrain):
@@ -1334,16 +1138,17 @@ func _apply_field_terrain_and_road_texture(
 	_runtime_road_terrain = terrain
 	_runtime_road_control_records.clear()
 	_runtime_field_terrain_shape_applied = false
-	var touched_regions := _collect_runtime_terrain_regions(terrain_data, field_generation_cells, house_placements)
+	var touched_field_cells := field_generation_cells if should_shape_field_surface or should_paint_field_roads or should_paint_generated_field_roads else []
+	var touched_regions := _collect_runtime_terrain_regions(terrain_data, touched_field_cells, house_placements)
 	if not _use_runtime_terrain_region_copies(terrain_data, touched_regions):
 		push_warning("VillageRegion could not create runtime Terrain3D region copies; skipping terrain texture edits to avoid modifying terrain files.")
 		_runtime_road_terrain = null
 		return
 
-	if has_field_surface:
+	if should_shape_field_surface:
 		_runtime_field_terrain_shape_applied = _shape_field_terrain(terrain_data, terrain, plots)
 
-	if has_field_surface and field_mud_texture_valid:
+	if should_shape_field_surface and field_mud_texture_valid:
 		_paint_field_plot_surfaces(
 			terrain_data,
 			terrain,
@@ -1352,7 +1157,7 @@ func _apply_field_terrain_and_road_texture(
 			painted_points,
 			field_mud_texture_id
 		)
-	elif has_field_surface:
+	elif should_shape_field_surface:
 		push_warning(
 			"VillageRegion field mud texture id %d is invalid for %d Terrain3D textures; skipping field mud texture."
 			% [field_mud_texture_id, texture_count]
@@ -1395,7 +1200,7 @@ func _apply_field_terrain_and_road_texture(
 			% [road_texture_id, texture_count]
 		)
 
-	if has_field_surface and field_texture_valid:
+	if should_paint_field_roads and field_texture_valid:
 		_paint_field_road_surface_mask(
 			terrain_data,
 			terrain,
@@ -1406,7 +1211,7 @@ func _apply_field_terrain_and_road_texture(
 			painted_points,
 			field_texture_id
 		)
-	elif has_generated_field_roads and field_texture_valid:
+	elif should_paint_generated_field_roads and field_texture_valid:
 		_apply_road_texture_to_generated_lines(
 			terrain_data,
 			terrain,
@@ -1415,7 +1220,7 @@ func _apply_field_terrain_and_road_texture(
 			painted_points,
 			field_texture_id
 		)
-	elif has_field_surface or has_generated_field_roads:
+	elif should_paint_field_roads or should_paint_generated_field_roads:
 		push_warning(
 			"VillageRegion field road texture id %d is invalid for %d Terrain3D textures; skipping field road texture."
 			% [field_texture_id, texture_count]
@@ -1450,7 +1255,7 @@ func _collect_runtime_terrain_regions(
 		return regions
 
 	var road_margin := maxf(road_width * 0.5 + road_sample_spacing + MIN_TERRAIN_PAINT_STEP, 0.0)
-	_add_touched_terrain_regions_for_cells(regions, terrain_data, road_cells, road_margin)
+	_add_touched_terrain_regions_for_cells(regions, terrain_data, get_road_cells(), road_margin)
 
 	var field_margin := maxf(
 		maxf(field_region_road_margin, _get_field_road_width() * 0.5),
@@ -2430,13 +2235,23 @@ func _is_point_in_cells(point: Vector2, cell_lookup: Dictionary) -> bool:
 func _has_house_spacing(point: Vector2, footprint: float, placed_houses: Array[Dictionary]) -> bool:
 	var safe_footprint := maxf(footprint, 0.1)
 	var safe_multiplier := maxf(house_size_spacing_multiplier, 1.0)
+	var density_spacing_scale := 1.0 / sqrt(_get_safe_house_density())
 	for placed_house: Dictionary in placed_houses:
 		var placed_position: Vector2 = placed_house.get("position", Vector2.ZERO)
 		var placed_footprint := maxf(float(placed_house.get("footprint", safe_footprint)), 0.1)
 		var required_spacing := maxf(house_min_spacing, safe_multiplier * maxf(safe_footprint, placed_footprint))
+		required_spacing *= density_spacing_scale
 		if point.distance_squared_to(placed_position) < required_spacing * required_spacing:
 			return false
 	return true
+
+
+func _get_effective_house_max_count() -> int:
+	return maxi(ceili(float(house_max_count) * _get_safe_house_density()), 0)
+
+
+func _get_safe_house_density() -> float:
+	return maxf(house_density, 0.25)
 
 
 func _get_house_footprint_data(scene: PackedScene) -> Dictionary:
