@@ -1,0 +1,8 @@
+[gd_scene format=3]
+
+[ext_resource type="ArrayMesh" path="res://assets/models/forest/plants/forest_canopy_tree_green_01_mesh.res" id="1_3bv0c"]
+
+[node name="ForestCanopyTreeGreen01" type="Node3D" unique_id=1331239337]
+
+[node name="PlantMesh" type="MeshInstance3D" parent="." unique_id=1241183130]
+mesh = ExtResource("1_3bv0c")

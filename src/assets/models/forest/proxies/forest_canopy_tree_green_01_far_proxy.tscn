@@ -1,0 +1,55 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ny582"]
+resource_name = "Proxy Trunk"
+albedo_color = Color(0.35, 0.22, 0.11, 1)
+roughness = 0.92
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_6nmqi"]
+top_radius = 0.203
+bottom_radius = 0.319
+height = 2.552
+radial_segments = 7
+rings = 1
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_aglsm"]
+resource_name = "Proxy Canopy"
+albedo_color = Color(0.16, 0.48, 0.15, 1)
+roughness = 0.95
+backlight_enabled = true
+backlight = Color(0.18, 0.32, 0.13, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ompg1"]
+radius = 1.856
+height = 3.3408
+radial_segments = 12
+rings = 6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8ocpx"]
+resource_name = "Proxy Soft Canopy"
+transparency = 3
+alpha_hash_scale = 1.0
+alpha_antialiasing_mode = 0
+cull_mode = 2
+albedo_color = Color(0.16, 0.48, 0.15, 0.34)
+roughness = 0.95
+backlight_enabled = true
+backlight = Color(0.2, 0.36, 0.14, 1)
+
+[node name="ForestCanopyTreeGreen01FarProxy" type="Node3D" unique_id=758160679]
+
+[node name="Trunk" type="MeshInstance3D" parent="." unique_id=1965308252]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.276, 0)
+material_override = SubResource("StandardMaterial3D_ny582")
+mesh = SubResource("CylinderMesh_6nmqi")
+
+[node name="Canopy" type="MeshInstance3D" parent="." unique_id=1402959602]
+transform = Transform3D(1.08, 0, 0, 0, 0.86, 0, 0, 0, 1.08, 0, 3.5728, 0)
+material_override = SubResource("StandardMaterial3D_aglsm")
+mesh = SubResource("SphereMesh_ompg1")
+
+[node name="SoftCanopy" type="MeshInstance3D" parent="." unique_id=197892460]
+transform = Transform3D(1.25, 0, 0, 0, 0.98, 0, 0, 0, 1.25, 0, 3.5728, 0)
+material_override = SubResource("StandardMaterial3D_8ocpx")
+cast_shadow = 0
+mesh = SubResource("SphereMesh_ompg1")
