@@ -8,6 +8,8 @@ const ForestRegionData = preload("res://addons/forest_brush/forest_region_data.g
 const CATEGORY_TREE := 0
 const CATEGORY_FERN := 4
 const CATEGORY_GRASS := 5
+const DEFAULT_TREE_LOW_POLY_DISTANCE := 450.0
+const LOD_FADE_BEGIN_RATIO := 0.88
 const RENDER_STRATEGY_MULTIMESH := 0
 const RENDER_STRATEGY_DENSE_GRASS_PARTICLES := 1
 const DENSE_GRASS_ID := "forest_smooth_grass_01"
@@ -669,6 +671,7 @@ func _validate_region_generation(palette: Resource, errors: Array[String]) -> vo
 		errors.append("ForestRegion created an empty runtime container.")
 	else:
 		_validate_runtime_container(container, errors)
+		_validate_tree_low_poly_distance(region, tree_ids[0], errors)
 		_validate_dirty_chunk_runtime_rebuild(region, tree_ids[0], errors)
 
 	root.remove_child(region)
@@ -740,6 +743,38 @@ func _validate_runtime_container(container: Node, errors: Array[String]) -> void
 		errors.append("ForestRegion dense grass layer created no GPUParticles3D emitters.")
 	elif dense_particle_emitters > DENSE_PARTICLE_PLANT_IDS.size() * 64:
 		errors.append("ForestRegion dense grass output is too node-heavy: %d emitters." % dense_particle_emitters)
+
+
+func _validate_tree_low_poly_distance(region: Node3D, tree_id: StringName, errors: Array[String]) -> void:
+	if not is_equal_approx(float(region.get("tree_low_poly_distance")), DEFAULT_TREE_LOW_POLY_DISTANCE):
+		errors.append("ForestRegion tree_low_poly_distance should default to %.1fm." % DEFAULT_TREE_LOW_POLY_DISTANCE)
+
+	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
+	if not container:
+		return
+
+	var tree_lod1_found := false
+	var tree_lod2_found := false
+	var expected_lod2_begin := DEFAULT_TREE_LOW_POLY_DISTANCE * LOD_FADE_BEGIN_RATIO
+	for child: Node in container.get_children(true):
+		if not (child is GeometryInstance3D):
+			continue
+
+		var instance := child as GeometryInstance3D
+		var instance_name := str(instance.name)
+		if instance_name.begins_with("%s_L1_" % str(tree_id)):
+			tree_lod1_found = true
+			if not is_equal_approx(instance.visibility_range_end, DEFAULT_TREE_LOW_POLY_DISTANCE):
+				errors.append("%s should keep full tree LOD visible to %.1fm." % [instance.name, DEFAULT_TREE_LOW_POLY_DISTANCE])
+		elif instance_name.begins_with("%s_L2_" % str(tree_id)):
+			tree_lod2_found = true
+			if not is_equal_approx(instance.visibility_range_begin, expected_lod2_begin):
+				errors.append("%s low-poly LOD should begin at %.1fm." % [instance.name, expected_lod2_begin])
+
+	if not tree_lod1_found:
+		errors.append("ForestRegion did not create a full-detail tree LOD using tree_low_poly_distance.")
+	if not tree_lod2_found:
+		errors.append("ForestRegion did not create a low-poly tree LOD using tree_low_poly_distance.")
 
 
 func _validate_dense_particle_emitters(node: Node, errors: Array[String]) -> int:

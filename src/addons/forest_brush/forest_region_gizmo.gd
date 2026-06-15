@@ -81,7 +81,7 @@ func _redraw(gizmo: EditorNode3DGizmo) -> void:
 	var terrain := _get_terrain(region)
 	if is_instance_valid(terrain) and not _is_terrain_ready_for_height_queries(region, terrain):
 		terrain = null
-	_draw_cached_cells(gizmo, region, terrain, region.forest_cells, material, FOREST_COLOR)
+	_draw_cached_cells(gizmo, region, terrain, material, FOREST_COLOR)
 
 	if _preview_visible and _preview_region_id == region.get_instance_id():
 		var preview_color := ERASE_PREVIEW_COLOR if _preview_mode == ForestRegionScript.PaintMode.ERASE else PREVIEW_COLOR
@@ -92,14 +92,10 @@ func _draw_cached_cells(
 	gizmo: EditorNode3DGizmo,
 	region: ForestRegionScript,
 	terrain: Node3D,
-	cells: Array[Vector2i],
 	material: Material,
 	color: Color
 ) -> void:
-	if cells.is_empty():
-		return
-
-	var lines := _get_cached_cell_lines(region, terrain, cells)
+	var lines := _get_cached_cell_lines(region, terrain)
 	if not lines.is_empty():
 		gizmo.add_lines(lines, material, false, color)
 
@@ -121,9 +117,9 @@ func _draw_cells(
 		gizmo.add_lines(lines, material, false, color)
 
 
-func _get_cached_cell_lines(region: ForestRegionScript, terrain: Node3D, cells: Array[Vector2i]) -> PackedVector3Array:
+func _get_cached_cell_lines(region: ForestRegionScript, terrain: Node3D) -> PackedVector3Array:
 	var region_id := region.get_instance_id()
-	var cache_signature := _get_cell_line_cache_signature(region, terrain, cells)
+	var cache_signature := _get_cell_line_cache_signature(region, terrain)
 	var cache := _base_line_cache.get(region_id, {}) as Dictionary
 	var cached_record: Variant = cache.get("forest")
 	if cached_record is Dictionary:
@@ -131,6 +127,10 @@ func _get_cached_cell_lines(region: ForestRegionScript, terrain: Node3D, cells: 
 		var cached_lines: Variant = record.get("lines")
 		if str(record.get("signature", "")) == cache_signature and cached_lines is PackedVector3Array:
 			return cached_lines as PackedVector3Array
+
+	var cells := region.forest_cells
+	if cells.is_empty():
+		return PackedVector3Array()
 
 	var surface_cache := _get_surface_point_cache(region, terrain)
 	var lines := _build_cell_lines(region, terrain, cells, surface_cache)
@@ -275,10 +275,10 @@ func _get_surface_point_cache(region: ForestRegionScript, terrain: Node3D) -> Di
 	return points
 
 
-func _get_cell_line_cache_signature(region: ForestRegionScript, terrain: Node3D, cells: Array[Vector2i]) -> String:
+func _get_cell_line_cache_signature(region: ForestRegionScript, terrain: Node3D) -> String:
 	return "%s|%s" % [
 		_get_surface_signature(region, terrain),
-		_get_cells_key(cells),
+		region.get_editor_gizmo_cell_revision(),
 	]
 
 
@@ -301,14 +301,6 @@ func _transform_signature(transform: Transform3D) -> String:
 		str(transform.basis.z),
 		str(transform.origin),
 	]
-
-
-func _get_cells_key(cells: Array[Vector2i]) -> String:
-	var mixed := int(2166136261)
-	for cell: Vector2i in cells:
-		mixed = int((mixed ^ cell.x) * 16777619)
-		mixed = int((mixed ^ cell.y) * 16777619)
-	return "%d:%d" % [cells.size(), mixed]
 
 
 func _copy_cells(cells: Array[Vector2i]) -> Array[Vector2i]:

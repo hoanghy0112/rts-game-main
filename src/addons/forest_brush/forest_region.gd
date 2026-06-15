@@ -7,6 +7,7 @@ const ForestRegionData = preload("res://addons/forest_brush/forest_region_data.g
 const RUNTIME_CONTAINER_NAME := "__ForestRuntimeInstances"
 const MAX_PLACEMENTS_PER_CELL := 512
 const LOD_TIER_COUNT := 3
+const LOD_FADE_BEGIN_RATIO := 0.88
 const DENSE_GRASS_LAYER_META := &"forest_dense_grass_layer"
 
 signal cells_changed
@@ -43,6 +44,25 @@ enum PaintMode {
 		density_multiplier = clamped_value
 		_notify_cells_changed([], true)
 
+@export_group("Tree Placement")
+@export_range(0.05, 8.0, 0.01, "or_greater") var tree_scale_multiplier: float = 1.0:
+	set(value):
+		var clamped_value := maxf(value, 0.05)
+		if is_equal_approx(tree_scale_multiplier, clamped_value):
+			return
+		tree_scale_multiplier = clamped_value
+		_notify_resource_rendering_changed()
+
+@export_group("Tree LOD")
+@export_range(1.0, 10000.0, 1.0, "or_greater") var tree_low_poly_distance: float = 450.0:
+	set(value):
+		var clamped_value := maxf(value, 1.0)
+		if is_equal_approx(tree_low_poly_distance, clamped_value):
+			return
+		tree_low_poly_distance = clamped_value
+		_notify_resource_rendering_changed()
+
+@export_group("")
 @export var origin: Vector3 = Vector3.ZERO:
 	set(value):
 		if origin == value:
@@ -102,8 +122,13 @@ var cell_plant_ids: Dictionary:
 
 var _forest_cells_cache: Array[Vector2i] = []
 var _cell_plant_ids_cache: Dictionary = {}
+var _forest_cells_revision := 0
 var _suspend_cell_notifications := false
 var _editor_gizmo_update_pending := false
+var _editor_runtime_preview_batch_depth := 0
+var _editor_runtime_preview_batch_dirty_chunks: Dictionary = {}
+var _editor_runtime_preview_batch_force_full_rebuild := false
+var _editor_runtime_preview_batch_has_changes := false
 var _runtime_container: Node3D
 var _scene_part_cache: Dictionary = {}
 
@@ -153,6 +178,8 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	_editor_gizmo_update_pending = false
+	_editor_runtime_preview_batch_depth = 0
+	_clear_editor_runtime_preview_batch_state()
 	clear_runtime_instances()
 
 
@@ -171,6 +198,23 @@ func set_forest_data(new_forest_cells: Array[Vector2i], new_cell_plant_ids: Dict
 
 	_set_compact_data_from_legacy(normalized_cells, normalized_plant_map)
 	_notify_cells_changed(dirty_chunks)
+
+
+func set_region_data_snapshot(snapshot: ForestRegionData) -> void:
+	var next_data: ForestRegionData
+	if snapshot:
+		next_data = snapshot.duplicate_data() as ForestRegionData
+	if not next_data:
+		next_data = ForestRegionData.new()
+		next_data.chunk_size_cells = _chunk_size_cells
+
+	if _region_data_matches(next_data):
+		return
+
+	_region_data = next_data
+	_chunk_size_cells = maxi(_region_data.chunk_size_cells, 1)
+	_sync_legacy_cache_from_region_data()
+	_notify_cells_changed([], true)
 
 
 func paint_cells(cells: Array[Vector2i], plant_ids: Array[StringName], mode: int) -> bool:
@@ -201,6 +245,10 @@ func paint_cells(cells: Array[Vector2i], plant_ids: Array[StringName], mode: int
 
 func clear_forest_cells() -> void:
 	set_forest_data([], {})
+
+
+func get_editor_gizmo_cell_revision() -> int:
+	return _forest_cells_revision
 
 
 func world_to_cell(world_position: Vector3) -> Vector2i:
@@ -241,6 +289,8 @@ func to_runtime_data() -> Dictionary:
 		"terrain_path": terrain_path,
 		"cell_size": cell_size,
 		"density_multiplier": density_multiplier,
+		"tree_scale_multiplier": tree_scale_multiplier,
+		"tree_low_poly_distance": tree_low_poly_distance,
 		"origin": origin,
 		"generation_seed": generation_seed,
 		"chunk_size_cells": chunk_size_cells,
@@ -370,6 +420,42 @@ func clear_runtime_instances() -> void:
 	_runtime_container = null
 
 
+func begin_editor_runtime_preview_batch() -> void:
+	if not Engine.is_editor_hint():
+		return
+
+	if _editor_runtime_preview_batch_depth == 0:
+		_clear_editor_runtime_preview_batch_state()
+	_editor_runtime_preview_batch_depth += 1
+
+
+func end_editor_runtime_preview_batch(rebuild: bool) -> void:
+	if not Engine.is_editor_hint():
+		return
+
+	if _editor_runtime_preview_batch_depth <= 0:
+		_editor_runtime_preview_batch_depth = 0
+		_clear_editor_runtime_preview_batch_state()
+		return
+
+	_editor_runtime_preview_batch_depth -= 1
+	if _editor_runtime_preview_batch_depth > 0:
+		return
+
+	var has_changes := _editor_runtime_preview_batch_has_changes
+	var force_full_rebuild := _editor_runtime_preview_batch_force_full_rebuild
+	var dirty_chunks := _get_editor_runtime_preview_batch_dirty_chunks()
+	_clear_editor_runtime_preview_batch_state()
+
+	if not rebuild or not has_changes or not is_inside_tree() or not _has_runtime_container():
+		return
+
+	if force_full_rebuild or dirty_chunks.is_empty():
+		rebuild_runtime_preview()
+	else:
+		rebuild_runtime_chunks(dirty_chunks)
+
+
 func request_editor_gizmo_update() -> void:
 	if not Engine.is_editor_hint() or is_queued_for_deletion() or not is_inside_tree() or not _is_in_active_edited_scene():
 		return
@@ -392,9 +478,13 @@ func _notify_cells_changed(dirty_chunks: Array[Vector2i] = [], force_full_rebuil
 	if _suspend_cell_notifications:
 		return
 
+	_forest_cells_revision += 1
 	cells_changed.emit()
 	if Engine.is_editor_hint() and is_inside_tree():
 		request_editor_gizmo_update()
+		if _editor_runtime_preview_batch_depth > 0:
+			_accumulate_editor_runtime_preview_batch_change(dirty_chunks, force_full_rebuild)
+			return
 		if _has_runtime_container():
 			if force_full_rebuild or dirty_chunks.is_empty():
 				rebuild_runtime_preview()
@@ -410,8 +500,39 @@ func _notify_cells_changed(dirty_chunks: Array[Vector2i] = [], force_full_rebuil
 func _notify_resource_rendering_changed() -> void:
 	if Engine.is_editor_hint() and is_inside_tree():
 		request_editor_gizmo_update()
+		if _has_runtime_container():
+			rebuild_runtime_preview()
 	elif is_inside_tree():
 		rebuild_runtime_preview()
+
+
+func _accumulate_editor_runtime_preview_batch_change(dirty_chunks: Array[Vector2i], force_full_rebuild: bool) -> void:
+	_editor_runtime_preview_batch_has_changes = true
+	if force_full_rebuild or dirty_chunks.is_empty():
+		_editor_runtime_preview_batch_force_full_rebuild = true
+		_editor_runtime_preview_batch_dirty_chunks.clear()
+		return
+
+	if _editor_runtime_preview_batch_force_full_rebuild:
+		return
+
+	for chunk_coord: Vector2i in dirty_chunks:
+		_editor_runtime_preview_batch_dirty_chunks[chunk_coord] = true
+
+
+func _get_editor_runtime_preview_batch_dirty_chunks() -> Array[Vector2i]:
+	var dirty_chunks: Array[Vector2i] = []
+	for key: Variant in _editor_runtime_preview_batch_dirty_chunks.keys():
+		if key is Vector2i:
+			dirty_chunks.append(key as Vector2i)
+	dirty_chunks.sort_custom(ForestRegionData._compare_chunks)
+	return dirty_chunks
+
+
+func _clear_editor_runtime_preview_batch_state() -> void:
+	_editor_runtime_preview_batch_dirty_chunks.clear()
+	_editor_runtime_preview_batch_force_full_rebuild = false
+	_editor_runtime_preview_batch_has_changes = false
 
 
 func _ensure_region_data() -> ForestRegionData:
@@ -553,7 +674,7 @@ func _build_cell_placements(cell: Vector2i, plant_type: ForestPlantTypeData, ter
 		var yaw := rng.randf_range(0.0, TAU) if plant_type.random_yaw else 0.0
 		var min_scale := minf(plant_type.min_scale, plant_type.max_scale)
 		var max_scale := maxf(plant_type.min_scale, plant_type.max_scale)
-		var scale := rng.randf_range(min_scale, max_scale)
+		var scale := rng.randf_range(min_scale, max_scale) * _get_region_scale_multiplier_for_plant_type(plant_type)
 		placements.append({
 			"transform": _get_placement_transform(local_point, yaw, scale, plant_type, terrain),
 			"lod_roll": rng.randf(),
@@ -797,12 +918,12 @@ func _create_multimesh_group(group: Dictionary) -> void:
 
 
 func _configure_visibility_range(instance: GeometryInstance3D, plant_type: ForestPlantTypeData, lod_tier: int) -> void:
-	var end_distance := plant_type.get_visible_distance_for_lod(lod_tier)
+	var end_distance := _get_visible_distance_for_lod(plant_type, lod_tier)
 	var begin_distance := 0.0
 	if lod_tier == 1:
-		begin_distance = maxf(0.0, plant_type.near_visible_distance * 0.88)
+		begin_distance = maxf(0.0, plant_type.near_visible_distance * LOD_FADE_BEGIN_RATIO)
 	elif lod_tier >= 2:
-		begin_distance = maxf(0.0, plant_type.mid_visible_distance * 0.88)
+		begin_distance = maxf(0.0, _get_low_poly_distance_for_plant_type(plant_type) * LOD_FADE_BEGIN_RATIO)
 
 	instance.visibility_range_begin = begin_distance
 	instance.visibility_range_end = end_distance
@@ -918,12 +1039,45 @@ func _get_lod_tiers_for_plant_type(plant_type: ForestPlantTypeData) -> Array[int
 	for lod_tier: int in range(LOD_TIER_COUNT):
 		if plant_type.get_keep_ratio_for_lod(lod_tier) <= 0.0:
 			continue
-		if plant_type.get_visible_distance_for_lod(lod_tier) <= 0.0:
+		if _get_visible_distance_for_lod(plant_type, lod_tier) <= 0.0:
 			continue
 		if not plant_type.get_scene_for_lod(lod_tier):
 			continue
 		tiers.append(lod_tier)
 	return tiers
+
+
+func _get_visible_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: int) -> float:
+	if not _uses_region_tree_low_poly_distance(plant_type):
+		return plant_type.get_visible_distance_for_lod(lod_tier)
+
+	match lod_tier:
+		1:
+			return _get_low_poly_distance_for_plant_type(plant_type)
+		2:
+			return maxf(plant_type.far_visible_distance, _get_low_poly_distance_for_plant_type(plant_type))
+		_:
+			return plant_type.get_visible_distance_for_lod(lod_tier)
+
+
+func _get_low_poly_distance_for_plant_type(plant_type: ForestPlantTypeData) -> float:
+	if _uses_region_tree_low_poly_distance(plant_type):
+		return maxf(tree_low_poly_distance, plant_type.near_visible_distance)
+	return plant_type.mid_visible_distance
+
+
+func _uses_region_tree_low_poly_distance(plant_type: ForestPlantTypeData) -> bool:
+	return (
+		plant_type
+		and plant_type.category == ForestPlantTypeData.PlantCategory.TREE
+		and plant_type.lod2_scene
+	)
+
+
+func _get_region_scale_multiplier_for_plant_type(plant_type: ForestPlantTypeData) -> float:
+	if plant_type and plant_type.category == ForestPlantTypeData.PlantCategory.TREE:
+		return maxf(tree_scale_multiplier, 0.05)
+	return 1.0
 
 
 func _get_rng_for_cell_and_plant(cell: Vector2i, plant_id: StringName) -> RandomNumberGenerator:
@@ -1196,6 +1350,24 @@ func _cell_plant_maps_equal(a: Dictionary, b: Dictionary) -> bool:
 		if not b.has(key):
 			return false
 		if normalize_plant_ids(a[key]) != normalize_plant_ids(b[key]):
+			return false
+	return true
+
+
+func _region_data_matches(other_data: ForestRegionData) -> bool:
+	if not other_data:
+		return false
+
+	var data := _ensure_region_data()
+	if data.chunk_size_cells != other_data.chunk_size_cells:
+		return false
+	if data.row_runs != other_data.row_runs:
+		return false
+	if data.plant_sets.size() != other_data.plant_sets.size():
+		return false
+
+	for index: int in range(data.plant_sets.size()):
+		if data.plant_sets[index] != other_data.plant_sets[index]:
 			return false
 	return true
 

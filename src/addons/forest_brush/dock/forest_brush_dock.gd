@@ -6,6 +6,7 @@ signal selected_plant_ids_changed(plant_ids: Array[StringName])
 signal brush_mode_changed(mode: int)
 signal brush_radius_changed(radius: int)
 signal density_multiplier_changed(multiplier: float)
+signal tree_scale_multiplier_changed(multiplier: float)
 signal rebuild_requested
 signal clear_requested
 
@@ -27,6 +28,7 @@ var _select_all_button: Button
 var _deselect_all_button: Button
 var _radius_spinbox: SpinBox
 var _density_spinbox: SpinBox
+var _tree_scale_spinbox: SpinBox
 var _rebuild_button: Button
 var _clear_button: Button
 var _selected_plant_ids: Array[StringName] = []
@@ -60,6 +62,9 @@ func set_region(region: ForestRegionScript, selected_plant_ids: Array[StringName
 	if _density_spinbox:
 		_density_spinbox.value = _region.density_multiplier if has_region else 1.0
 		_density_spinbox.editable = has_region
+	if _tree_scale_spinbox:
+		_tree_scale_spinbox.value = _region.tree_scale_multiplier if has_region else 1.0
+		_tree_scale_spinbox.editable = has_region
 	if _rebuild_button:
 		_rebuild_button.disabled = not has_region
 	if _clear_button:
@@ -90,6 +95,18 @@ func set_brush_radius(radius: int) -> void:
 	if not _radius_spinbox:
 		return
 	_radius_spinbox.value = maxi(radius, 0)
+
+
+func get_tree_scale_multiplier() -> float:
+	if not _tree_scale_spinbox:
+		return 1.0
+	return float(_tree_scale_spinbox.value)
+
+
+func set_tree_scale_multiplier(multiplier: float) -> void:
+	if not _tree_scale_spinbox:
+		return
+	_tree_scale_spinbox.value = maxf(multiplier, 0.05)
 
 
 func get_selected_plant_ids() -> Array[StringName]:
@@ -194,6 +211,24 @@ func _build_ui() -> void:
 	_density_spinbox.allow_greater = true
 	_density_spinbox.value_changed.connect(_on_density_changed)
 	density_row.add_child(_density_spinbox)
+
+	var tree_scale_row := HBoxContainer.new()
+	tree_scale_row.add_theme_constant_override("separation", 8)
+	root.add_child(tree_scale_row)
+
+	var tree_scale_label := Label.new()
+	tree_scale_label.text = "Tree Scale"
+	tree_scale_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tree_scale_row.add_child(tree_scale_label)
+
+	_tree_scale_spinbox = SpinBox.new()
+	_tree_scale_spinbox.min_value = 0.05
+	_tree_scale_spinbox.max_value = 8.0
+	_tree_scale_spinbox.step = 0.05
+	_tree_scale_spinbox.value = 1.0
+	_tree_scale_spinbox.allow_greater = true
+	_tree_scale_spinbox.value_changed.connect(_on_tree_scale_changed)
+	tree_scale_row.add_child(_tree_scale_spinbox)
 
 	var separator := HSeparator.new()
 	root.add_child(separator)
@@ -372,6 +407,12 @@ func _on_density_changed(value: float) -> void:
 	if _syncing:
 		return
 	density_multiplier_changed.emit(maxf(value, 0.0))
+
+
+func _on_tree_scale_changed(value: float) -> void:
+	if _syncing:
+		return
+	tree_scale_multiplier_changed.emit(maxf(value, 0.05))
 
 
 func _on_rebuild_pressed() -> void:

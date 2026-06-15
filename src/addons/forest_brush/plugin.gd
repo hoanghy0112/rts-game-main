@@ -31,13 +31,14 @@ var _preview_radius := -1
 var _preview_cells: Array[Vector2i] = []
 
 var _stroke_active := false
+var _stroke_region: ForestRegionScript
 var _stroke_mode := ForestRegionScript.PaintMode.PAINT
 var _stroke_radius := 0
 var _stroke_plant_ids: Array[StringName] = []
 var _stroke_has_explicit_plant_selection := false
 var _stroke_centers: Dictionary = {}
-var _stroke_before_cells: Array[Vector2i] = []
-var _stroke_before_cell_plant_ids: Dictionary = {}
+var _stroke_pending_cells: Dictionary = {}
+var _stroke_before_region_data: Resource
 
 
 func _enter_tree() -> void:
@@ -56,6 +57,7 @@ func _enter_tree() -> void:
 	_dock.brush_mode_changed.connect(_on_dock_brush_mode_changed)
 	_dock.brush_radius_changed.connect(_on_dock_brush_radius_changed)
 	_dock.density_multiplier_changed.connect(_on_dock_density_multiplier_changed)
+	_dock.tree_scale_multiplier_changed.connect(_on_dock_tree_scale_multiplier_changed)
 	_dock.rebuild_requested.connect(_on_dock_rebuild_requested)
 	_dock.clear_requested.connect(_on_dock_clear_requested)
 	_show_dock()
@@ -273,6 +275,25 @@ func _on_dock_density_multiplier_changed(multiplier: float) -> void:
 	undo.commit_action()
 
 
+func _on_dock_tree_scale_multiplier_changed(multiplier: float) -> void:
+	if not is_instance_valid(_region):
+		return
+
+	var clamped_multiplier := maxf(multiplier, 0.05)
+	if is_equal_approx(_region.tree_scale_multiplier, clamped_multiplier):
+		return
+
+	var undo := get_undo_redo()
+	undo.create_action("Set Forest Tree Scale")
+	undo.add_do_property(_region, "tree_scale_multiplier", clamped_multiplier)
+	undo.add_do_method(self, "_sync_dock_region", _region)
+	undo.add_do_method(self, "_refresh_brush_preview")
+	undo.add_undo_property(_region, "tree_scale_multiplier", _region.tree_scale_multiplier)
+	undo.add_undo_method(self, "_sync_dock_region", _region)
+	undo.add_undo_method(self, "_refresh_brush_preview")
+	undo.commit_action()
+
+
 func _on_dock_rebuild_requested() -> void:
 	if is_instance_valid(_region):
 		_region.rebuild_runtime_preview()
@@ -287,36 +308,55 @@ func _on_dock_clear_requested() -> void:
 	if before_cells.is_empty() and before_cell_plant_ids.is_empty():
 		return
 
-	_commit_forest_action("Clear Forest Cells", before_cells, before_cell_plant_ids, [], {})
+	_commit_forest_action(_region, "Clear Forest Cells", before_cells, before_cell_plant_ids, [], {})
 
 
 func _start_stroke() -> void:
+	if not is_instance_valid(_region):
+		return
+
 	_stroke_active = true
+	_stroke_region = _region
 	_stroke_mode = _brush_mode
 	_stroke_radius = _brush_radius
 	_stroke_plant_ids = _copy_plant_ids(_selected_plant_ids)
 	_stroke_has_explicit_plant_selection = _has_explicit_plant_selection
 	_stroke_centers.clear()
-	_stroke_before_cells = ForestRegionScript.copy_cells(_region.forest_cells)
-	_stroke_before_cell_plant_ids = ForestRegionScript.copy_cell_plant_ids(_region.cell_plant_ids)
+	_stroke_pending_cells.clear()
+	_stroke_before_region_data = _stroke_region.region_data.duplicate_data()
+	_stroke_region.begin_editor_runtime_preview_batch()
 
 
 func _finish_stroke() -> void:
 	if not _stroke_active:
 		return
 
+	var stroke_region := _stroke_region
+	var stroke_mode := _stroke_mode
+	var stroke_plant_ids := _copy_plant_ids(_stroke_plant_ids)
+	var before_region_data := _stroke_before_region_data
+	var pending_cells := _get_stroke_pending_cells()
+
 	_stroke_active = false
+	_stroke_region = null
 	_stroke_centers.clear()
+	_stroke_pending_cells.clear()
+	_stroke_before_region_data = null
 
-	if not is_instance_valid(_region):
+	if not is_instance_valid(stroke_region):
 		return
 
-	var after_cells := ForestRegionScript.copy_cells(_region.forest_cells)
-	var after_cell_plant_ids := ForestRegionScript.copy_cell_plant_ids(_region.cell_plant_ids)
-	if _stroke_before_cells == after_cells and _cell_plant_maps_equal(_stroke_before_cell_plant_ids, after_cell_plant_ids):
+	if pending_cells.is_empty():
+		stroke_region.end_editor_runtime_preview_batch(false)
 		return
 
-	_commit_forest_action("Paint Forest Cells", _stroke_before_cells, _stroke_before_cell_plant_ids, after_cells, after_cell_plant_ids)
+	var changed := stroke_region.paint_cells(pending_cells, stroke_plant_ids, stroke_mode)
+	stroke_region.end_editor_runtime_preview_batch(changed)
+	if not changed:
+		return
+
+	var after_region_data := stroke_region.region_data.duplicate_data()
+	_commit_forest_data_action(stroke_region, "Paint Forest Cells", before_region_data, after_region_data)
 
 
 func _update_brush_preview_at_position(world_position: Vector3) -> void:
@@ -378,7 +418,7 @@ func _clear_brush_preview() -> void:
 
 
 func _paint_at_cell(center_cell: Vector2i) -> void:
-	if not is_instance_valid(_region):
+	if not is_instance_valid(_stroke_region):
 		return
 
 	if _stroke_centers.has(center_cell):
@@ -393,7 +433,8 @@ func _paint_at_cell(center_cell: Vector2i) -> void:
 		return
 
 	var cells := _get_brush_cells(center_cell, _stroke_radius)
-	_region.paint_cells(cells, _stroke_plant_ids, _stroke_mode)
+	for cell: Vector2i in cells:
+		_stroke_pending_cells[cell] = true
 
 
 func _get_brush_cells(center_cell: Vector2i, radius: int) -> Array[Vector2i]:
@@ -410,17 +451,46 @@ func _get_brush_cells(center_cell: Vector2i, radius: int) -> Array[Vector2i]:
 	return cells
 
 
+func _get_stroke_pending_cells() -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for key: Variant in _stroke_pending_cells.keys():
+		if key is Vector2i:
+			cells.append(key as Vector2i)
+	cells.sort_custom(ForestRegionDataScript._compare_cells)
+	return cells
+
+
 func _commit_forest_action(
+	region: ForestRegionScript,
 	action_name: String,
 	before_cells: Array[Vector2i],
 	before_cell_plant_ids: Dictionary,
 	after_cells: Array[Vector2i],
 	after_cell_plant_ids: Dictionary
 ) -> void:
+	if not is_instance_valid(region):
+		return
+
 	var undo := get_undo_redo()
 	undo.create_action(action_name)
-	undo.add_do_method(_region, "set_forest_data", after_cells, after_cell_plant_ids)
-	undo.add_undo_method(_region, "set_forest_data", before_cells, before_cell_plant_ids)
+	undo.add_do_method(region, "set_forest_data", after_cells, after_cell_plant_ids)
+	undo.add_undo_method(region, "set_forest_data", before_cells, before_cell_plant_ids)
+	undo.commit_action()
+
+
+func _commit_forest_data_action(
+	region: ForestRegionScript,
+	action_name: String,
+	before_region_data: Resource,
+	after_region_data: Resource
+) -> void:
+	if not is_instance_valid(region) or not before_region_data or not after_region_data:
+		return
+
+	var undo := get_undo_redo()
+	undo.create_action(action_name)
+	undo.add_do_method(region, "set_region_data_snapshot", after_region_data)
+	undo.add_undo_method(region, "set_region_data_snapshot", before_region_data)
 	undo.commit_action()
 
 
