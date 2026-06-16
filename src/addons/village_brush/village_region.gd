@@ -3,6 +3,7 @@ extends Node3D
 class_name VillageRegion
 
 const DEFAULT_HOUSE_SCENE: PackedScene = preload("res://addons/village_brush/defaults/default_house.tscn")
+const DEFAULT_PEASANT_SCENE: PackedScene = preload("res://modules/units/peasant/peasant.tscn")
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
@@ -21,6 +22,9 @@ const PAINT_PRIORITY_FIELD := 10
 const PAINT_PRIORITY_HOUSE := 20
 const PAINT_PRIORITY_FIELD_ROAD := 30
 const PAINT_PRIORITY_ROAD := 40
+const DEFAULT_PEASANT_TARGET_COUNT := 8
+const DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE := 12.0
+const DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE := 0.0
 
 signal cells_changed
 signal resources_changed
@@ -52,6 +56,11 @@ enum PaintMode {
 		house_scenes = value
 		resources_changed.emit()
 
+@export var peasant_scene: PackedScene:
+	set(value):
+		peasant_scene = value
+		resources_changed.emit()
+
 @export var default_crop_type: CropTypeData:
 	set(value):
 		default_crop_type = value
@@ -65,6 +74,7 @@ enum PaintMode {
 @export var auto_apply_field_road_textures := false
 @export var async_runtime_preview_on_ready := true
 @export_range(1, 64, 1, "or_greater") var runtime_house_batch_size: int = 6
+@export_range(1, 64, 1, "or_greater") var runtime_peasant_batch_size: int = 4
 @export_range(0.0, 10000.0, 1.0, "or_greater") var village_visible_distance_meters: float = 800.0
 @export_range(0.0, 2048.0, 1.0, "or_greater") var village_visibility_fade_margin_meters: float = 80.0
 
@@ -90,6 +100,13 @@ enum PaintMode {
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_road_clearance: float = 2.0
 @export_range(0, 512, 1, "or_greater") var house_max_count: int = 18
 @export_range(0.25, 4.0, 0.05, "or_greater") var house_density: float = 1.5
+
+@export_range(0, 512, 1, "or_greater") var peasant_target_count: int = DEFAULT_PEASANT_TARGET_COUNT
+@export_range(0.0, 512.0, 0.1, "or_greater") var peasant_spawn_rate_per_minute: float = DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE
+@export_range(0.0, 512.0, 0.01, "or_greater") var peasant_death_rate_per_minute: float = DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE
+@export_range(0.0, 64.0, 0.1, "or_greater") var peasant_house_spawn_radius: float = 4.5
+@export_range(0.0, 256.0, 0.1, "or_greater") var peasant_roam_radius: float = 72.0
+@export_range(0.0, 30.0, 0.1, "or_greater") var peasant_death_cleanup_seconds: float = 3.0
 
 @export_range(0.1, 64.0, 0.1, "or_greater") var field_min_plot_width: float = 19.2
 @export_range(0.1, 64.0, 0.1, "or_greater") var field_max_plot_width: float = 44.8
@@ -160,6 +177,13 @@ var _runtime_road_original_regions: Array = []
 var _runtime_road_copied_regions: Array = []
 var _runtime_road_using_region_copies := false
 var _runtime_field_terrain_shape_applied := false
+var _runtime_peasants: Array[Node3D] = []
+var _peasant_runtime_terrain: Node3D
+var _peasant_anchors: Dictionary = {}
+var _peasant_population_rng := RandomNumberGenerator.new()
+var _peasant_spawn_budget := 0.0
+var _peasant_death_budget := 0.0
+var _peasant_spawn_serial := 0
 var _editor_gizmo_update_pending := false
 var _house_footprint_cache: Dictionary = {}
 var _cached_road_polylines_key := ""
@@ -189,6 +213,13 @@ func _ready() -> void:
 		rebuild_runtime_preview_deferred.call_deferred()
 	else:
 		rebuild_runtime_preview()
+
+
+func _process(delta: float) -> void:
+	if Engine.is_editor_hint():
+		return
+
+	_update_runtime_peasant_population(delta)
 
 
 func _exit_tree() -> void:
@@ -381,6 +412,7 @@ func to_runtime_data() -> Dictionary:
 		"wall_type": wall_type,
 		"house_scene": _get_house_scene(),
 		"house_scenes": _get_house_scenes(),
+		"peasant_scene": _get_peasant_scene(),
 		"default_crop_type": _get_default_crop_type(),
 		"terrain_path": terrain_path,
 		"season_weather_path": season_weather_path,
@@ -388,6 +420,7 @@ func to_runtime_data() -> Dictionary:
 		"apply_runtime_terrain_edits": apply_runtime_terrain_edits,
 		"auto_apply_terrain_textures": auto_apply_terrain_textures,
 		"auto_apply_field_road_textures": auto_apply_field_road_textures,
+		"runtime_peasant_batch_size": runtime_peasant_batch_size,
 		"village_visible_distance_meters": village_visible_distance_meters,
 		"village_visibility_fade_margin_meters": village_visibility_fade_margin_meters,
 		"road_texture_id": road_texture_id,
@@ -411,6 +444,12 @@ func to_runtime_data() -> Dictionary:
 		"house_road_clearance": house_road_clearance,
 		"house_max_count": house_max_count,
 		"house_density": house_density,
+		"peasant_target_count": _get_effective_peasant_target_count(),
+		"peasant_spawn_rate_per_minute": _get_effective_peasant_spawn_rate_per_minute(),
+		"peasant_death_rate_per_minute": _get_effective_peasant_death_rate_per_minute(),
+		"peasant_house_spawn_radius": peasant_house_spawn_radius,
+		"peasant_roam_radius": peasant_roam_radius,
+		"peasant_death_cleanup_seconds": peasant_death_cleanup_seconds,
 		"field_min_plot_width": field_min_plot_width,
 		"field_max_plot_width": field_max_plot_width,
 		"field_bund_gap": field_bund_gap,
@@ -481,6 +520,7 @@ func rebuild_runtime_preview() -> void:
 		_runtime_field_terrain_shape_applied = false
 	_generate_houses(terrain, house_placements)
 	_generate_fields(terrain, field_generation)
+	_generate_peasants(terrain, house_placements, road_polylines, field_generation)
 
 
 func rebuild_runtime_preview_deferred() -> void:
@@ -557,8 +597,10 @@ func rebuild_runtime_preview_async() -> void:
 		return
 
 	_generate_fields_async(terrain, field_generation)
+	await _generate_peasants_async(terrain, house_placements, road_polylines, field_generation)
 	_mark_startup_phase("village_ready", {
 		"houses": house_placements.size(),
+		"peasants": _get_alive_peasant_count(),
 		"plots": (field_generation.get("plots", []) as Array).size(),
 	})
 
@@ -566,6 +608,11 @@ func rebuild_runtime_preview_async() -> void:
 func clear_runtime_instances() -> void:
 	_restore_runtime_road_texture()
 	_runtime_field_terrain_shape_applied = false
+	_runtime_peasants.clear()
+	_peasant_runtime_terrain = null
+	_peasant_anchors.clear()
+	_peasant_spawn_budget = 0.0
+	_peasant_death_budget = 0.0
 
 	var container := _runtime_container
 	if not is_instance_valid(container):
@@ -745,6 +792,286 @@ func _generate_fields(_terrain: Node3D, _field_generation: Dictionary) -> void:
 
 func _generate_fields_async(_terrain: Node3D, _field_generation: Dictionary) -> void:
 	_clear_runtime_field_registry()
+
+
+func _generate_peasants(
+	terrain: Node3D,
+	house_placements: Array[Dictionary],
+	road_polylines: Array,
+	field_generation: Dictionary
+) -> void:
+	if not _prepare_peasant_population(terrain, house_placements, road_polylines, field_generation):
+		return
+
+	var target_count := _get_effective_peasant_target_count()
+	for peasant_index: int in range(target_count):
+		_spawn_peasant(peasant_index)
+
+
+func _generate_peasants_async(
+	terrain: Node3D,
+	house_placements: Array[Dictionary],
+	road_polylines: Array,
+	field_generation: Dictionary
+) -> void:
+	if not _prepare_peasant_population(terrain, house_placements, road_polylines, field_generation):
+		return
+
+	var target_count := _get_effective_peasant_target_count()
+	for peasant_index: int in range(target_count):
+		if not is_inside_tree():
+			return
+
+		_spawn_peasant(peasant_index)
+		if (peasant_index + 1) % runtime_peasant_batch_size == 0:
+			await get_tree().process_frame
+
+
+func _prepare_peasant_population(
+	terrain: Node3D,
+	house_placements: Array[Dictionary],
+	road_polylines: Array,
+	field_generation: Dictionary
+) -> bool:
+	_runtime_peasants.clear()
+	_peasant_runtime_terrain = terrain
+	_peasant_anchors = _build_peasant_anchors(terrain, house_placements, road_polylines, field_generation)
+	_peasant_spawn_budget = 0.0
+	_peasant_death_budget = 0.0
+	_peasant_spawn_serial = 0
+	_peasant_population_rng.seed = _get_peasant_population_seed()
+
+	return (
+		_get_effective_peasant_target_count() > 0
+		and _get_peasant_scene() != null
+		and not (_peasant_anchors.get("house_points", []) as Array).is_empty()
+	)
+
+
+func _spawn_peasant(peasant_index: int) -> Node3D:
+	var scene := _get_peasant_scene()
+	if not scene or not _runtime_container:
+		return null
+	if (_peasant_anchors.get("house_points", []) as Array).is_empty():
+		return null
+
+	var spatial := _instantiate_runtime_scene(scene, "Peasant", _peasant_spawn_serial)
+	if not spatial:
+		return null
+
+	_peasant_spawn_serial += 1
+	_runtime_peasants.append(spatial)
+
+	var local_point := _get_peasant_spawn_local_point()
+	_set_runtime_node_position(spatial, local_point, _peasant_runtime_terrain)
+	spatial.rotation.y = _peasant_population_rng.randf_range(0.0, TAU)
+	_configure_runtime_visibility_recursive(
+		spatial,
+		village_visible_distance_meters,
+		village_visibility_fade_margin_meters
+	)
+	_configure_runtime_peasant(spatial, peasant_index)
+	return spatial
+
+
+func _configure_runtime_peasant(spatial: Node3D, peasant_index: int) -> void:
+	var behavior_anchors := _peasant_anchors.duplicate(true)
+	behavior_anchors["roam_radius"] = peasant_roam_radius
+	if spatial.has_method("configure_village_context"):
+		spatial.call(
+			"configure_village_context",
+			self,
+			_peasant_runtime_terrain,
+			behavior_anchors,
+			_mix_peasant_seed(peasant_index, _peasant_population_rng.randi())
+		)
+	elif spatial.has_method("configure_surface_height_source"):
+		spatial.call("configure_surface_height_source", _peasant_runtime_terrain)
+
+	if spatial.has_signal("died"):
+		var died_callable := Callable(self, "_on_runtime_peasant_died").bind(spatial)
+		if not spatial.is_connected("died", died_callable):
+			spatial.connect("died", died_callable)
+
+
+func _build_peasant_anchors(
+	terrain: Node3D,
+	house_placements: Array[Dictionary],
+	road_polylines: Array,
+	field_generation: Dictionary
+) -> Dictionary:
+	var house_points: Array[Vector2] = []
+	for placement: Dictionary in house_placements:
+		var point_variant: Variant = placement.get("position", Vector2.ZERO)
+		if point_variant is Vector2:
+			house_points.append(point_variant as Vector2)
+
+	var road_points := _collect_peasant_road_points(road_polylines)
+	var field_points := _collect_peasant_field_points(field_generation)
+	return {
+		"house_points": house_points,
+		"road_points": road_points,
+		"field_points": field_points,
+		"house_world_points": _local_2d_points_to_surface_world(house_points, terrain),
+		"road_world_points": _local_2d_points_to_surface_world(road_points, terrain),
+		"field_world_points": _local_2d_points_to_surface_world(field_points, terrain),
+	}
+
+
+func _collect_peasant_road_points(road_polylines: Array) -> Array[Vector2]:
+	var points: Array[Vector2] = []
+	var min_spacing_squared := maxf(road_width, cell_size) * maxf(road_width, cell_size)
+	for polyline: PackedVector2Array in road_polylines:
+		for point: Vector2 in polyline:
+			if points.is_empty() or points[points.size() - 1].distance_squared_to(point) >= min_spacing_squared:
+				points.append(point)
+	return points
+
+
+func _collect_peasant_field_points(field_generation: Dictionary) -> Array[Vector2]:
+	var points: Array[Vector2] = []
+	var plots: Array = field_generation.get("plots", [])
+	for plot_variant: Variant in plots:
+		if not (plot_variant is FieldPlotData):
+			continue
+		var plot := plot_variant as FieldPlotData
+		points.append(Vector2(plot.center.x, plot.center.z))
+	return points
+
+
+func _local_2d_points_to_surface_world(points: Array[Vector2], terrain: Node3D) -> Array[Vector3]:
+	var world_points: Array[Vector3] = []
+	for point: Vector2 in points:
+		world_points.append(_get_surface_world_position_from_local_2d(point, terrain))
+	return world_points
+
+
+func _get_peasant_spawn_local_point() -> Vector2:
+	var house_points: Array = _peasant_anchors.get("house_points", [])
+	var anchor: Vector2 = house_points[_peasant_population_rng.randi_range(0, house_points.size() - 1)]
+	var radius := maxf(peasant_house_spawn_radius, 0.0)
+	if radius <= 0.0:
+		return anchor
+
+	var angle := _peasant_population_rng.randf_range(0.0, TAU)
+	var distance := _peasant_population_rng.randf_range(0.0, radius)
+	return anchor + Vector2(cos(angle), sin(angle)) * distance
+
+
+func _update_runtime_peasant_population(delta: float) -> void:
+	if not is_instance_valid(_runtime_container):
+		return
+	if _peasant_anchors.is_empty():
+		return
+
+	_prune_runtime_peasants()
+	var target_count := _get_effective_peasant_target_count()
+	var alive_count := _get_alive_peasant_count()
+	if target_count <= 0:
+		_despawn_surplus_peasants(alive_count)
+		return
+	if alive_count > target_count:
+		_despawn_surplus_peasants(alive_count - target_count)
+		return
+
+	_update_peasant_ambient_deaths(delta)
+	_prune_runtime_peasants()
+	alive_count = _get_alive_peasant_count()
+
+	var missing_count := target_count - alive_count
+	if missing_count <= 0:
+		return
+
+	var spawn_rate := _get_effective_peasant_spawn_rate_per_minute()
+	if spawn_rate <= 0.0:
+		return
+
+	_peasant_spawn_budget += spawn_rate * delta / 60.0
+	while missing_count > 0 and _peasant_spawn_budget >= 1.0:
+		var spawned := _spawn_peasant(_peasant_spawn_serial)
+		if not spawned:
+			_peasant_spawn_budget = 0.0
+			return
+
+		_peasant_spawn_budget -= 1.0
+		missing_count -= 1
+
+
+func _update_peasant_ambient_deaths(delta: float) -> void:
+	var death_rate := _get_effective_peasant_death_rate_per_minute()
+	if death_rate <= 0.0:
+		return
+
+	_peasant_death_budget += death_rate * delta / 60.0
+	while _peasant_death_budget >= 1.0 and _get_alive_peasant_count() > 0:
+		if not _kill_random_runtime_peasant(&"village_death_rate"):
+			_peasant_death_budget = 0.0
+			return
+		_peasant_death_budget -= 1.0
+
+
+func _kill_random_runtime_peasant(reason: StringName) -> bool:
+	var alive_peasants := _get_alive_peasants()
+	if alive_peasants.is_empty():
+		return false
+
+	var peasant := alive_peasants[_peasant_population_rng.randi_range(0, alive_peasants.size() - 1)]
+	if peasant.has_method("kill"):
+		peasant.call("kill", reason)
+	else:
+		_runtime_peasants.erase(peasant)
+		peasant.queue_free()
+	return true
+
+
+func _despawn_surplus_peasants(count: int) -> void:
+	for _index: int in range(maxi(count, 0)):
+		var alive_peasants := _get_alive_peasants()
+		if alive_peasants.is_empty():
+			return
+		var peasant := alive_peasants[alive_peasants.size() - 1]
+		_runtime_peasants.erase(peasant)
+		peasant.queue_free()
+
+
+func _get_alive_peasant_count() -> int:
+	return _get_alive_peasants().size()
+
+
+func _get_alive_peasants() -> Array[Node3D]:
+	var alive_peasants: Array[Node3D] = []
+	for peasant: Node3D in _runtime_peasants:
+		if not is_instance_valid(peasant):
+			continue
+		if peasant.has_method("is_alive") and not bool(peasant.call("is_alive")):
+			continue
+		alive_peasants.append(peasant)
+	return alive_peasants
+
+
+func _prune_runtime_peasants() -> void:
+	for index: int in range(_runtime_peasants.size() - 1, -1, -1):
+		var peasant := _runtime_peasants[index]
+		if not is_instance_valid(peasant):
+			_runtime_peasants.remove_at(index)
+			continue
+		if peasant.has_method("is_alive") and not bool(peasant.call("is_alive")):
+			_runtime_peasants.remove_at(index)
+
+
+func _on_runtime_peasant_died(_reason: StringName, peasant: Node3D) -> void:
+	_runtime_peasants.erase(peasant)
+	if not is_instance_valid(peasant):
+		return
+
+	var cleanup_delay := maxf(peasant_death_cleanup_seconds, 0.0)
+	if cleanup_delay <= 0.0 or not is_inside_tree():
+		peasant.queue_free()
+		return
+
+	await get_tree().create_timer(cleanup_delay).timeout
+	if is_instance_valid(peasant):
+		peasant.queue_free()
 
 
 func _clear_runtime_field_registry() -> void:
@@ -2456,6 +2783,55 @@ func _mix_house_variant(index: int, random_value: int) -> int:
 	mixed = int((mixed * 1664525 + (index + 1) * 1013904223) & 0x7fffffff)
 	mixed = int((mixed * 1664525 + random_value * 1013904223) & 0x7fffffff)
 	return mixed
+
+
+func _get_peasant_scene() -> PackedScene:
+	if peasant_scene:
+		return peasant_scene
+	if village_type and village_type.peasant_scene:
+		return village_type.peasant_scene
+	return DEFAULT_PEASANT_SCENE
+
+
+func _get_effective_peasant_target_count() -> int:
+	if (
+		village_type
+		and peasant_target_count == DEFAULT_PEASANT_TARGET_COUNT
+		and village_type.peasant_target_count != DEFAULT_PEASANT_TARGET_COUNT
+	):
+		return maxi(village_type.peasant_target_count, 0)
+	return maxi(peasant_target_count, 0)
+
+
+func _get_effective_peasant_spawn_rate_per_minute() -> float:
+	if (
+		village_type
+		and is_equal_approx(peasant_spawn_rate_per_minute, DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE)
+		and not is_equal_approx(village_type.peasant_spawn_rate_per_minute, DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE)
+	):
+		return maxf(village_type.peasant_spawn_rate_per_minute, 0.0)
+	return maxf(peasant_spawn_rate_per_minute, 0.0)
+
+
+func _get_effective_peasant_death_rate_per_minute() -> float:
+	if (
+		village_type
+		and is_equal_approx(peasant_death_rate_per_minute, DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE)
+		and not is_equal_approx(village_type.peasant_death_rate_per_minute, DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE)
+	):
+		return maxf(village_type.peasant_death_rate_per_minute, 0.0)
+	return maxf(peasant_death_rate_per_minute, 0.0)
+
+
+func _get_peasant_population_seed() -> int:
+	return _mix_peasant_seed(0x5eed, generation_seed)
+
+
+func _mix_peasant_seed(index: int, random_value: int) -> int:
+	var mixed := int(generation_seed)
+	mixed = int((mixed * 1103515245 + 12345 + index * 2654435761) & 0x7fffffff)
+	mixed = int((mixed * 1103515245 + 12345 + random_value) & 0x7fffffff)
+	return absi(mixed)
 
 
 func _get_default_crop_type() -> CropTypeData:
