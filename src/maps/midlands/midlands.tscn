@@ -268,7 +268,6 @@ script = ExtResource("18_movement_overlay")
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
-show_movement_map = true
 
 [node name="RTSCameraRig" parent="." unique_id=1695932625 instance=ExtResource("12_21qn2")]
 transform = Transform3D(-0.083208054, 0, 0.99653214, 0, 1, 0, -0.99653214, 0, -0.083208054, -1607.3186, 10, -87.920616)
