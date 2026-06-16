@@ -103,31 +103,30 @@ func generate_movement_map() -> Resource:
 	var water_info := _collect_water_info(_get_node_from_path(water_system_path) as Node3D, effective_sample)
 	var forest_sources := _collect_forest_sources()
 	var village_sources := _collect_village_sources()
+	var water_mask := _build_water_mask(world_rect, width, height, effective_sample, water_info)
+	var forest_mask := _build_forest_mask(world_rect, width, height, effective_sample, forest_sources)
 	var road_mask := _build_village_road_mask(world_rect, width, height, effective_sample, village_sources)
 
-	for y: int in range(height):
-		for x: int in range(width):
-			var index := y * width + x
-			var world_point := world_rect.position + Vector2(float(x) + 0.5, float(y) + 0.5) * effective_sample
-			var flags_value := int(terrain_flags[index]) if index < terrain_flags.size() else 0
-			var speed := terrain_speeds[index] if index < terrain_speeds.size() else 0.0
+	for index: int in range(width * height):
+		var flags_value := int(terrain_flags[index])
+		var speed := terrain_speeds[index]
 
-			if _is_water_blocked(world_point, water_info):
-				flags_value |= MovementMapDataScript.FLAG_RIVER
-				speed = 0.0
+		if water_mask[index] != 0:
+			flags_value |= MovementMapDataScript.FLAG_RIVER
+			speed = 0.0
 
-			if _is_point_in_forest(world_point, forest_sources):
-				flags_value |= MovementMapDataScript.FLAG_FOREST
-				if speed > 0.0:
-					speed *= forest_speed_multiplier
+		if forest_mask[index] != 0:
+			flags_value |= MovementMapDataScript.FLAG_FOREST
+			if speed > 0.0:
+				speed *= forest_speed_multiplier
 
-			if index < road_mask.size() and road_mask[index] != 0:
-				flags_value |= MovementMapDataScript.FLAG_ROAD
-				if speed > 0.0:
-					speed = maxf(speed, road_speed_multiplier)
+		if road_mask[index] != 0:
+			flags_value |= MovementMapDataScript.FLAG_ROAD
+			if speed > 0.0:
+				speed = maxf(speed, road_speed_multiplier)
 
-			flag_array[index] = clampi(flags_value, 0, 255)
-			speed_multipliers[index] = speed
+		flag_array[index] = clampi(flags_value, 0, 255)
+		speed_multipliers[index] = speed
 
 	data.set("flags", flag_array)
 	data.set("speed_multipliers", speed_multipliers)
@@ -296,11 +295,7 @@ func _build_terrain_cell_info(terrain_data: Object, world_rect: Rect2, width: in
 		return {"speeds": speeds, "flags": flags}
 
 	var center_heights := PackedFloat32Array()
-	var x_edge_heights := PackedFloat32Array()
-	var z_edge_heights := PackedFloat32Array()
 	center_heights.resize(cell_count)
-	x_edge_heights.resize((width + 1) * height)
-	z_edge_heights.resize(width * (height + 1))
 
 	for y: int in range(height):
 		var center_z := world_rect.position.y + (float(y) + 0.5) * cell_size
@@ -310,47 +305,34 @@ func _build_terrain_cell_info(terrain_data: Object, world_rect: Rect2, width: in
 				Vector2(world_rect.position.x + (float(x) + 0.5) * cell_size, center_z)
 			)
 
-	for y: int in range(height):
-		var edge_z := world_rect.position.y + (float(y) + 0.5) * cell_size
-		var row_offset := y * (width + 1)
-		for x: int in range(width + 1):
-			x_edge_heights[row_offset + x] = _get_terrain_height_fast(
-				terrain_data,
-				Vector2(world_rect.position.x + float(x) * cell_size, edge_z)
-			)
-
-	for y: int in range(height + 1):
-		var edge_z := world_rect.position.y + float(y) * cell_size
-		var row_offset := y * width
-		for x: int in range(width):
-			z_edge_heights[row_offset + x] = _get_terrain_height_fast(
-				terrain_data,
-				Vector2(world_rect.position.x + (float(x) + 0.5) * cell_size, edge_z)
-			)
-
 	var safe_cell_size := maxf(cell_size, 0.001)
 	for y: int in range(height):
-		var x_edge_row := y * (width + 1)
-		var z_edge_row := y * width
-		var next_z_edge_row := (y + 1) * width
 		for x: int in range(width):
 			var index := y * width + x
 			var center_height := center_heights[index]
-			var west_height := x_edge_heights[x_edge_row + x]
-			var east_height := x_edge_heights[x_edge_row + x + 1]
-			var north_height := z_edge_heights[z_edge_row + x]
-			var south_height := z_edge_heights[next_z_edge_row + x]
+			if not _is_valid_cached_terrain_height(center_height):
+				continue
+
+			var west_index := index - 1 if x > 0 else index
+			var east_index := index + 1 if x < width - 1 else index
+			var north_index := index - width if y > 0 else index
+			var south_index := index + width if y < height - 1 else index
+			var west_height := center_heights[west_index]
+			var east_height := center_heights[east_index]
+			var north_height := center_heights[north_index]
+			var south_height := center_heights[south_index]
 			if (
-				not _is_valid_cached_terrain_height(center_height)
-				or not _is_valid_cached_terrain_height(west_height)
+				not _is_valid_cached_terrain_height(west_height)
 				or not _is_valid_cached_terrain_height(east_height)
 				or not _is_valid_cached_terrain_height(north_height)
 				or not _is_valid_cached_terrain_height(south_height)
 			):
 				continue
 
-			var dh_dx := absf(east_height - west_height) / safe_cell_size
-			var dh_dz := absf(south_height - north_height) / safe_cell_size
+			var x_distance := safe_cell_size * float(east_index - west_index)
+			var z_distance := safe_cell_size * float((south_index - north_index) / width) if width > 0 else safe_cell_size
+			var dh_dx := 0.0 if x_distance <= 0.001 else absf(east_height - west_height) / x_distance
+			var dh_dz := 0.0 if z_distance <= 0.001 else absf(south_height - north_height) / z_distance
 			var grade := sqrt(dh_dx * dh_dx + dh_dz * dh_dz)
 			var slope_degrees := rad_to_deg(atan(grade))
 			if slope_degrees > max_walkable_slope_degrees:
@@ -480,6 +462,85 @@ func _is_water_blocked(world_point: Vector2, water_info: Dictionary) -> bool:
 		if _is_point_inside_river(world_point, river):
 			return true
 	return false
+
+
+func _build_water_mask(world_rect: Rect2, width: int, height: int, cell_size: float, water_info: Dictionary) -> PackedByteArray:
+	var mask := PackedByteArray()
+	mask.resize(width * height)
+	if bool(water_info.get("has_baked_map", false)):
+		return _build_baked_water_mask(mask, world_rect, width, height, cell_size, water_info)
+	return _build_river_water_mask(mask, world_rect, width, height, cell_size, water_info)
+
+
+func _build_baked_water_mask(
+	mask: PackedByteArray,
+	world_rect: Rect2,
+	width: int,
+	height: int,
+	cell_size: float,
+	water_info: Dictionary
+) -> PackedByteArray:
+	var image := water_info.get("image") as Image
+	if not image:
+		return mask
+
+	var aabb_position := water_info.get("aabb_position", Vector3.ZERO) as Vector3
+	var aabb_size := water_info.get("aabb_size", Vector3.ZERO) as Vector3
+	var longest_axis := maxf(maxf(aabb_size.x, aabb_size.y), aabb_size.z)
+	if longest_axis <= 0.001:
+		return mask
+
+	var image_width := image.get_width()
+	var image_height := image.get_height()
+	if image_width <= 0 or image_height <= 0:
+		return mask
+
+	var alpha_is_meaningful := bool(water_info.get("alpha_is_meaningful", false))
+	for y: int in range(height):
+		var world_y := world_rect.position.y + (float(y) + 0.5) * cell_size
+		var uv_y := (world_y - aabb_position.z) / longest_axis
+		if uv_y < 0.0 or uv_y > 1.0:
+			continue
+		var pixel_y := clampi(floori(uv_y * float(image_height)), 0, image_height - 1)
+		for x: int in range(width):
+			var world_x := world_rect.position.x + (float(x) + 0.5) * cell_size
+			var uv_x := (world_x - aabb_position.x) / longest_axis
+			if uv_x < 0.0 or uv_x > 1.0:
+				continue
+			var pixel_x := clampi(floori(uv_x * float(image_width)), 0, image_width - 1)
+			var pixel := image.get_pixel(pixel_x, pixel_y)
+			if alpha_is_meaningful:
+				if pixel.a > WATER_ALPHA_EPSILON:
+					mask[y * width + x] = 1
+			elif pixel.r + pixel.g + pixel.b > WATER_EMPTY_EPSILON:
+				mask[y * width + x] = 1
+	return mask
+
+
+func _build_river_water_mask(
+	mask: PackedByteArray,
+	world_rect: Rect2,
+	width: int,
+	height: int,
+	cell_size: float,
+	water_info: Dictionary
+) -> PackedByteArray:
+	var rivers: Array = water_info.get("rivers", [])
+	for river_variant: Variant in rivers:
+		var river := river_variant as Dictionary
+		var bounds := river.get("bounds", Rect2()) as Rect2
+		var cell_bounds := _movement_cell_bounds_for_world_rect(bounds, world_rect, width, height, cell_size)
+		if not cell_bounds.has_area():
+			continue
+		for y: int in range(cell_bounds.position.y, cell_bounds.end.y):
+			for x: int in range(cell_bounds.position.x, cell_bounds.end.x):
+				var index := y * width + x
+				if mask[index] != 0:
+					continue
+				var world_point := world_rect.position + Vector2(float(x) + 0.5, float(y) + 0.5) * cell_size
+				if _is_point_inside_river(world_point, river):
+					mask[index] = 1
+	return mask
 
 
 func _is_water_blocked_by_baked_map(world_point: Vector2, water_info: Dictionary) -> bool:
@@ -752,6 +813,57 @@ func _is_point_in_forest(world_point: Vector2, forest_sources: Array[Dictionary]
 		if cells.has(cell):
 			return true
 	return false
+
+
+func _build_forest_mask(world_rect: Rect2, width: int, height: int, cell_size: float, forest_sources: Array[Dictionary]) -> PackedByteArray:
+	var mask := PackedByteArray()
+	mask.resize(width * height)
+	if forest_sources.is_empty():
+		return mask
+
+	for source: Dictionary in forest_sources:
+		var cells := source.get("cells", {}) as Dictionary
+		for cell_variant: Variant in cells.keys():
+			if cell_variant is Vector2i:
+				mask = _mark_source_cell_mask(mask, world_rect, width, height, cell_size, source, cell_variant as Vector2i)
+	return mask
+
+
+func _mark_source_cell_mask(
+	mask: PackedByteArray,
+	world_rect: Rect2,
+	width: int,
+	height: int,
+	cell_size: float,
+	source: Dictionary,
+	source_cell: Vector2i
+) -> PackedByteArray:
+	var origin := source.get("origin", Vector3.ZERO) as Vector3
+	var source_cell_size := maxf(float(source.get("cell_size", 4.0)), 0.1)
+	var min_local := Vector2(
+		origin.x + float(source_cell.x) * source_cell_size,
+		origin.z + float(source_cell.y) * source_cell_size
+	)
+	var max_local := min_local + Vector2(source_cell_size, source_cell_size)
+	var world_a := _source_local_to_world_2d(min_local, source)
+	var world_b := _source_local_to_world_2d(Vector2(max_local.x, min_local.y), source)
+	var world_c := _source_local_to_world_2d(max_local, source)
+	var world_d := _source_local_to_world_2d(Vector2(min_local.x, max_local.y), source)
+	var bounds := Rect2(world_a, Vector2.ZERO).expand(world_b).expand(world_c).expand(world_d).grow(cell_size)
+	var cell_bounds := _movement_cell_bounds_for_world_rect(bounds, world_rect, width, height, cell_size)
+	if not cell_bounds.has_area():
+		return mask
+
+	for y: int in range(cell_bounds.position.y, cell_bounds.end.y):
+		for x: int in range(cell_bounds.position.x, cell_bounds.end.x):
+			var index := y * width + x
+			if mask[index] != 0:
+				continue
+			var sample_world := world_rect.position + Vector2(float(x) + 0.5, float(y) + 0.5) * cell_size
+			var sample_local := _world_to_source_local_2d(sample_world, source)
+			if _local_point_to_cell(sample_local, origin, source_cell_size) == source_cell:
+				mask[index] = 1
+	return mask
 
 
 func _build_village_road_mask(world_rect: Rect2, width: int, height: int, cell_size: float, village_sources: Array[Dictionary]) -> PackedByteArray:
