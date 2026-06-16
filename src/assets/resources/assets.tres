@@ -186,14 +186,13 @@ roughness = 0.92
 [sub_resource type="Terrain3DTextureAsset" id="Terrain3DTextureAsset_od0q7"]
 name = "Grass"
 id = 1
-albedo_color = Color(0.67451, 0.74902, 0.686275, 1)
+albedo_color = Color(0.5399977, 0.66099703, 0.43916488, 1)
 albedo_texture = ExtResource("3_g8f2m")
 normal_texture = ExtResource("4_aw5y1")
 normal_depth = 1.0
 ao_strength = 2.0
-roughness = 0.9
-uv_scale = 0.2
-detiling_rotation = 0.161
+uv_scale = 1.601
+detiling_rotation = 0.214
 
 [sub_resource type="Terrain3DTextureAsset" id="Terrain3DTextureAsset_h06jt"]
 name = "Rocky Sand Road"
