@@ -1,0 +1,133 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Script" path="res://modules/units/human/human_npc.gd" id="1_human_npc"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_skin"]
+albedo_color = Color(0.86, 0.62, 0.42, 1)
+roughness = 0.72
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_tunic"]
+albedo_color = Color(0.35, 0.53, 0.42, 1)
+roughness = 0.84
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cloth"]
+albedo_color = Color(0.36, 0.27, 0.22, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_hair"]
+albedo_color = Color(0.16, 0.09, 0.045, 1)
+roughness = 0.88
+
+[sub_resource type="BoxMesh" id="BoxMesh_torso"]
+size = Vector3(0.42, 0.62, 0.26)
+
+[sub_resource type="SphereMesh" id="SphereMesh_head"]
+radius = 0.255
+height = 0.42
+radial_segments = 10
+rings = 5
+
+[sub_resource type="SphereMesh" id="SphereMesh_hair"]
+radius = 0.268
+height = 0.2
+radial_segments = 10
+rings = 3
+
+[sub_resource type="BoxMesh" id="BoxMesh_arm"]
+size = Vector3(0.14, 0.56, 0.14)
+
+[sub_resource type="BoxMesh" id="BoxMesh_leg"]
+size = Vector3(0.15, 0.55, 0.15)
+
+[sub_resource type="BoxMesh" id="BoxMesh_foot"]
+size = Vector3(0.17, 0.08, 0.27)
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.32
+height = 1.45
+
+[node name="Human" type="CharacterBody3D"]
+script = ExtResource("1_human_npc")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.72, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="VisualRoot" type="Node3D" parent="."]
+
+[node name="Armature" type="Node3D" parent="VisualRoot"]
+
+[node name="Torso" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.92, 0)
+
+[node name="TorsoMesh" type="MeshInstance3D" parent="VisualRoot/Armature/Torso"]
+mesh = SubResource("BoxMesh_torso")
+surface_material_override/0 = SubResource("StandardMaterial3D_tunic")
+
+[node name="Head" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.38, 0)
+
+[node name="HeadMesh" type="MeshInstance3D" parent="VisualRoot/Armature/Head"]
+mesh = SubResource("SphereMesh_head")
+surface_material_override/0 = SubResource("StandardMaterial3D_skin")
+
+[node name="Hair" type="MeshInstance3D" parent="VisualRoot/Armature/Head"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.105, -0.025)
+mesh = SubResource("SphereMesh_hair")
+surface_material_override/0 = SubResource("StandardMaterial3D_hair")
+
+[node name="LeftArm" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(0.992809, 0, -0.119712, 0, 1, 0, 0.119712, 0, 0.992809, -0.31, 1.08, 0)
+
+[node name="LeftArmMesh" type="MeshInstance3D" parent="VisualRoot/Armature/LeftArm"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+mesh = SubResource("BoxMesh_arm")
+surface_material_override/0 = SubResource("StandardMaterial3D_skin")
+
+[node name="RightArm" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(0.992809, 0, 0.119712, 0, 1, 0, -0.119712, 0, 0.992809, 0.31, 1.08, 0)
+
+[node name="RightArmMesh" type="MeshInstance3D" parent="VisualRoot/Armature/RightArm"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+mesh = SubResource("BoxMesh_arm")
+surface_material_override/0 = SubResource("StandardMaterial3D_skin")
+
+[node name="RightHandSocket" type="Node3D" parent="VisualRoot/Armature/RightArm"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.61, -0.04)
+
+[node name="LeftLeg" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, 0.62, 0)
+
+[node name="LeftLegMesh" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+mesh = SubResource("BoxMesh_leg")
+surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
+
+[node name="LeftFoot" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.58, -0.05)
+mesh = SubResource("BoxMesh_foot")
+surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
+
+[node name="RightLeg" type="Node3D" parent="VisualRoot/Armature"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, 0.62, 0)
+
+[node name="RightLegMesh" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+mesh = SubResource("BoxMesh_leg")
+surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
+
+[node name="RightFoot" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.58, -0.05)
+mesh = SubResource("BoxMesh_foot")
+surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
+
+[node name="ExternalModelSocket" type="Node3D" parent="VisualRoot"]
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="."]
+
+[node name="AnimationTree" type="AnimationTree" parent="."]
+active = false
+anim_player = NodePath("../AnimationPlayer")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="."]
+avoidance_enabled = false

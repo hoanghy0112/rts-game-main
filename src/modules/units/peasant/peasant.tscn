@@ -1,0 +1,54 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="PackedScene" path="res://modules/units/human/human.tscn" id="1_human"]
+[ext_resource type="Script" path="res://modules/units/peasant/peasant_npc.gd" id="2_peasant_script"]
+[ext_resource type="PackedScene" path="res://modules/units/human/low_poly_spear.tscn" id="3_spear"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_straw"]
+albedo_color = Color(0.78, 0.62, 0.27, 1)
+roughness = 0.92
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_sash"]
+albedo_color = Color(0.62, 0.34, 0.18, 1)
+roughness = 0.88
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_hat_brim"]
+top_radius = 0.36
+bottom_radius = 0.42
+height = 0.035
+radial_segments = 10
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_hat_cap"]
+top_radius = 0.08
+bottom_radius = 0.28
+height = 0.18
+radial_segments = 10
+
+[sub_resource type="BoxMesh" id="BoxMesh_sash"]
+size = Vector3(0.46, 0.08, 0.035)
+
+[node name="Peasant" instance=ExtResource("1_human")]
+script = ExtResource("2_peasant_script")
+max_health = 35.0
+walk_speed = 1.35
+run_speed = 2.85
+attack_damage = 6.0
+attack_cooldown = 1.15
+
+[node name="HatBrim" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="2"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.2, 0)
+mesh = SubResource("CylinderMesh_hat_brim")
+surface_material_override/0 = SubResource("StandardMaterial3D_straw")
+
+[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.29, 0)
+mesh = SubResource("CylinderMesh_hat_cap")
+surface_material_override/0 = SubResource("StandardMaterial3D_straw")
+
+[node name="Sash" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="1"]
+transform = Transform3D(0.866025, -0.5, 0, 0.5, 0.866025, 0, 0, 0, 1, 0, -0.08, -0.145)
+mesh = SubResource("BoxMesh_sash")
+surface_material_override/0 = SubResource("StandardMaterial3D_sash")
+
+[node name="LowPolySpear" parent="VisualRoot/Armature/RightArm/RightHandSocket" index="0" instance=ExtResource("3_spear")]
+transform = Transform3D(0.707107, 0, -0.707107, 0, 1, 0, 0.707107, 0, 0.707107, 0.04, -0.02, -0.02)
