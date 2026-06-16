@@ -5,8 +5,10 @@ uniform sampler2D macro_detail_texture : source_color, repeat_disable, filter_li
 uniform float overlay_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float alpha_threshold : hint_range(0.0, 1.0, 0.01) = 0.04;
 uniform float surface_offset : hint_range(0.0, 4.0, 0.01) = 0.08;
-uniform float near_hide_distance : hint_range(0.0, 10000.0, 1.0) = 0.0;
-uniform float near_fade_distance : hint_range(0.0, 2048.0, 1.0) = 0.0;
+uniform sampler2D near_hide_mask_texture : repeat_disable, filter_linear_mipmap;
+uniform bool near_hide_mask_enabled = false;
+uniform float near_hide_distance : hint_range(0.0, 10000.0, 1.0) = 920.0;
+uniform float near_fade_distance : hint_range(0.0, 2048.0, 1.0) = 240.0;
 uniform bool terrain_height_enabled = false;
 uniform uint _background_mode = 0u;
 uniform float _vertex_spacing = 1.0;
@@ -87,6 +89,8 @@ void fragment() {
 			camera_distance
 		);
 	}
+	float near_hide_mask = near_hide_mask_enabled ? texture(near_hide_mask_texture, UV).r : 1.0;
+	near_alpha = mix(1.0, near_alpha, near_hide_mask);
 	ALBEDO = macro.rgb;
 	ALPHA = macro.a * overlay_strength * near_alpha;
 	ALPHA_SCISSOR_THRESHOLD = alpha_threshold;

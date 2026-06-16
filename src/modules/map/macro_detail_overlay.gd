@@ -14,16 +14,19 @@ const CHUNK_META := &"macro_detail_overlay_chunk"
 @export_range(0.0, 4096.0, 1.0, "or_greater") var end_fade_margin: float = 512.0
 @export_range(0.0, 4.0, 0.01, "or_greater") var surface_offset: float = 0.08
 @export_range(0.0, 1.0, 0.01) var overlay_strength: float = 0.82
-@export_range(0.0, 10000.0, 1.0, "or_greater") var near_hide_distance: float = 0.0
-@export_range(0.0, 2048.0, 1.0, "or_greater") var near_fade_distance: float = 0.0
+@export_range(0.0, 10000.0, 1.0, "or_greater") var near_hide_distance: float = 920.0
+@export_range(0.0, 2048.0, 1.0, "or_greater") var near_fade_distance: float = 240.0
 
 var _atlas
 var _terrain: Node3D
 var _material: ShaderMaterial
 var _chunks: Array[MeshInstance3D] = []
+var _terrain_height_enabled := false
+var _waiting_for_terrain_height := false
 
 
 func _ready() -> void:
+	set_process(false)
 	_resolve_dependencies()
 	_configure_material()
 	if _atlas and _atlas.has_signal(&"atlas_changed"):
@@ -34,6 +37,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_set_waiting_for_terrain_height(false)
 	_clear_chunks()
 	if _atlas and _atlas.has_signal(&"atlas_changed"):
 		var callable := Callable(self, "_on_atlas_changed")
@@ -49,6 +53,18 @@ func rebuild_overlay() -> void:
 
 func get_chunk_count() -> int:
 	return _chunks.size()
+
+
+func _process(_delta: float) -> void:
+	if not _waiting_for_terrain_height:
+		set_process(false)
+		return
+
+	var was_height_enabled := _terrain_height_enabled
+	_resolve_dependencies()
+	_configure_material()
+	if _terrain_height_enabled and not was_height_enabled:
+		_rebuild_chunks()
 
 
 func _on_atlas_changed() -> void:
@@ -70,9 +86,16 @@ func _configure_material() -> void:
 		var texture := _atlas.call("get_texture") as Texture2D
 		if texture:
 			_material.set_shader_parameter("macro_detail_texture", texture)
+	var near_hide_mask_texture: Texture2D
+	if _atlas and _atlas.has_method("get_near_hide_mask_texture"):
+		near_hide_mask_texture = _atlas.call("get_near_hide_mask_texture") as Texture2D
+	_material.set_shader_parameter("near_hide_mask_enabled", near_hide_mask_texture != null)
+	if near_hide_mask_texture:
+		_material.set_shader_parameter("near_hide_mask_texture", near_hide_mask_texture)
 	_material.set_shader_parameter("near_hide_distance", near_hide_distance)
 	_material.set_shader_parameter("near_fade_distance", near_fade_distance)
 	_upload_terrain_height_parameters()
+	_update_terrain_height_retry_state()
 
 
 func _rebuild_chunks() -> void:
@@ -198,6 +221,7 @@ func _upload_terrain_height_parameters() -> void:
 	if not _material:
 		return
 
+	_terrain_height_enabled = false
 	_material.set_shader_parameter("terrain_height_enabled", false)
 	_material.set_shader_parameter("_vertex_spacing", maxf(_get_overlay_mesh_spacing(), 0.25))
 	_material.set_shader_parameter("_vertex_density", 1.0 / maxf(_get_overlay_mesh_spacing(), 0.25))
@@ -216,6 +240,7 @@ func _upload_terrain_height_parameters() -> void:
 
 	var vertex_spacing := maxf(_get_terrain_vertex_spacing(), 0.25)
 	var region_size := maxf(float(_terrain.get("region_size")), 1.0)
+	_terrain_height_enabled = true
 	_material.set_shader_parameter("terrain_height_enabled", true)
 	_material.set_shader_parameter("_background_mode", int(terrain_material.get("world_background")))
 	_material.set_shader_parameter("_vertex_spacing", vertex_spacing)
@@ -230,6 +255,16 @@ func _upload_terrain_height_parameters() -> void:
 	if terrain_data.has_method("get_region_locations"):
 		RenderingServer.material_set_param(material_rid, "_region_locations", terrain_data.call("get_region_locations"))
 	RenderingServer.material_set_param(material_rid, "_height_maps", height_maps_rid)
+
+
+func _update_terrain_height_retry_state() -> void:
+	_set_waiting_for_terrain_height(not terrain_path.is_empty() and not _terrain_height_enabled)
+
+
+func _set_waiting_for_terrain_height(waiting: bool) -> void:
+	_waiting_for_terrain_height = waiting
+	if is_inside_tree():
+		set_process(waiting)
 
 
 func _get_terrain_height(world_position: Vector3) -> float:

@@ -105,11 +105,20 @@ func _run_checks(failures: Array[String]) -> void:
 	_expect(atlas.has_atlas(), "atlas should produce a texture", failures)
 	_expect(atlas.get_image() != null and atlas.get_image().get_width() > 0, "atlas image should be non-empty", failures)
 	_expect(_sample_alpha(atlas, Vector2(2.0, 2.0)) > 0.05, "forest tree cell should write alpha", failures)
+	_expect(_sample_near_hide_mask(atlas, Vector2(2.0, 2.0)) > 0.95, "forest tree cell should write near-hide mask", failures)
 	_expect(_sample_alpha(atlas, Vector2(14.0, 2.0)) <= 0.01, "house-only cell should not write macro overlay alpha", failures)
 	var field_pixel := _sample_pixel(atlas, Vector2(22.0, 2.0))
 	_expect(field_pixel.a > 0.05, "field cells should write macro overlay alpha", failures)
 	_expect(_is_grass_like(field_pixel), "field cells should use the grass macro palette", failures)
+	_expect(_sample_near_hide_mask(atlas, Vector2(22.0, 2.0)) <= 0.01, "field cells should not write forest near-hide mask", failures)
 	_expect(_sample_alpha(atlas, Vector2(30.0, 2.0)) <= 0.01, "road-only cell should not write macro overlay alpha", failures)
+
+	forest.macro_overlay_enabled = false
+	atlas.rebuild()
+	_expect(_sample_alpha(atlas, Vector2(2.0, 2.0)) <= 0.01, "disabled forest macro overlay should not write alpha", failures)
+	forest.macro_overlay_enabled = true
+	atlas.rebuild()
+	_expect(_sample_alpha(atlas, Vector2(2.0, 2.0)) > 0.05, "re-enabled forest macro overlay should write alpha", failures)
 
 	var first_signature := _image_signature(atlas.get_image())
 	atlas.rebuild()
@@ -144,12 +153,47 @@ func _run_checks(failures: Array[String]) -> void:
 	_expect(terrain_material != null and is_equal_approx(float(terrain_material.get_shader_parameter("_vertex_spacing")), 2.0), "overlay material should receive Terrain3D vertex spacing", failures)
 	_expect(terrain_material != null and is_equal_approx(float(terrain_material.get_shader_parameter("surface_offset")), 0.17), "overlay material should pass surface offset to height shader", failures)
 
+	var delayed_overlay := MacroDetailOverlayScript.new()
+	delayed_overlay.name = "DelayedTerrainOverlay"
+	delayed_overlay.atlas_path = NodePath("../Atlas")
+	delayed_overlay.terrain_path = NodePath("../DelayedTerrain")
+	delayed_overlay.fallback_mesh_spacing = 4.0
+	delayed_overlay.surface_offset = 0.29
+	scene_root.add_child(delayed_overlay)
+	delayed_overlay.rebuild_overlay()
+	var delayed_material := _overlay_first_material(delayed_overlay)
+	_expect(is_equal_approx(_overlay_chunk_first_x_spacing(delayed_overlay), 4.0), "delayed terrain overlay should start with fallback mesh spacing", failures)
+	_expect(delayed_material != null and not bool(delayed_material.get_shader_parameter("terrain_height_enabled")), "delayed terrain overlay should start with height sampling disabled", failures)
+	_expect(bool(delayed_overlay.get("_waiting_for_terrain_height")), "delayed terrain overlay should wait for height binding", failures)
+
+	var delayed_terrain := FakeTerrain.new()
+	delayed_terrain.name = "DelayedTerrain"
+	scene_root.add_child(delayed_terrain)
+	delayed_overlay.call("_process", 0.016)
+	delayed_material = _overlay_first_material(delayed_overlay)
+	_expect(not bool(delayed_overlay.get("_waiting_for_terrain_height")), "delayed terrain overlay should stop waiting after height binding", failures)
+	_expect(is_equal_approx(_overlay_chunk_first_x_spacing(delayed_overlay), 2.0), "delayed terrain overlay should rebuild with Terrain3D vertex spacing", failures)
+	_expect(delayed_material != null and bool(delayed_material.get_shader_parameter("terrain_height_enabled")), "delayed terrain overlay should enable height sampling after retry", failures)
+	_expect(delayed_material != null and is_equal_approx(float(delayed_material.get_shader_parameter("_vertex_spacing")), 2.0), "delayed terrain overlay should upload Terrain3D vertex spacing after retry", failures)
+	_expect(delayed_material != null and is_equal_approx(float(delayed_material.get_shader_parameter("surface_offset")), 0.29), "delayed terrain overlay should preserve surface offset after retry", failures)
+
 	root.remove_child(scene_root)
 	scene_root.free()
 
 
 func _sample_alpha(atlas: Node, world_point: Vector2) -> float:
 	return _sample_pixel(atlas, world_point).a
+
+
+func _sample_near_hide_mask(atlas: Node, world_point: Vector2) -> float:
+	var image := atlas.call("get_near_hide_mask_image") as Image
+	if not image:
+		return 0.0
+	var origin := atlas.call("get_origin") as Vector2
+	var sample_size := float(atlas.call("get_sample_size"))
+	var x := clampi(floori((world_point.x - origin.x) / sample_size), 0, image.get_width() - 1)
+	var y := clampi(floori((world_point.y - origin.y) / sample_size), 0, image.get_height() - 1)
+	return image.get_pixel(x, y).r
 
 
 func _sample_pixel(atlas: Node, world_point: Vector2) -> Color:
@@ -198,8 +242,9 @@ func _overlay_chunks_use_visibility_fade(overlay: Node) -> bool:
 			and is_equal_approx(instance.visibility_range_begin_margin, 0.0)
 			and is_equal_approx(instance.visibility_range_end, 8000.0)
 			and is_equal_approx(instance.visibility_range_end_margin, 512.0)
-			and is_equal_approx(float(material.get_shader_parameter("near_hide_distance")), 0.0)
-			and is_equal_approx(float(material.get_shader_parameter("near_fade_distance")), 0.0)
+			and is_equal_approx(float(material.get_shader_parameter("near_hide_distance")), 920.0)
+			and is_equal_approx(float(material.get_shader_parameter("near_fade_distance")), 240.0)
+			and bool(material.get_shader_parameter("near_hide_mask_enabled"))
 			and instance.visibility_range_fade_mode == GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		)
 	return false

@@ -24,6 +24,8 @@ const FIELD_GRASS_STRENGTH := 0.36
 
 var _image: Image
 var _texture: ImageTexture
+var _near_hide_mask_image: Image
+var _near_hide_mask_texture: ImageTexture
 var _world_rect := Rect2()
 var _atlas_origin := Vector2.ZERO
 var _effective_sample_size := DEFAULT_SAMPLE_SIZE
@@ -54,12 +56,15 @@ func rebuild() -> void:
 
 	_image = Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_RGBA8)
 	_image.fill(Color(0.0, 0.0, 0.0, 0.0))
+	_near_hide_mask_image = Image.create(texture_size.x, texture_size.y, false, Image.FORMAT_R8)
+	_near_hide_mask_image.fill(Color.BLACK)
 	for forest_data: Dictionary in sources.get("forests", []):
 		_rasterize_forest(forest_data)
 	for village_data: Dictionary in sources.get("villages", []):
 		_rasterize_village(village_data)
 
 	_texture = ImageTexture.create_from_image(_image)
+	_near_hide_mask_texture = ImageTexture.create_from_image(_near_hide_mask_image)
 	atlas_changed.emit()
 
 
@@ -73,6 +78,14 @@ func get_texture() -> Texture2D:
 
 func get_image() -> Image:
 	return _image
+
+
+func get_near_hide_mask_texture() -> Texture2D:
+	return _near_hide_mask_texture
+
+
+func get_near_hide_mask_image() -> Image:
+	return _near_hide_mask_image
 
 
 func get_origin() -> Vector2:
@@ -101,6 +114,8 @@ func _schedule_rebuild() -> void:
 func _clear_atlas() -> void:
 	_image = null
 	_texture = null
+	_near_hide_mask_image = null
+	_near_hide_mask_texture = null
 	_world_rect = Rect2()
 	_atlas_origin = Vector2.ZERO
 	atlas_changed.emit()
@@ -115,9 +130,21 @@ func _connect_source_signals() -> void:
 func _connect_source_signal(source: Node, signal_name: StringName) -> void:
 	if not source or not source.has_signal(signal_name):
 		return
-	var callable := Callable(self, "_schedule_rebuild")
+	var callable := Callable(self, "_on_source_macro_detail_changed").bind(source, signal_name)
 	if not source.is_connected(signal_name, callable):
 		source.connect(signal_name, callable)
+
+
+func _on_source_macro_detail_changed(source: Node, signal_name: StringName) -> void:
+	if signal_name == &"cells_changed" and _source_macro_overlay_disabled(source):
+		return
+	_schedule_rebuild()
+
+
+func _source_macro_overlay_disabled(source: Node) -> bool:
+	if not source or not source.has_method("should_trigger_macro_overlay"):
+		return false
+	return not bool(source.call("should_trigger_macro_overlay"))
 
 
 func _collect_source_data() -> Dictionary:
@@ -283,7 +310,7 @@ func _rasterize_forest(data: Dictionary) -> void:
 		var color := style.get("color", Color(0.08, 0.24, 0.07, 1.0)) as Color
 		var strength := float(style.get("strength", 0.55))
 		var seed := _hash_string("|".join(_string_array_from_ids(plant_ids)))
-		_rasterize_cell(transform, inverse, origin, cell_size, cell, color, strength, seed)
+		_rasterize_cell(transform, inverse, origin, cell_size, cell, color, strength, seed, true)
 
 
 func _rasterize_village(data: Dictionary) -> void:
@@ -335,7 +362,8 @@ func _rasterize_cell(
 	cell: Vector2i,
 	color: Color,
 	strength: float,
-	seed: int
+	seed: int,
+	write_near_hide_mask: bool = false
 ) -> void:
 	var world_rect := _world_rect_for_cell(transform, origin, cell_size, cell)
 	var pixel_bounds := _pixel_bounds_for_world_rect(world_rect)
@@ -351,6 +379,8 @@ func _rasterize_cell(
 			var alpha := strength * (0.68 + 0.32 * noise)
 			var tinted := _adjust_color(color, (noise - 0.5) * 0.16)
 			_blend_pixel(x, y, tinted, alpha)
+			if write_near_hide_mask and alpha > MIN_ALPHA:
+				_write_near_hide_mask_pixel(x, y)
 
 
 func _rasterize_field_plot(
@@ -431,6 +461,11 @@ func _blend_pixel(x: int, y: int, color: Color, alpha: float) -> void:
 		out_alpha
 	)
 	_image.set_pixel(x, y, out_color)
+
+
+func _write_near_hide_mask_pixel(x: int, y: int) -> void:
+	if _near_hide_mask_image:
+		_near_hide_mask_image.set_pixel(x, y, Color.WHITE)
 
 
 func _forest_style_for_plant_ids(plant_ids: Array[StringName], palette: Variant, density_multiplier: float) -> Dictionary:
