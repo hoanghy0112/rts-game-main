@@ -59,6 +59,7 @@ func _enter_tree() -> void:
 	_dock.brush_mode_changed.connect(_on_dock_brush_mode_changed)
 	_dock.brush_radius_changed.connect(_on_dock_brush_radius_changed)
 	_dock.density_multiplier_changed.connect(_on_dock_density_multiplier_changed)
+	_dock.macro_overlay_enabled_changed.connect(_on_dock_macro_overlay_enabled_changed)
 	_dock.tree_scale_multiplier_changed.connect(_on_dock_tree_scale_multiplier_changed)
 	_dock.rebuild_requested.connect(_on_dock_rebuild_requested)
 	_dock.clear_requested.connect(_on_dock_clear_requested)
@@ -298,6 +299,19 @@ func _on_dock_density_multiplier_changed(multiplier: float) -> void:
 	undo.add_undo_property(_region, "density_multiplier", _region.density_multiplier)
 	undo.add_undo_method(self, "_sync_dock_region", _region)
 	undo.add_undo_method(self, "_refresh_brush_preview")
+	undo.commit_action()
+
+
+func _on_dock_macro_overlay_enabled_changed(enabled: bool) -> void:
+	if not is_instance_valid(_region) or _region.macro_overlay_enabled == enabled:
+		return
+
+	var undo := get_undo_redo()
+	undo.create_action("Set Forest Macro Overlay")
+	undo.add_do_property(_region, "macro_overlay_enabled", enabled)
+	undo.add_do_method(self, "_sync_dock_region", _region)
+	undo.add_undo_property(_region, "macro_overlay_enabled", _region.macro_overlay_enabled)
+	undo.add_undo_method(self, "_sync_dock_region", _region)
 	undo.commit_action()
 
 

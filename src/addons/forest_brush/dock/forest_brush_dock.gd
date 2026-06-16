@@ -7,6 +7,7 @@ signal paint_enabled_changed(enabled: bool)
 signal brush_mode_changed(mode: int)
 signal brush_radius_changed(radius: int)
 signal density_multiplier_changed(multiplier: float)
+signal macro_overlay_enabled_changed(enabled: bool)
 signal tree_scale_multiplier_changed(multiplier: float)
 signal rebuild_requested
 signal clear_requested
@@ -31,6 +32,7 @@ var _select_all_button: Button
 var _deselect_all_button: Button
 var _radius_spinbox: SpinBox
 var _density_spinbox: SpinBox
+var _macro_overlay_checkbox: CheckBox
 var _tree_scale_spinbox: SpinBox
 var _rebuild_button: Button
 var _clear_button: Button
@@ -67,6 +69,9 @@ func set_region(region: ForestRegionScript, selected_plant_ids: Array[StringName
 	if _density_spinbox:
 		_density_spinbox.value = _region.density_multiplier if has_region else 1.0
 		_density_spinbox.editable = has_region
+	if _macro_overlay_checkbox:
+		_macro_overlay_checkbox.button_pressed = _region.macro_overlay_enabled if has_region else true
+		_macro_overlay_checkbox.disabled = not has_region
 	if _tree_scale_spinbox:
 		_tree_scale_spinbox.value = _region.tree_scale_multiplier if has_region else 1.0
 		_tree_scale_spinbox.editable = has_region
@@ -233,6 +238,12 @@ func _build_ui() -> void:
 	_density_spinbox.allow_greater = true
 	_density_spinbox.value_changed.connect(_on_density_changed)
 	density_row.add_child(_density_spinbox)
+
+	_macro_overlay_checkbox = CheckBox.new()
+	_macro_overlay_checkbox.text = "Macro Overlay"
+	_macro_overlay_checkbox.button_pressed = true
+	_macro_overlay_checkbox.toggled.connect(_on_macro_overlay_enabled_toggled)
+	root.add_child(_macro_overlay_checkbox)
 
 	var tree_scale_row := HBoxContainer.new()
 	tree_scale_row.add_theme_constant_override("separation", 8)
@@ -436,6 +447,12 @@ func _on_density_changed(value: float) -> void:
 	if _syncing:
 		return
 	density_multiplier_changed.emit(maxf(value, 0.0))
+
+
+func _on_macro_overlay_enabled_toggled(pressed: bool) -> void:
+	if _syncing:
+		return
+	macro_overlay_enabled_changed.emit(pressed)
 
 
 func _on_tree_scale_changed(value: float) -> void:

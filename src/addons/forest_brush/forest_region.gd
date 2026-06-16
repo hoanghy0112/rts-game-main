@@ -44,6 +44,13 @@ enum PaintMode {
 		density_multiplier = clamped_value
 		_notify_cells_changed([], true)
 
+@export var macro_overlay_enabled := true:
+	set(value):
+		if macro_overlay_enabled == value:
+			return
+		macro_overlay_enabled = value
+		resources_changed.emit()
+
 @export_group("Tree Placement")
 @export_range(0.05, 8.0, 0.01, "or_greater") var tree_scale_multiplier: float = 1.0:
 	set(value):
@@ -142,9 +149,6 @@ var _forest_cells_revision := 0
 var _suspend_cell_notifications := false
 var _editor_gizmo_update_pending := false
 var _editor_runtime_preview_batch_depth := 0
-var _editor_runtime_preview_batch_dirty_chunks: Dictionary = {}
-var _editor_runtime_preview_batch_force_full_rebuild := false
-var _editor_runtime_preview_batch_has_changes := false
 var _runtime_container: Node3D
 var _scene_part_cache: Dictionary = {}
 
@@ -195,7 +199,6 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	_editor_gizmo_update_pending = false
 	_editor_runtime_preview_batch_depth = 0
-	_clear_editor_runtime_preview_batch_state()
 	clear_runtime_instances()
 
 
@@ -318,7 +321,13 @@ func to_runtime_data() -> Dictionary:
 
 
 func get_macro_detail_data() -> Dictionary:
+	if not macro_overlay_enabled:
+		return {}
 	return to_runtime_data()
+
+
+func should_trigger_macro_overlay() -> bool:
+	return macro_overlay_enabled
 
 
 func rebuild_runtime_preview() -> void:
@@ -447,36 +456,18 @@ func begin_editor_runtime_preview_batch() -> void:
 	if not Engine.is_editor_hint():
 		return
 
-	if _editor_runtime_preview_batch_depth == 0:
-		_clear_editor_runtime_preview_batch_state()
 	_editor_runtime_preview_batch_depth += 1
 
 
-func end_editor_runtime_preview_batch(rebuild: bool) -> void:
+func end_editor_runtime_preview_batch(_rebuild: bool) -> void:
 	if not Engine.is_editor_hint():
 		return
 
 	if _editor_runtime_preview_batch_depth <= 0:
 		_editor_runtime_preview_batch_depth = 0
-		_clear_editor_runtime_preview_batch_state()
 		return
 
 	_editor_runtime_preview_batch_depth -= 1
-	if _editor_runtime_preview_batch_depth > 0:
-		return
-
-	var has_changes := _editor_runtime_preview_batch_has_changes
-	var force_full_rebuild := _editor_runtime_preview_batch_force_full_rebuild
-	var dirty_chunks := _get_editor_runtime_preview_batch_dirty_chunks()
-	_clear_editor_runtime_preview_batch_state()
-
-	if not rebuild or not has_changes or not is_inside_tree() or not _has_runtime_container():
-		return
-
-	if force_full_rebuild or dirty_chunks.is_empty():
-		rebuild_runtime_preview()
-	else:
-		rebuild_runtime_chunks(dirty_chunks)
 
 
 func request_editor_gizmo_update() -> void:
@@ -505,14 +496,6 @@ func _notify_cells_changed(dirty_chunks: Array[Vector2i] = [], force_full_rebuil
 	cells_changed.emit()
 	if Engine.is_editor_hint() and is_inside_tree():
 		request_editor_gizmo_update()
-		if _editor_runtime_preview_batch_depth > 0:
-			_accumulate_editor_runtime_preview_batch_change(dirty_chunks, force_full_rebuild)
-			return
-		if _has_runtime_container():
-			if force_full_rebuild or dirty_chunks.is_empty():
-				rebuild_runtime_preview()
-			else:
-				rebuild_runtime_chunks(dirty_chunks)
 	elif is_inside_tree():
 		if force_full_rebuild or dirty_chunks.is_empty():
 			rebuild_runtime_preview()
@@ -523,39 +506,8 @@ func _notify_cells_changed(dirty_chunks: Array[Vector2i] = [], force_full_rebuil
 func _notify_resource_rendering_changed() -> void:
 	if Engine.is_editor_hint() and is_inside_tree():
 		request_editor_gizmo_update()
-		if _has_runtime_container():
-			rebuild_runtime_preview()
 	elif is_inside_tree():
 		rebuild_runtime_preview()
-
-
-func _accumulate_editor_runtime_preview_batch_change(dirty_chunks: Array[Vector2i], force_full_rebuild: bool) -> void:
-	_editor_runtime_preview_batch_has_changes = true
-	if force_full_rebuild or dirty_chunks.is_empty():
-		_editor_runtime_preview_batch_force_full_rebuild = true
-		_editor_runtime_preview_batch_dirty_chunks.clear()
-		return
-
-	if _editor_runtime_preview_batch_force_full_rebuild:
-		return
-
-	for chunk_coord: Vector2i in dirty_chunks:
-		_editor_runtime_preview_batch_dirty_chunks[chunk_coord] = true
-
-
-func _get_editor_runtime_preview_batch_dirty_chunks() -> Array[Vector2i]:
-	var dirty_chunks: Array[Vector2i] = []
-	for key: Variant in _editor_runtime_preview_batch_dirty_chunks.keys():
-		if key is Vector2i:
-			dirty_chunks.append(key as Vector2i)
-	dirty_chunks.sort_custom(ForestRegionData._compare_chunks)
-	return dirty_chunks
-
-
-func _clear_editor_runtime_preview_batch_state() -> void:
-	_editor_runtime_preview_batch_dirty_chunks.clear()
-	_editor_runtime_preview_batch_force_full_rebuild = false
-	_editor_runtime_preview_batch_has_changes = false
 
 
 func _ensure_region_data() -> ForestRegionData:
