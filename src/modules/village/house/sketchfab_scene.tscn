@@ -3,6 +3,7 @@
 [ext_resource type="PackedScene" uid="uid://bftil0257jjrg" path="res://assets/models/village/house/cartoon_hut_3d_modal_pack.glb" id="1_37041"]
 
 [node name="Sketchfab_Scene" unique_id=1507752805 instance=ExtResource("1_37041")]
+transform = Transform3D(4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0)
 
 [node name="Sketchfab_model" parent="." index="0" unique_id=1950507734]
-transform = Transform3D(2, 0, 0, 0, -8.742278e-08, 2, 0, -2, -8.742278e-08, 0, 0, 0)
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 0, 0, 0)
