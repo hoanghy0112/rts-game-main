@@ -21,7 +21,7 @@
 [ext_resource type="Resource" uid="uid://ddjvslcyqt2n6" path="res://maps/midlands/midlands_movement_map.res" id="16_oh3oi"]
 [ext_resource type="Script" uid="uid://d3wjqj5bpxc8i" path="res://modules/map/movement_map_generator.gd" id="17_movement_generator"]
 [ext_resource type="Script" uid="uid://djmxfbho3p8m7" path="res://modules/map/movement_map_overlay.gd" id="18_movement_overlay"]
-[ext_resource type="PackedScene" path="res://modules/village/house/thatched_hut_on_stilts.tscn" id="20_kw3xr"]
+[ext_resource type="PackedScene" uid="uid://cvuack38vnepd" path="res://modules/village/house/thatched_hut_on_stilts.tscn" id="20_kw3xr"]
 [ext_resource type="PackedScene" uid="uid://b66w2jyio1s8j" path="res://modules/village/house/sketchfab_scene.tscn" id="21_8pf6x"]
 [ext_resource type="Resource" uid="uid://tknebxuix320" path="res://modules/village/fields/crops/rice_crop.tres" id="21_i0v51"]
 [ext_resource type="Resource" uid="uid://cbt85dpbv5s88" path="res://maps/midlands/midlands_village_cell_data.res" id="23_village_cells"]
@@ -106,9 +106,6 @@ shader_parameter/i_uv2_sides = 0
 
 [sub_resource type="Resource" id="Resource_3gsgl"]
 script = ExtResource("11_setmg")
-peasant_target_count = null
-peasant_spawn_rate_per_minute = null
-peasant_death_rate_per_minute = null
 metadata/_custom_type_script = "uid://7ee2y0ifnlws"
 
 [sub_resource type="Resource" id="Resource_kw3xr"]
@@ -293,13 +290,7 @@ default_crop_type = ExtResource("21_i0v51")
 terrain_path = NodePath("../Terrain3D")
 season_weather_path = NodePath("../SeasonWeatherSystem")
 field_terrain_registry_path = NodePath("../FieldTerrainRegistry")
-runtime_peasant_batch_size = null
-peasant_target_count = null
-peasant_spawn_rate_per_minute = null
-peasant_death_rate_per_minute = null
-peasant_house_spawn_radius = null
-peasant_roam_radius = null
-peasant_death_cleanup_seconds = null
+peasant_target_count = 20
 cell_data = ExtResource("23_village_cells")
 metadata/_custom_type_script = "uid://dt64gdrujovkr"
 
