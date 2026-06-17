@@ -9,7 +9,7 @@ const STATE_IDLE := &"idle"
 const STATE_WALK := &"walk"
 const STATE_RUN := &"run"
 const STATE_FIELD_TASK := &"field_task"
-const STATE_SPEAR_ATTACK := &"spear_attack"
+const STATE_TOOL_ACTION := &"tool_action"
 const STATE_DEAD := &"dead"
 
 @export_group("Stats")
@@ -45,6 +45,7 @@ var _move_target := Vector3.ZERO
 var _has_move_target := false
 var _move_run := false
 var _timed_state_remaining := 0.0
+var _timed_state_duration := 0.0
 var _state_time := 0.0
 var _animation_phase := 0.0
 var _surface_height_source: Node3D
@@ -93,12 +94,13 @@ func set_move_target(world_position: Vector3, run: bool = false) -> void:
 	_has_move_target = true
 	_move_run = run
 	_timed_state_remaining = 0.0
+	_timed_state_duration = 0.0
 	_set_state(STATE_RUN if run else STATE_WALK)
 
 
 func clear_move_target() -> void:
 	_has_move_target = false
-	if is_alive() and _state != STATE_FIELD_TASK and _state != STATE_SPEAR_ATTACK:
+	if is_alive() and _state != STATE_FIELD_TASK and _state != STATE_TOOL_ACTION:
 		_set_state(STATE_IDLE)
 
 
@@ -115,11 +117,12 @@ func play_field_task(duration: float = 2.4) -> void:
 		return
 
 	_has_move_target = false
-	_timed_state_remaining = maxf(duration, 0.05)
+	_timed_state_duration = maxf(duration, 0.05)
+	_timed_state_remaining = _timed_state_duration
 	_set_state(STATE_FIELD_TASK)
 
 
-func attack_target(target: Node3D = null) -> void:
+func use_tool(target: Node3D = null, duration: float = -1.0) -> void:
 	if not is_alive():
 		return
 
@@ -130,8 +133,13 @@ func attack_target(target: Node3D = null) -> void:
 			_face_direction(to_target.normalized(), 1.0)
 
 	_has_move_target = false
-	_timed_state_remaining = maxf(attack_cooldown, 0.05)
-	_set_state(STATE_SPEAR_ATTACK)
+	_timed_state_duration = maxf(duration if duration > 0.0 else attack_cooldown, 0.05)
+	_timed_state_remaining = _timed_state_duration
+	_set_state(STATE_TOOL_ACTION)
+
+
+func attack_target(target: Node3D = null) -> void:
+	use_tool(target)
 
 
 func apply_damage(amount: float, reason: StringName = &"damage") -> void:
@@ -151,6 +159,7 @@ func kill(reason: StringName = &"death") -> void:
 	_health = 0.0
 	_has_move_target = false
 	_timed_state_remaining = 0.0
+	_timed_state_duration = 0.0
 	velocity = Vector3.ZERO
 	_set_state(STATE_DEAD)
 	health_changed.emit(_health, max_health)
@@ -162,6 +171,7 @@ func revive_at(world_position: Vector3) -> void:
 	_health = maxf(max_health, 1.0)
 	_has_move_target = false
 	_timed_state_remaining = 0.0
+	_timed_state_duration = 0.0
 	velocity = Vector3.ZERO
 	_set_state(STATE_IDLE)
 	health_changed.emit(_health, max_health)
@@ -193,7 +203,8 @@ func _update_timed_state(delta: float) -> void:
 		return
 	if not is_alive():
 		return
-	if _state == STATE_FIELD_TASK or _state == STATE_SPEAR_ATTACK:
+	_timed_state_duration = 0.0
+	if _state == STATE_FIELD_TASK or _state == STATE_TOOL_ACTION:
 		_set_state(STATE_IDLE)
 
 
@@ -203,7 +214,7 @@ func _update_movement(delta: float) -> void:
 		move_and_slide()
 		return
 
-	var can_move := _state != STATE_FIELD_TASK and _state != STATE_SPEAR_ATTACK
+	var can_move := _state != STATE_FIELD_TASK and _state != STATE_TOOL_ACTION
 	if _has_move_target and can_move:
 		var to_target := _move_target - global_position
 		to_target.y = 0.0
@@ -311,8 +322,8 @@ func _update_procedural_pose(delta: float) -> void:
 		right_arm_pitch = -0.9 - task_wave * 0.12
 		left_leg_pitch = 0.12
 		right_leg_pitch = -0.12
-	elif _state == STATE_SPEAR_ATTACK:
-		var progress := 1.0 - clampf(_timed_state_remaining / maxf(attack_cooldown, 0.05), 0.0, 1.0)
+	elif _state == STATE_TOOL_ACTION:
+		var progress := 1.0 - clampf(_timed_state_remaining / maxf(_timed_state_duration, 0.05), 0.0, 1.0)
 		var thrust := sin(progress * PI)
 		torso_pitch = -0.18 * thrust
 		right_arm_pitch = -1.45 * thrust

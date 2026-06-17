@@ -9,7 +9,7 @@ class_name PeasantNPC
 @export_range(0.25, 30.0, 0.05, "or_greater") var max_task_seconds: float = 5.0
 @export_range(0.0, 1.0, 0.01) var field_task_chance: float = 0.42
 @export_range(0.0, 1.0, 0.01) var run_chance: float = 0.08
-@export_range(0.0, 1.0, 0.01) var spear_practice_chance: float = 0.04
+@export_range(0.0, 1.0, 0.01) var tool_practice_chance: float = 0.04
 @export_range(0.0, 256.0, 0.1, "or_greater") var roam_radius: float = 72.0
 @export_range(0.0, 16.0, 0.1, "or_greater") var target_jitter_radius: float = 1.6
 @export_range(0.5, 32.0, 0.1, "or_greater") var min_roam_target_distance: float = 2.0
@@ -67,7 +67,7 @@ func _update_behavior(delta: float) -> void:
 		_reset_decision_timer()
 		return
 
-	if has_active_move_target() or get_state() == STATE_FIELD_TASK or get_state() == STATE_SPEAR_ATTACK:
+	if has_active_move_target() or get_state() == STATE_FIELD_TASK or get_state() == STATE_TOOL_ACTION:
 		return
 
 	_decision_timer -= delta
@@ -78,8 +78,8 @@ func _update_behavior(delta: float) -> void:
 
 
 func _choose_next_behavior() -> void:
-	if _rng.randf() < spear_practice_chance:
-		attack_target()
+	if _rng.randf() < tool_practice_chance:
+		use_tool()
 		_reset_decision_timer()
 		return
 

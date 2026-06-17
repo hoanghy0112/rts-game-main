@@ -1,12 +1,11 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene format=3 uid="uid://23wwcdcwsj0a"]
 
 [ext_resource type="PackedScene" path="res://modules/units/human/human.tscn" id="1_human"]
-[ext_resource type="Script" path="res://modules/units/peasant/peasant_npc.gd" id="2_peasant_script"]
-[ext_resource type="PackedScene" path="res://modules/units/human/low_poly_spear.tscn" id="3_spear"]
+[ext_resource type="Script" uid="uid://bhoey8ait0jqf" path="res://modules/units/peasant/peasant_npc.gd" id="2_peasant_script"]
+[ext_resource type="PackedScene" path="res://modules/units/human/low_poly_hoe.tscn" id="3_hoe"]
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_straw"]
-albedo_color = Color(0.78, 0.62, 0.27, 1)
-roughness = 0.92
+[sub_resource type="BoxMesh" id="BoxMesh_sash"]
+size = Vector3(0.46, 0.08, 0.035)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_sash"]
 albedo_color = Color(0.62, 0.34, 0.18, 1)
@@ -18,37 +17,50 @@ bottom_radius = 0.42
 height = 0.035
 radial_segments = 10
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_straw"]
+albedo_color = Color(0.78, 0.62, 0.27, 1)
+roughness = 0.92
+
 [sub_resource type="CylinderMesh" id="CylinderMesh_hat_cap"]
 top_radius = 0.08
 bottom_radius = 0.28
 height = 0.18
 radial_segments = 10
 
-[sub_resource type="BoxMesh" id="BoxMesh_sash"]
-size = Vector3(0.46, 0.08, 0.035)
-
-[node name="Peasant" instance=ExtResource("1_human")]
+[node name="Peasant" unique_id=1128011371 instance=ExtResource("1_human")]
 script = ExtResource("2_peasant_script")
+behavior_enabled = true
+min_idle_seconds = 1.0
+max_idle_seconds = 3.5
+min_task_seconds = 2.0
+max_task_seconds = 5.0
+field_task_chance = 0.42
+run_chance = 0.08
+tool_practice_chance = 0.04
+roam_radius = 72.0
+target_jitter_radius = 1.6
+min_roam_target_distance = 2.0
+house_patrol_radius = 8.0
 max_health = 35.0
 walk_speed = 1.35
 run_speed = 2.85
 attack_damage = 6.0
 attack_cooldown = 1.15
 
-[node name="HatBrim" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="2"]
-transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.2, 0)
-mesh = SubResource("CylinderMesh_hat_brim")
-surface_material_override/0 = SubResource("StandardMaterial3D_straw")
-
-[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="3"]
-transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.29, 0)
-mesh = SubResource("CylinderMesh_hat_cap")
-surface_material_override/0 = SubResource("StandardMaterial3D_straw")
-
-[node name="Sash" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="1"]
+[node name="Sash" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="1" unique_id=931238857]
 transform = Transform3D(0.866025, -0.5, 0, 0.5, 0.866025, 0, 0, 0, 1, 0, -0.08, -0.145)
 mesh = SubResource("BoxMesh_sash")
 surface_material_override/0 = SubResource("StandardMaterial3D_sash")
 
-[node name="LowPolySpear" parent="VisualRoot/Armature/RightArm/RightHandSocket" index="0" instance=ExtResource("3_spear")]
-transform = Transform3D(0.707107, 0, -0.707107, 0, 1, 0, 0.707107, 0, 0.707107, 0.04, -0.02, -0.02)
+[node name="HatBrim" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="2" unique_id=1713046094]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.2, 0)
+mesh = SubResource("CylinderMesh_hat_brim")
+surface_material_override/0 = SubResource("StandardMaterial3D_straw")
+
+[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="3" unique_id=2121534040]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.29, 0)
+mesh = SubResource("CylinderMesh_hat_cap")
+surface_material_override/0 = SubResource("StandardMaterial3D_straw")
+
+[node name="LowPolyHoe" parent="VisualRoot/Armature/RightArm/RightHandSocket" index="0" unique_id=519742723 instance=ExtResource("3_hoe")]
+transform = Transform3D(-0.09122348, 0, -0.9958302, 0, 1, 0, 0.9958302, 0, -0.09122348, 0.03000006, 0.027826637, -0.020000007)

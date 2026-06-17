@@ -33,7 +33,8 @@ func _check_default_peasant_scene_loads(failures: Array[String]) -> void:
 	var peasant := PeasantScene.instantiate()
 	_expect(peasant is CharacterBody3D, "Peasant scene should instantiate a CharacterBody3D root", failures)
 	_expect(peasant.has_method("apply_damage"), "Peasant scene should expose health damage API", failures)
-	_expect(peasant.has_method("attack_target"), "Peasant scene should expose spear attack API", failures)
+	_expect(peasant.has_method("use_tool"), "Peasant scene should expose tool action API", failures)
+	_expect(peasant.has_method("attack_target"), "Peasant scene should keep legacy timed action wrapper API", failures)
 	peasant.free()
 
 
@@ -53,7 +54,7 @@ func _check_peasant_house_patrol_fallback(failures: Array[String]) -> void:
 	var peasant := PeasantScene.instantiate() as CharacterBody3D
 	peasant.position = Vector3.ZERO
 	peasant.set("field_task_chance", 0.0)
-	peasant.set("spear_practice_chance", 0.0)
+	peasant.set("tool_practice_chance", 0.0)
 	peasant.set("target_jitter_radius", 0.0)
 	peasant.set("min_roam_target_distance", 2.0)
 	peasant.set("house_patrol_radius", 6.0)
