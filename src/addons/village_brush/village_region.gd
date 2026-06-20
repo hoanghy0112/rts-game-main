@@ -5,10 +5,15 @@ class_name VillageRegion
 const DEFAULT_HOUSE_SCENE: PackedScene = preload("res://addons/village_brush/defaults/default_house.tscn")
 const DEFAULT_PEASANT_SCENE: PackedScene = preload("res://modules/units/peasant/peasant.tscn")
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
+const DEFAULT_BALANCE_CONFIG: Resource = preload("res://modules/village/default_village_balance.tres")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
 const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
+const SELECTABLE_TYPE_META := &"village_selectable_type"
+const SELECTABLE_REGION_PATH_META := &"village_region_path"
+const SELECTABLE_FLAG_TYPE := &"flag"
+const SELECTABLE_VILLAGE_TYPE := &"village"
 const ROAD_NEIGHBOR_OFFSETS := [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
@@ -28,6 +33,7 @@ const DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE := 0.0
 
 signal cells_changed
 signal resources_changed
+signal food_state_changed(summary: Dictionary)
 
 enum PaintMode {
 	HOUSE,
@@ -66,9 +72,15 @@ enum PaintMode {
 		default_crop_type = value
 		resources_changed.emit()
 
+@export var balance_config: Resource = DEFAULT_BALANCE_CONFIG:
+	set(value):
+		balance_config = value
+		resources_changed.emit()
+		_refresh_food_summary(true)
+
 @export_node_path("Node3D") var terrain_path: NodePath
-@export var season_weather_path: NodePath
 @export var field_terrain_registry_path: NodePath
+@export var time_system_path: NodePath
 @export var apply_runtime_terrain_edits := false
 @export var auto_apply_terrain_textures := true
 @export var auto_apply_field_road_textures := false
@@ -98,8 +110,11 @@ enum PaintMode {
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_footprint_padding: float = 0.2
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_region_margin: float = 0.75
 @export_range(0.0, 32.0, 0.1, "or_greater") var house_road_clearance: float = 2.0
-@export_range(0, 512, 1, "or_greater") var house_max_count: int = 18
-@export_range(0.25, 4.0, 0.05, "or_greater") var house_density: float = 1.5
+@export_range(0, 512, 1, "or_greater") var house_max_count: int = 32
+@export_range(0.25, 4.0, 0.05, "or_greater") var house_density: float = 2.0
+@export_range(0.0, 128.0, 0.1, "or_greater") var village_house_ring_margin: float = 6.0
+@export_range(0.0, 8.0, 0.05, "or_greater") var village_ring_surface_offset: float = 0.65
+@export_range(0.0, 64.0, 0.1, "or_greater") var village_ground_highlight_width: float = 12.0
 
 @export_range(0, 512, 1, "or_greater") var peasant_target_count: int = DEFAULT_PEASANT_TARGET_COUNT
 @export_range(0.0, 512.0, 0.1, "or_greater") var peasant_spawn_rate_per_minute: float = DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE
@@ -177,7 +192,20 @@ var _runtime_road_original_regions: Array = []
 var _runtime_road_copied_regions: Array = []
 var _runtime_road_using_region_copies := false
 var _runtime_field_terrain_shape_applied := false
+var _village_ring_node: Node3D
+var _village_ring_material: StandardMaterial3D
+var _village_ground_highlight_material: StandardMaterial3D
 var _runtime_peasants: Array[Node3D] = []
+var _house_food_records: Array[Dictionary] = []
+var _house_food_record_lookup: Dictionary = {}
+var _village_food_summary: Dictionary = {}
+var _food_total_field_area_m2 := 0.0
+var _food_last_shortage_kg := 0.0
+var _food_cumulative_shortage_kg := 0.0
+var _food_days_elapsed := 0
+var _food_last_farmer_count := -1
+var _time_system_node: Node
+var _last_time_snapshot: Dictionary = {}
 var _peasant_runtime_terrain: Node3D
 var _peasant_anchors: Dictionary = {}
 var _peasant_population_rng := RandomNumberGenerator.new()
@@ -209,6 +237,7 @@ func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
 
+	_bind_time_system_day_signal()
 	if async_runtime_preview_on_ready:
 		rebuild_runtime_preview_deferred.call_deferred()
 	else:
@@ -227,6 +256,7 @@ func _exit_tree() -> void:
 	if Engine.is_editor_hint():
 		return
 
+	_unbind_time_system_day_signal()
 	_restore_runtime_road_texture()
 
 
@@ -414,9 +444,10 @@ func to_runtime_data() -> Dictionary:
 		"house_scenes": _get_house_scenes(),
 		"peasant_scene": _get_peasant_scene(),
 		"default_crop_type": _get_default_crop_type(),
+		"balance_config": _get_balance_config(),
 		"terrain_path": terrain_path,
-		"season_weather_path": season_weather_path,
 		"field_terrain_registry_path": field_terrain_registry_path,
+		"time_system_path": time_system_path,
 		"apply_runtime_terrain_edits": apply_runtime_terrain_edits,
 		"auto_apply_terrain_textures": auto_apply_terrain_textures,
 		"auto_apply_field_road_textures": auto_apply_field_road_textures,
@@ -444,6 +475,9 @@ func to_runtime_data() -> Dictionary:
 		"house_road_clearance": house_road_clearance,
 		"house_max_count": house_max_count,
 		"house_density": house_density,
+		"village_house_ring_margin": village_house_ring_margin,
+		"village_ring_surface_offset": village_ring_surface_offset,
+		"village_ground_highlight_width": village_ground_highlight_width,
 		"peasant_target_count": _get_effective_peasant_target_count(),
 		"peasant_spawn_rate_per_minute": _get_effective_peasant_spawn_rate_per_minute(),
 		"peasant_death_rate_per_minute": _get_effective_peasant_death_rate_per_minute(),
@@ -483,6 +517,102 @@ func get_macro_detail_data() -> Dictionary:
 	return data
 
 
+func get_house_food_records() -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	for record: Dictionary in _house_food_records:
+		records.append(record.duplicate(true))
+	return records
+
+
+func get_house_food_record(id: Variant) -> Dictionary:
+	var house_id := StringName(str(id))
+	if not _house_food_record_lookup.has(house_id):
+		return {}
+	return (_house_food_record_lookup[house_id] as Dictionary).duplicate(true)
+
+
+func get_village_food_summary() -> Dictionary:
+	if _village_food_summary.is_empty():
+		_refresh_food_summary(false)
+	return _village_food_summary.duplicate(true)
+
+
+func advance_food_days(days: int) -> void:
+	var day_count := maxi(days, 0)
+	if day_count <= 0:
+		return
+
+	var house_count := _house_food_records.size()
+	var daily_production := _get_daily_rice_production_kg()
+	var daily_consumption := _get_daily_rice_consumption_kg()
+	var shortage_total := 0.0
+	for _day: int in range(day_count):
+		if house_count <= 0:
+			shortage_total += daily_consumption
+			continue
+
+		var production_share := daily_production / float(house_count)
+		var consumption_share := daily_consumption / float(house_count)
+		for record: Dictionary in _house_food_records:
+			var reserve := maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
+			reserve += production_share
+			var consumed := minf(reserve, consumption_share)
+			reserve -= consumed
+			var house_shortage := maxf(consumption_share - consumed, 0.0)
+			shortage_total += house_shortage
+			record["food_reserve_kg"] = reserve
+			record["daily_production_share_kg"] = production_share
+			record["daily_consumption_share_kg"] = consumption_share
+			record["daily_net_kg"] = production_share - consumption_share
+			record["shortage_kg"] = house_shortage
+			record["food_days_remaining"] = reserve / consumption_share if consumption_share > 0.0 else 0.0
+
+	_food_last_shortage_kg = shortage_total
+	_food_cumulative_shortage_kg += shortage_total
+	_food_days_elapsed += day_count
+	_refresh_food_summary(true)
+
+
+func _bind_time_system_day_signal() -> void:
+	_unbind_time_system_day_signal()
+	_time_system_node = _get_time_system_node()
+	if not _time_system_node:
+		return
+
+	var callable := Callable(self, "_on_time_day_changed")
+	if _time_system_node.has_signal("day_changed") and not _time_system_node.is_connected("day_changed", callable):
+		_time_system_node.connect("day_changed", callable)
+
+	if _time_system_node.has_method("get_current_snapshot"):
+		var snapshot: Variant = _time_system_node.call("get_current_snapshot")
+		if snapshot is Dictionary:
+			_last_time_snapshot = (snapshot as Dictionary).duplicate(true)
+
+
+func _unbind_time_system_day_signal() -> void:
+	if not _time_system_node:
+		return
+
+	var callable := Callable(self, "_on_time_day_changed")
+	if _time_system_node.has_signal("day_changed") and _time_system_node.is_connected("day_changed", callable):
+		_time_system_node.disconnect("day_changed", callable)
+	_time_system_node = null
+
+
+func _get_time_system_node() -> Node:
+	if time_system_path.is_empty():
+		return null
+	return get_node_or_null(time_system_path)
+
+
+func _on_time_day_changed(snapshot: Dictionary, days_elapsed: int = 1) -> void:
+	_last_time_snapshot = snapshot.duplicate(true)
+	var day_count := maxi(days_elapsed, 0)
+	if day_count <= 0:
+		return
+	advance_food_days(day_count)
+
+
 func rebuild_runtime_preview() -> void:
 	if Engine.is_editor_hint():
 		return
@@ -506,6 +636,7 @@ func rebuild_runtime_preview() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = absi(generation_seed)
 	var house_placements := _build_house_placements(road_polylines, rng)
+	_initialize_house_food_records(house_placements, field_generation)
 
 	if apply_runtime_terrain_edits or auto_apply_terrain_textures:
 		_apply_field_terrain_and_road_texture(
@@ -520,7 +651,10 @@ func rebuild_runtime_preview() -> void:
 		_runtime_field_terrain_shape_applied = false
 	_generate_houses(terrain, house_placements)
 	_generate_fields(terrain, field_generation)
+	_generate_village_ring(terrain, house_placements)
+	_generate_village_flag(terrain)
 	_generate_peasants(terrain, house_placements, road_polylines, field_generation)
+	_refresh_food_summary(true)
 
 
 func rebuild_runtime_preview_deferred() -> void:
@@ -572,6 +706,7 @@ func rebuild_runtime_preview_async() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = absi(generation_seed)
 	var house_placements := _build_house_placements(road_polylines, rng)
+	_initialize_house_food_records(house_placements, field_generation)
 	_mark_startup_phase("village_layout_ready", {
 		"houses": house_placements.size(),
 		"plots": (field_generation.get("plots", []) as Array).size(),
@@ -597,7 +732,10 @@ func rebuild_runtime_preview_async() -> void:
 		return
 
 	_generate_fields_async(terrain, field_generation)
+	_generate_village_ring(terrain, house_placements)
+	_generate_village_flag(terrain)
 	await _generate_peasants_async(terrain, house_placements, road_polylines, field_generation)
+	_refresh_food_summary(true)
 	_mark_startup_phase("village_ready", {
 		"houses": house_placements.size(),
 		"peasants": _get_alive_peasant_count(),
@@ -609,6 +747,16 @@ func clear_runtime_instances() -> void:
 	_restore_runtime_road_texture()
 	_runtime_field_terrain_shape_applied = false
 	_runtime_peasants.clear()
+	_village_ring_node = null
+	_village_ring_material = null
+	_village_ground_highlight_material = null
+	_house_food_records.clear()
+	_house_food_record_lookup.clear()
+	_food_total_field_area_m2 = 0.0
+	_food_last_shortage_kg = 0.0
+	_food_cumulative_shortage_kg = 0.0
+	_food_days_elapsed = 0
+	_food_last_farmer_count = -1
 	_peasant_runtime_terrain = null
 	_peasant_anchors.clear()
 	_peasant_spawn_budget = 0.0
@@ -625,6 +773,7 @@ func clear_runtime_instances() -> void:
 		container.free()
 
 	_runtime_container = null
+	_refresh_food_summary(true)
 
 
 func _to_cell_lookup(cells: Array[Vector2i]) -> Dictionary:
@@ -737,6 +886,329 @@ func _generate_houses_async(terrain: Node3D, house_placements: Array[Dictionary]
 
 		if (placement_index + 1) % runtime_house_batch_size == 0:
 			await get_tree().process_frame
+
+
+func _generate_village_ring(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
+	if not _runtime_container or house_placements.is_empty():
+		return
+
+	var metrics := _get_house_ring_metrics(house_placements)
+	var center: Vector2 = metrics.get("center", Vector2.ZERO)
+	var radius := maxf(float(metrics.get("radius", 0.0)), cell_size)
+	var center_world := _get_surface_world_position_from_local_2d(center, terrain)
+	var ring := Node3D.new()
+	ring.name = "VillageSelectionRing"
+	ring.set_meta(SELECTABLE_TYPE_META, SELECTABLE_VILLAGE_TYPE)
+	ring.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+	_runtime_container.add_child(ring)
+	ring.owner = null
+	ring.position = _world_to_region_local(center_world)
+
+	_village_ring_material = _make_village_ring_material(false)
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "RingMesh"
+	mesh_instance.mesh = _make_village_ring_mesh(terrain, center, center_world.y, radius)
+	mesh_instance.material_override = _village_ring_material
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mesh_instance.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	ring.add_child(mesh_instance)
+
+	_village_ground_highlight_material = _make_village_ground_highlight_material(false)
+	var ground_highlight := MeshInstance3D.new()
+	ground_highlight.name = "GroundHighlightMesh"
+	ground_highlight.mesh = _make_village_ground_highlight_mesh(terrain, center, center_world.y, radius)
+	ground_highlight.material_override = _village_ground_highlight_material
+	ground_highlight.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground_highlight.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	ring.add_child(ground_highlight)
+
+	_add_village_ring_click_proxies(ring, radius)
+	_village_ring_node = ring
+	_configure_runtime_visibility_recursive(
+		ring,
+		village_visible_distance_meters,
+		village_visibility_fade_margin_meters
+	)
+
+
+func set_village_hovered(hovered: bool) -> void:
+	if not is_instance_valid(_village_ring_node) or not _village_ring_material:
+		return
+
+	if hovered:
+		_village_ring_material.albedo_color = Color(1.0, 0.82, 0.34, 0.72)
+		_village_ring_material.emission = Color(1.0, 0.58, 0.12, 1.0)
+		_village_ring_material.emission_energy_multiplier = 0.55
+		if _village_ground_highlight_material:
+			_village_ground_highlight_material.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
+	else:
+		_village_ring_material.albedo_color = Color(0.34, 0.86, 0.9, 0.48)
+		_village_ring_material.emission = Color(0.12, 0.48, 0.54, 1.0)
+		_village_ring_material.emission_energy_multiplier = 0.22
+		if _village_ground_highlight_material:
+			_village_ground_highlight_material.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+	_village_ring_node.scale = Vector3.ONE
+
+
+func _get_house_ring_metrics(house_placements: Array[Dictionary]) -> Dictionary:
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+
+	for placement: Dictionary in house_placements:
+		var point: Vector2 = placement.get("position", Vector2.ZERO)
+		var radius := maxf(float(placement.get("radius", cell_size * 0.5)), cell_size * 0.5)
+		min_point.x = minf(min_point.x, point.x - radius)
+		min_point.y = minf(min_point.y, point.y - radius)
+		max_point.x = maxf(max_point.x, point.x + radius)
+		max_point.y = maxf(max_point.y, point.y + radius)
+
+	if not is_finite(min_point.x) or not is_finite(max_point.x):
+		return {"center": _get_village_center_local_2d(), "radius": cell_size}
+
+	var center := (min_point + max_point) * 0.5
+	var radius := 0.0
+	for corner: Vector2 in [
+		min_point,
+		Vector2(min_point.x, max_point.y),
+		max_point,
+		Vector2(max_point.x, min_point.y),
+	]:
+		radius = maxf(radius, center.distance_to(corner))
+
+	return {
+		"center": center,
+		"radius": radius + maxf(village_house_ring_margin, 0.0),
+	}
+
+
+func _make_village_ring_mesh(terrain: Node3D, center: Vector2, center_height: float, radius: float) -> ImmediateMesh:
+	var mesh := ImmediateMesh.new()
+	var segments := clampi(ceili(radius * TAU / 5.0), 32, 96)
+	var band_width := clampf(radius * 0.035, 0.65, 2.4)
+	var inner_radius := maxf(radius - band_width * 0.5, 0.1)
+	var outer_radius := radius + band_width * 0.5
+
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index: int in range(segments):
+		var angle_a := TAU * float(index) / float(segments)
+		var angle_b := TAU * float(index + 1) / float(segments)
+		var inner_a := _get_ring_vertex(terrain, center, center_height, inner_radius, angle_a)
+		var outer_a := _get_ring_vertex(terrain, center, center_height, outer_radius, angle_a)
+		var inner_b := _get_ring_vertex(terrain, center, center_height, inner_radius, angle_b)
+		var outer_b := _get_ring_vertex(terrain, center, center_height, outer_radius, angle_b)
+
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_add_vertex(outer_a)
+		mesh.surface_add_vertex(outer_b)
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_add_vertex(outer_b)
+		mesh.surface_add_vertex(inner_b)
+	mesh.surface_end()
+	return mesh
+
+
+func _make_village_ground_highlight_mesh(terrain: Node3D, center: Vector2, center_height: float, radius: float) -> ImmediateMesh:
+	var mesh := ImmediateMesh.new()
+	var segments := clampi(ceili(radius * TAU / 5.0), 32, 128)
+	var ring_band_width := clampf(radius * 0.035, 0.65, 2.4)
+	var inner_radius := radius + ring_band_width * 0.55
+	var outer_radius := inner_radius + clampf(village_ground_highlight_width, 2.0, 64.0)
+	var inner_color := Color(0.54, 0.92, 0.48, 0.24)
+	var outer_color := Color(0.54, 0.92, 0.48, 0.0)
+
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index: int in range(segments):
+		var angle_a := TAU * float(index) / float(segments)
+		var angle_b := TAU * float(index + 1) / float(segments)
+		var inner_a := _get_ground_highlight_vertex(terrain, center, center_height, inner_radius, angle_a)
+		var outer_a := _get_ground_highlight_vertex(terrain, center, center_height, outer_radius, angle_a)
+		var inner_b := _get_ground_highlight_vertex(terrain, center, center_height, inner_radius, angle_b)
+		var outer_b := _get_ground_highlight_vertex(terrain, center, center_height, outer_radius, angle_b)
+
+		mesh.surface_set_color(inner_color)
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_set_color(outer_color)
+		mesh.surface_add_vertex(outer_a)
+		mesh.surface_set_color(outer_color)
+		mesh.surface_add_vertex(outer_b)
+		mesh.surface_set_color(inner_color)
+		mesh.surface_add_vertex(inner_a)
+		mesh.surface_set_color(outer_color)
+		mesh.surface_add_vertex(outer_b)
+		mesh.surface_set_color(inner_color)
+		mesh.surface_add_vertex(inner_b)
+	mesh.surface_end()
+	return mesh
+
+
+func _get_ring_vertex(
+	terrain: Node3D,
+	center: Vector2,
+	center_height: float,
+	radius: float,
+	angle: float
+) -> Vector3:
+	var local_point := center + Vector2(cos(angle), sin(angle)) * radius
+	var world_position := _get_surface_world_position_from_local_2d(local_point, terrain)
+	return Vector3(
+		local_point.x - center.x,
+		world_position.y - center_height + maxf(village_ring_surface_offset, 0.0),
+		local_point.y - center.y
+	)
+
+
+func _get_ground_highlight_vertex(
+	terrain: Node3D,
+	center: Vector2,
+	center_height: float,
+	radius: float,
+	angle: float
+) -> Vector3:
+	var local_point := center + Vector2(cos(angle), sin(angle)) * radius
+	var world_position := _get_surface_world_position_from_local_2d(local_point, terrain)
+	return Vector3(
+		local_point.x - center.x,
+		world_position.y - center_height + maxf(village_ring_surface_offset * 0.5, 0.25),
+		local_point.y - center.y
+	)
+
+
+func _add_village_ring_click_proxies(ring: Node3D, radius: float) -> void:
+	var segments := clampi(ceili(radius * TAU / maxf(cell_size * 1.5, 4.0)), 16, 48)
+	var arc_length := radius * TAU / float(segments)
+	var radial_width := clampf(radius * 0.08, 2.4, 7.5)
+
+	_add_village_center_click_proxy(ring, radius)
+
+	for index: int in range(segments):
+		var angle := TAU * (float(index) + 0.5) / float(segments)
+		var proxy := StaticBody3D.new()
+		proxy.name = "VillageRingClickProxy_%02d" % index
+		proxy.collision_layer = 1
+		proxy.collision_mask = 0
+		proxy.input_ray_pickable = true
+		proxy.position = Vector3(cos(angle) * radius, maxf(village_ring_surface_offset, 0.0), sin(angle) * radius)
+		proxy.rotation.y = PI * 0.5 - angle
+
+		var shape := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(maxf(arc_length * 0.92, 1.0), 2.2, radial_width)
+		shape.shape = box
+		shape.position = Vector3(0.0, 1.0, 0.0)
+		proxy.add_child(shape)
+		ring.add_child(proxy)
+
+
+func _add_village_center_click_proxy(ring: Node3D, radius: float) -> void:
+	var proxy := StaticBody3D.new()
+	proxy.name = "VillageCenterClickProxy"
+	proxy.collision_layer = 1
+	proxy.collision_mask = 0
+	proxy.input_ray_pickable = true
+	proxy.position = Vector3(0.0, maxf(village_ring_surface_offset, 0.0), 0.0)
+
+	var shape := CollisionShape3D.new()
+	var cylinder := CylinderShape3D.new()
+	cylinder.radius = maxf(radius, 0.1)
+	cylinder.height = 5.0
+	shape.shape = cylinder
+	shape.position = Vector3(0.0, 2.5, 0.0)
+	proxy.add_child(shape)
+	ring.add_child(proxy)
+
+
+func _make_village_ring_material(hovered: bool) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = true
+	material.render_priority = 20
+	material.emission_enabled = true
+	if hovered:
+		material.albedo_color = Color(1.0, 0.82, 0.34, 0.72)
+		material.emission = Color(1.0, 0.58, 0.12, 1.0)
+		material.emission_energy_multiplier = 0.55
+	else:
+		material.albedo_color = Color(0.34, 0.86, 0.9, 0.48)
+		material.emission = Color(0.12, 0.48, 0.54, 1.0)
+		material.emission_energy_multiplier = 0.22
+	return material
+
+
+func _make_village_ground_highlight_material(hovered: bool) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = true
+	material.render_priority = 18
+	material.vertex_color_use_as_albedo = true
+	material.albedo_color = Color(1.0, 1.0, 1.0, 0.95 if hovered else 0.55)
+	return material
+
+
+func _generate_village_flag(terrain: Node3D) -> void:
+	if not _runtime_container:
+		return
+
+	var center := _get_village_center_local_2d()
+	var flag := Node3D.new()
+	flag.name = "VillageFlag"
+	flag.set_meta(SELECTABLE_TYPE_META, SELECTABLE_FLAG_TYPE)
+	flag.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+	_runtime_container.add_child(flag)
+	flag.owner = null
+	_set_runtime_node_position(flag, center, terrain)
+
+	var pole := MeshInstance3D.new()
+	pole.name = "Pole"
+	var pole_mesh := CylinderMesh.new()
+	pole_mesh.top_radius = 0.06
+	pole_mesh.bottom_radius = 0.06
+	pole_mesh.height = 3.2
+	pole_mesh.radial_segments = 8
+	pole.mesh = pole_mesh
+	pole.position = Vector3(0.0, 1.6, 0.0)
+	pole.material_override = _make_flag_material(Color(0.52, 0.36, 0.16, 1.0))
+	flag.add_child(pole)
+
+	var banner := MeshInstance3D.new()
+	banner.name = "Banner"
+	var banner_mesh := BoxMesh.new()
+	banner_mesh.size = Vector3(1.2, 0.68, 0.045)
+	banner.mesh = banner_mesh
+	banner.position = Vector3(0.62, 2.55, 0.0)
+	banner.material_override = _make_flag_material(Color(0.78, 0.12, 0.1, 1.0))
+	flag.add_child(banner)
+
+	var proxy := StaticBody3D.new()
+	proxy.name = "VillageFlagClickProxy"
+	proxy.collision_layer = 1
+	proxy.collision_mask = 0
+	proxy.input_ray_pickable = true
+	proxy.set_meta(SELECTABLE_TYPE_META, SELECTABLE_FLAG_TYPE)
+	proxy.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(2.0, 3.8, 2.0)
+	shape.shape = box
+	shape.position = Vector3(0.0, 1.9, 0.0)
+	proxy.add_child(shape)
+	flag.add_child(proxy)
+	_configure_runtime_visibility_recursive(
+		flag,
+		village_visible_distance_meters,
+		village_visibility_fade_margin_meters
+	)
+
+
+func _make_flag_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = 0.82
+	return material
 
 
 func _build_field_generation(road_polylines: Array) -> Dictionary:
@@ -969,9 +1441,11 @@ func _update_runtime_peasant_population(delta: float) -> void:
 	var alive_count := _get_alive_peasant_count()
 	if target_count <= 0:
 		_despawn_surplus_peasants(alive_count)
+		_refresh_food_summary_if_farmer_count_changed()
 		return
 	if alive_count > target_count:
 		_despawn_surplus_peasants(alive_count - target_count)
+		_refresh_food_summary_if_farmer_count_changed()
 		return
 
 	_update_peasant_ambient_deaths(delta)
@@ -980,10 +1454,12 @@ func _update_runtime_peasant_population(delta: float) -> void:
 
 	var missing_count := target_count - alive_count
 	if missing_count <= 0:
+		_refresh_food_summary_if_farmer_count_changed()
 		return
 
 	var spawn_rate := _get_effective_peasant_spawn_rate_per_minute()
 	if spawn_rate <= 0.0:
+		_refresh_food_summary_if_farmer_count_changed()
 		return
 
 	_peasant_spawn_budget += spawn_rate * delta / 60.0
@@ -995,6 +1471,7 @@ func _update_runtime_peasant_population(delta: float) -> void:
 
 		_peasant_spawn_budget -= 1.0
 		missing_count -= 1
+	_refresh_food_summary_if_farmer_count_changed()
 
 
 func _update_peasant_ambient_deaths(delta: float) -> void:
@@ -1061,6 +1538,7 @@ func _prune_runtime_peasants() -> void:
 
 func _on_runtime_peasant_died(_reason: StringName, peasant: Node3D) -> void:
 	_runtime_peasants.erase(peasant)
+	_refresh_food_summary_if_farmer_count_changed()
 	if not is_instance_valid(peasant):
 		return
 
@@ -1072,6 +1550,11 @@ func _on_runtime_peasant_died(_reason: StringName, peasant: Node3D) -> void:
 	await get_tree().create_timer(cleanup_delay).timeout
 	if is_instance_valid(peasant):
 		peasant.queue_free()
+
+
+func _refresh_food_summary_if_farmer_count_changed() -> void:
+	if _get_alive_peasant_count() != _food_last_farmer_count:
+		_refresh_food_summary(true)
 
 
 func _clear_runtime_field_registry() -> void:
@@ -1346,6 +1829,179 @@ func _duplicate_field_generation(field_generation: Dictionary) -> Dictionary:
 		"field_road_polylines": _duplicate_polylines(field_generation.get("field_road_polylines", [])),
 		"field_cells": _copy_cells_from_variant(field_generation.get("field_cells", [])),
 	}
+
+
+func _initialize_house_food_records(house_placements: Array[Dictionary], field_generation: Dictionary) -> void:
+	_house_food_records.clear()
+	_house_food_record_lookup.clear()
+	_food_total_field_area_m2 = _get_total_field_area_m2(field_generation)
+	_food_last_shortage_kg = 0.0
+	_food_cumulative_shortage_kg = 0.0
+	_food_days_elapsed = 0
+	_food_last_farmer_count = -1
+
+	var default_reserve := maxf(_get_balance_float(&"default_food_reserve_kg_per_house", 30.0), 0.0)
+	for index: int in range(house_placements.size()):
+		var placement := house_placements[index]
+		var house_id := _make_house_food_id(index)
+		placement["id"] = house_id
+		var local_point: Vector2 = placement.get("position", Vector2.ZERO)
+		var record := {
+			"id": house_id,
+			"house_id": house_id,
+			"display_name": "House %02d" % [index + 1],
+			"resident_count": _get_deterministic_house_resident_count(index, placement),
+			"food_reserve_kg": default_reserve,
+			"initial_food_reserve_kg": default_reserve,
+			"daily_production_share_kg": 0.0,
+			"daily_consumption_share_kg": 0.0,
+			"daily_net_kg": 0.0,
+			"shortage_kg": 0.0,
+			"food_days_remaining": 0.0,
+			"position": local_point,
+			"world_position": _region_local_to_world(Vector3(local_point.x, 0.0, local_point.y)),
+		}
+		_house_food_records.append(record)
+		_house_food_record_lookup[house_id] = record
+
+	_refresh_food_summary(false)
+
+
+func _make_house_food_id(index: int) -> StringName:
+	return StringName("house_%03d" % [index])
+
+
+func _get_deterministic_house_resident_count(index: int, placement: Dictionary) -> int:
+	var min_residents := maxi(_get_balance_int(&"house_min_villagers", 3), 0)
+	var max_residents := maxi(_get_balance_int(&"house_max_villagers", 4), min_residents)
+	var span := maxi(max_residents - min_residents + 1, 1)
+	var point: Vector2 = placement.get("position", Vector2.ZERO)
+	var mixed := int(generation_seed)
+	mixed = int((mixed * 1103515245 + 12345 + index * 2654435761) & 0x7fffffff)
+	mixed = int((mixed * 1103515245 + 12345 + roundi(point.x * 1000.0)) & 0x7fffffff)
+	mixed = int((mixed * 1103515245 + 12345 + roundi(point.y * 1000.0)) & 0x7fffffff)
+	return min_residents + (absi(mixed) % span)
+
+
+func _get_total_field_area_m2(field_generation: Dictionary) -> float:
+	var total_area := 0.0
+	var plots: Array = field_generation.get("plots", [])
+	for plot_variant: Variant in plots:
+		if plot_variant is FieldPlotData:
+			total_area += maxf((plot_variant as FieldPlotData).area, 0.0)
+	return total_area
+
+
+func _get_daily_rice_production_kg() -> float:
+	var days_per_year := maxi(_get_balance_int(&"food_days_per_year", 360), 1)
+	return _food_total_field_area_m2 * maxf(_get_balance_float(&"rice_kg_per_square_meter_per_year", 0.1), 0.0) / float(days_per_year)
+
+
+func _get_daily_rice_consumption_kg() -> float:
+	return float(_get_alive_peasant_count()) * maxf(_get_balance_float(&"daily_rice_kg_per_farmer", 1.0), 0.0)
+
+
+func _get_total_food_reserve_kg() -> float:
+	var total := 0.0
+	for record: Dictionary in _house_food_records:
+		total += maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
+	return total
+
+
+func _get_total_house_resident_count() -> int:
+	var total := 0
+	for record: Dictionary in _house_food_records:
+		total += maxi(int(record.get("resident_count", 0)), 0)
+	return total
+
+
+func _refresh_food_summary(emit_signal: bool) -> void:
+	_update_house_food_daily_shares()
+	_village_food_summary = _make_village_food_summary()
+	_food_last_farmer_count = int(_village_food_summary.get("farmer_count", 0))
+	if emit_signal:
+		food_state_changed.emit(_village_food_summary.duplicate(true))
+
+
+func _update_house_food_daily_shares() -> void:
+	var house_count := _house_food_records.size()
+	if house_count <= 0:
+		return
+
+	var production_share := _get_daily_rice_production_kg() / float(house_count)
+	var consumption_share := _get_daily_rice_consumption_kg() / float(house_count)
+	for record: Dictionary in _house_food_records:
+		var reserve := maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
+		record["daily_production_share_kg"] = production_share
+		record["daily_consumption_share_kg"] = consumption_share
+		record["daily_net_kg"] = production_share - consumption_share
+		record["food_days_remaining"] = reserve / consumption_share if consumption_share > 0.0 else 0.0
+
+
+func _make_village_food_summary() -> Dictionary:
+	var daily_production := _get_daily_rice_production_kg()
+	var daily_consumption := _get_daily_rice_consumption_kg()
+	var total_reserve := _get_total_food_reserve_kg()
+	var days_remaining := total_reserve / daily_consumption if daily_consumption > 0.0 else 0.0
+	var summary := {
+		"house_count": _house_food_records.size(),
+		"resident_count": _get_total_house_resident_count(),
+		"farmer_count": _get_alive_peasant_count(),
+		"total_reserve_kg": total_reserve,
+		"daily_production_kg": daily_production,
+		"daily_consumption_kg": daily_consumption,
+		"daily_net_kg": daily_production - daily_consumption,
+		"field_area_m2": _food_total_field_area_m2,
+		"food_days_remaining": days_remaining,
+		"shortage_kg": _food_last_shortage_kg,
+		"cumulative_shortage_kg": _food_cumulative_shortage_kg,
+		"food_days_elapsed": _food_days_elapsed,
+	}
+	_append_time_summary(summary)
+	return summary
+
+
+func _append_time_summary(summary: Dictionary) -> void:
+	if _last_time_snapshot.is_empty():
+		return
+
+	for key: String in [
+		"year",
+		"calendar_month",
+		"month",
+		"month_name",
+		"day_of_month",
+		"day_of_year",
+		"absolute_day",
+		"hour",
+		"minute",
+		"time_of_day_minutes",
+		"date_label",
+		"time_label",
+		"date_time_label",
+	]:
+		if _last_time_snapshot.has(key):
+			summary[key] = _last_time_snapshot[key]
+
+
+func _get_balance_config() -> Resource:
+	return balance_config if balance_config else DEFAULT_BALANCE_CONFIG
+
+
+func _get_balance_float(property: StringName, fallback: float) -> float:
+	var config := _get_balance_config()
+	if not config:
+		return fallback
+	var value: Variant = config.get(property)
+	return fallback if value == null else float(value)
+
+
+func _get_balance_int(property: StringName, fallback: int) -> int:
+	var config := _get_balance_config()
+	if not config:
+		return fallback
+	var value: Variant = config.get(property)
+	return fallback if value == null else int(value)
 
 
 func _copy_cells_from_variant(value: Variant) -> Array[Vector2i]:
@@ -2721,6 +3377,27 @@ func _cell_to_local_2d_min(cell: Vector2i) -> Vector2:
 	)
 
 
+func _get_village_center_local_2d() -> Vector2:
+	var cells: Array[Vector2i] = []
+	cells.append_array(get_house_cells())
+	cells.append_array(get_field_cells())
+	cells.append_array(get_road_cells())
+	var bounds := _get_cell_bounds_2d(cells, 0.0)
+	if not bounds.is_empty():
+		var min_point: Vector2 = bounds.get("min", Vector2.ZERO)
+		var max_point: Vector2 = bounds.get("max", Vector2.ZERO)
+		return min_point.lerp(max_point, 0.5)
+
+	if not _house_food_records.is_empty():
+		var total := Vector2.ZERO
+		for record: Dictionary in _house_food_records:
+			var position: Vector2 = record.get("position", Vector2.ZERO)
+			total += position
+		return total / float(_house_food_records.size())
+
+	return Vector2(origin.x, origin.z)
+
+
 func _get_cell_corners(cell: Vector2i) -> Array[Vector2]:
 	var cell_min := _cell_to_local_2d_min(cell)
 	var safe_cell_size := maxf(cell_size, 0.1)
@@ -2855,16 +3532,6 @@ func _mark_startup_phase(label: String, context: Dictionary = {}) -> void:
 	var probe := get_node_or_null("/root/StartupPerformanceProbe") if is_inside_tree() else null
 	if probe and probe.has_method("mark_phase"):
 		probe.call("mark_phase", label, context)
-
-
-func _get_season_weather_node() -> SeasonWeatherSystem:
-	if season_weather_path.is_empty():
-		return null
-
-	var node := get_node_or_null(season_weather_path)
-	if node is SeasonWeatherSystem:
-		return node
-	return null
 
 
 func _get_field_terrain_registry_node() -> FieldTerrainRegistry:

@@ -1,0 +1,114 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://modules/village/village_info_drawer.gd" id="1_drawer"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.055, 0.071, 0.078, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.77, 0.84, 0.82, 0.28)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[node name="VillageInfoDrawer" type="CanvasLayer"]
+layer = 21
+script = ExtResource("1_drawer")
+
+[node name="Root" type="Control" parent="."]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="Root"]
+layout_mode = 0
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -304.0
+offset_top = 116.0
+offset_right = -16.0
+offset_bottom = 348.0
+grow_horizontal = 0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Margin" type="MarginContainer" parent="Root/Panel"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 12
+
+[node name="Rows" type="VBoxContainer" parent="Root/Panel/Margin"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 7
+
+[node name="TitleLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.94, 0.98, 0.95, 1)
+text = "Village Food"
+
+[node name="SubtitleLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.66, 0.78, 0.86, 1)
+text = "0 houses, 0 residents"
+
+[node name="Separator" type="ColorRect" parent="Root/Panel/Margin/Rows"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+color = Color(0.77, 0.84, 0.82, 0.22)
+
+[node name="ReserveLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Reserve  0.0 kg"
+
+[node name="FarmersLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Farmers  0"
+
+[node name="ProductionLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.95, 0.71, 1)
+text = "Production/day  0.0 kg"
+
+[node name="ConsumptionLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.72, 0.66, 1)
+text = "Consumption/day  0.0 kg"
+
+[node name="NetLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.82, 0.38, 1)
+text = "Net/day  +0.0 kg"
+
+[node name="FieldAreaLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Field area  0 m2"
+
+[node name="HouseCountLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Food days  0.0"

@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="VillageBalanceConfig" format=3]
+
+[ext_resource type="Script" path="res://modules/village/village_balance_config.gd" id="1_balance"]
+
+[resource]
+script = ExtResource("1_balance")
+rice_kg_per_square_meter_per_year = 0.1
+daily_rice_kg_per_farmer = 1.0
+house_min_villagers = 3
+house_max_villagers = 4
+default_food_reserve_kg_per_house = 30.0
+food_days_per_year = 360
+residential_house_max_count = 32
+residential_house_density = 2.0
+house_min_spacing = 3.0
+house_size_spacing_multiplier = 1.05
+house_footprint_padding = 0.2
+house_region_margin = 0.75
+house_road_clearance = 2.0
+field_road_clearance = 1.0
+field_region_road_margin = 0.6

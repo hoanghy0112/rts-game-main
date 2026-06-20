@@ -6,10 +6,10 @@
 
 Concrete field scripts implement:
 
-- `configure_field(plot_data, crop_type, season_weather)`: receive the generated `FieldPlotData`, the selected `CropTypeData`, and the map-level `SeasonWeatherSystem`.
-- `apply_environment(snapshot)`: apply a season/weather snapshot to runtime field state and visuals.
+- `configure_field(plot_data, crop_type)`: receive the generated `FieldPlotData` and selected `CropTypeData`.
+- `apply_crop_state()`: apply the crop defaults to runtime field state and visuals.
 - `rebuild_visuals()`: rebuild mesh scale, materials, crops, water, or other scene-only presentation.
-- `get_ground_state_id(snapshot)`: resolve the crop-specific ground state for a snapshot, such as `dry`, `wet`, `muddy`, or `flooded`.
+- `get_ground_state_id()`: resolve the crop-specific ground state, such as `dry`, `wet`, `muddy`, or `flooded`.
 
 ## Responsibilities
 
@@ -21,18 +21,12 @@ Generated footprints may be concave orthogonal polygons rather than rectangles. 
 
 ## Concrete Fields
 
-`RiceField.tscn` attaches `RiceField.gd`, which implements the abstract methods and reacts to `SeasonWeatherSystem.environment_changed`. Future `CornField.tscn` or `VegetableField.tscn` scenes should follow the same pattern:
+`RiceField.tscn` attaches `RiceField.gd`, which implements the abstract methods. Future `CornField.tscn` or `VegetableField.tscn` scenes should follow the same pattern:
 
 1. Attach a concrete script extending `AbstractField`.
 2. Use `plot_data.footprint` for visual meshes, crop scattering, collision hints, and point checks. Use `plot_data.length` and `plot_data.width` only as bounding extents or compatibility dimensions.
-3. Use `crop_type.get_ground_state_id(snapshot)` and `crop_type.get_ground_state_data(id)` for ground material and movement metadata.
-4. Update `plot_data.ground_state_id` and `plot_data.ground_state_data` when environment changes.
-
-## Season And Weather
-
-Maps contain one `SeasonWeatherSystem.tscn`. `VillageRegion` resolves it through `season_weather_path` and passes it into each generated field. The field connects to `environment_changed(snapshot)` and also applies `get_snapshot_at(global_position)` during configuration.
-
-`SeasonWeatherSystem` currently returns one global snapshot, but `get_snapshot_at(world_position)` keeps the API ready for weather cells or localized flooding later.
+3. Use `crop_type.get_ground_state_id()` and `crop_type.get_ground_state_data(id)` for ground material and movement metadata.
+4. Update `plot_data.ground_state_id` and `plot_data.ground_state_data` when crop state is applied.
 
 ## Registry Rule
 

@@ -13,79 +13,8 @@ crop_id = &"rice"
 display_name = "Rice"
 description = "Default flooded-field crop used by generated village field plots."
 field_scene = ExtResource("2_scene")
-season_growth_rules = {
-&"dry": &"maintenance",
-&"harvest": &"harvest",
-&"monsoon": &"growth"
-}
-season_to_ground_state = {
-&"dry": &"dry",
-&"flood": &"flooded",
-&"lua_chiem": &"wet",
-&"lua_mua": &"wet",
-&"monsoon": &"wet"
-}
-season_calendar = [{
-"default_ground_state": &"wet",
-"default_stage": &"seedling",
-"end_month": 5,
-"ground_state_by_month": {
-1: &"wet",
-2: &"flooded",
-3: &"flooded",
-4: &"wet",
-5: &"muddy"
-},
-"historical_name": "lua chiem",
-"modern_equivalent": "dong xuan",
-"season_id": &"lua_chiem",
-"stage_by_month": {
-1: &"seedling",
-2: &"flooded_green",
-3: &"tillering",
-4: &"mature_gold",
-5: &"harvested_stubble"
-},
-"start_month": 1
-}, {
-"default_ground_state": &"wet",
-"default_stage": &"flooded_green",
-"end_month": 10,
-"ground_state_by_month": {
-6: &"flooded",
-7: &"flooded",
-8: &"flooded",
-9: &"wet",
-10: &"muddy"
-},
-"historical_name": "lua mua",
-"modern_equivalent": "mua / he thu",
-"season_id": &"lua_mua",
-"stage_by_month": {
-6: &"seedling",
-7: &"flooded_green",
-8: &"tillering",
-9: &"mature_gold",
-10: &"harvested_stubble"
-},
-"start_month": 6
-}, {
-"default_ground_state": &"dry",
-"default_stage": &"empty",
-"end_month": 12,
-"ground_state_by_month": {
-11: &"dry",
-12: &"wet"
-},
-"historical_name": "between crops / chiem preparation",
-"modern_equivalent": "winter preparation",
-"season_id": &"lua_chiem",
-"stage_by_month": {
-11: &"empty",
-12: &"seedling"
-},
-"start_month": 11
-}]
+default_stage_id = &"flooded_green"
+default_ground_state_id = &"wet"
 dry_ground_state = ExtResource("3_dry")
 wet_ground_state = ExtResource("4_wet")
 flooded_ground_state = ExtResource("5_flooded")

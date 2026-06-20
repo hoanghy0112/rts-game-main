@@ -14,12 +14,15 @@
 [ext_resource type="PackedScene" uid="uid://dcinyv7uv2phl" path="res://modules/camera/rts_camera.tscn" id="9_bsx4n"]
 [ext_resource type="PackedScene" path="res://modules/village/house/thatched_hut_on_stilts.tscn" id="10_5pdwo"]
 [ext_resource type="Script" uid="uid://djaisqw4yksuy" path="res://addons/forest_brush/forest_region_data.gd" id="11_qox2p"]
-[ext_resource type="PackedScene" path="res://modules/environment/season_weather_system.tscn" id="12_field"]
 [ext_resource type="Script" uid="uid://bqjdo35lwp703" path="res://modules/village/fields/field_terrain_registry.gd" id="13_field"]
 [ext_resource type="PackedScene" uid="uid://cj2c506ondag" path="res://modules/village/house/cartoon_hut_3d_modal_pack.tscn" id="14_house"]
 [ext_resource type="Resource" uid="uid://tknebxuix320" path="res://modules/village/fields/crops/rice_crop.tres" id="16_qox2p"]
 [ext_resource type="Script" uid="uid://bw0augew6bbft" path="res://addons/forest_brush/forest_region.gd" id="17_forest"]
 [ext_resource type="Resource" path="res://addons/waterways/river_styles/water_river.tres" id="18_river_style"]
+[ext_resource type="PackedScene" path="res://modules/village/village_info_drawer.tscn" id="21_food_drawer"]
+[ext_resource type="Script" path="res://modules/village/village_selection_controller.gd" id="22_food_select"]
+[ext_resource type="PackedScene" path="res://modules/time/game_time_system.tscn" id="23_game_time"]
+[ext_resource type="PackedScene" path="res://modules/time/game_date_display.tscn" id="24_date_display"]
 
 [ext_resource type="Resource" path="res://modules/draft/draft_village_cells.tres" id="19_vcells"]
 
@@ -159,8 +162,8 @@ house_scene = ExtResource("10_5pdwo")
 house_scenes = Array[PackedScene]([ExtResource("10_5pdwo"), ExtResource("14_house")])
 default_crop_type = ExtResource("16_qox2p")
 terrain_path = NodePath("../Terrain3D")
-season_weather_path = NodePath("../SeasonWeatherSystem")
 field_terrain_registry_path = NodePath("../FieldTerrainRegistry")
+time_system_path = NodePath("../GameTimeSystem")
 cell_data = ExtResource("19_vcells")
 house_sand_texture_id = 2
 house_max_count = 32
@@ -182,5 +185,15 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -193.04454, 16.070778, -37.37
 [node name="FieldTerrainRegistry" type="Node" parent="." unique_id=404295709]
 script = ExtResource("13_field")
 
-[node name="SeasonWeatherSystem" parent="." unique_id=274280991 instance=ExtResource("12_field")]
-season_id = &"lua_chiem"
+[node name="GameTimeSystem" parent="." instance=ExtResource("23_game_time")]
+
+[node name="GameDateDisplay" parent="." instance=ExtResource("24_date_display")]
+
+[node name="VillageInfoDrawer" parent="." instance=ExtResource("21_food_drawer")]
+village_region_path = NodePath("../VillageRegion")
+
+[node name="VillageSelectionController" type="Node" parent="."]
+script = ExtResource("22_food_select")
+village_region_path = NodePath("../VillageRegion")
+info_drawer_path = NodePath("../VillageInfoDrawer")
+camera_path = NodePath("../RTSCameraRig/Camera3D")

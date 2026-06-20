@@ -20,7 +20,6 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 @export_range(0.0, 10000.0, 1.0, "or_greater") var rice_overlay_end_distance: float = 800.0
 @export_range(0.0, 2048.0, 1.0, "or_greater") var rice_overlay_end_fade_margin: float = 80.0
 
-var _current_snapshot: Dictionary = {}
 var _current_ground_state_id: StringName = &"dry"
 var _current_stage_id: StringName = &"empty"
 var _visual_root: Node3D
@@ -36,41 +35,23 @@ func _ready() -> void:
 	set_process(false)
 
 
-func _exit_tree() -> void:
-	if season_weather and season_weather.environment_changed.is_connected(_on_environment_changed):
-		season_weather.environment_changed.disconnect(_on_environment_changed)
-
-
-func configure_field(new_plot_data: FieldPlotData, new_crop_type: CropTypeData, new_season_weather: SeasonWeatherSystem) -> void:
+func configure_field(new_plot_data: FieldPlotData, new_crop_type: CropTypeData) -> void:
 	plot_data = new_plot_data
 	crop_type = new_crop_type
-
-	if season_weather and season_weather != new_season_weather and season_weather.environment_changed.is_connected(_on_environment_changed):
-		season_weather.environment_changed.disconnect(_on_environment_changed)
-
-	season_weather = new_season_weather
-	if season_weather and not season_weather.environment_changed.is_connected(_on_environment_changed):
-		season_weather.environment_changed.connect(_on_environment_changed)
-
-	if season_weather:
-		apply_environment(season_weather.get_snapshot_at(global_position))
-	else:
-		apply_environment({})
-
+	apply_crop_state()
 	rebuild_visuals()
 
 
-func apply_environment(snapshot: Dictionary) -> void:
-	_current_snapshot = snapshot.duplicate()
-	_current_ground_state_id = get_ground_state_id(_current_snapshot)
+func apply_crop_state() -> void:
+	_current_ground_state_id = get_ground_state_id()
 
 	if plot_data:
-		plot_data.water_level = float(_current_snapshot.get("rain_intensity", 0.0))
-		plot_data.flood_level = float(_current_snapshot.get("flood_level", 0.0))
-		plot_data.mud_level = float(_current_snapshot.get("mud_level", 0.0))
+		plot_data.water_level = _get_default_water_level(_current_ground_state_id)
+		plot_data.flood_level = 1.0 if _current_ground_state_id == &"flooded" else 0.0
+		plot_data.mud_level = 1.0 if _current_ground_state_id == &"muddy" else 0.0
 		plot_data.ground_state_id = _current_ground_state_id
 		plot_data.ground_state_data = crop_type.get_ground_state_data(_current_ground_state_id) if crop_type else null
-		plot_data.stage = crop_type.get_crop_stage_id(_current_snapshot) if crop_type else plot_data.stage
+		plot_data.stage = crop_type.get_crop_stage_id() if crop_type else plot_data.stage
 		if plot_data.stage == &"":
 			plot_data.stage = &"empty"
 		_current_stage_id = plot_data.stage
@@ -125,21 +106,9 @@ func configure_rice_overlay_visibility(
 	_apply_rice_overlay_visibility()
 
 
-func get_ground_state_id(snapshot: Dictionary) -> StringName:
+func get_ground_state_id() -> StringName:
 	if crop_type:
-		return crop_type.get_ground_state_id(snapshot)
-
-	var flood := float(snapshot.get("flood_level", 0.0))
-	if flood >= 0.35:
-		return &"flooded"
-
-	var mud := float(snapshot.get("mud_level", 0.0))
-	if mud >= 0.45:
-		return &"muddy"
-
-	var rain := float(snapshot.get("rain_intensity", 0.0))
-	if rain >= 0.2:
-		return &"wet"
+		return crop_type.get_ground_state_id()
 
 	return &"dry"
 
@@ -150,11 +119,6 @@ func get_current_ground_state_id() -> StringName:
 
 func get_current_stage_id() -> StringName:
 	return _current_stage_id
-
-
-func _on_environment_changed(snapshot: Dictionary) -> void:
-	apply_environment(snapshot)
-	rebuild_visuals()
 
 
 func _resolve_nodes() -> void:
@@ -185,11 +149,21 @@ func _apply_water_visual() -> void:
 	if not _water_mesh:
 		return
 
-	var rain := float(_current_snapshot.get("rain_intensity", 0.0))
-	var flood := float(_current_snapshot.get("flood_level", 0.0))
-	_water_mesh.visible = _current_ground_state_id == &"wet" or _current_ground_state_id == &"flooded" or rain >= 0.2 or flood > 0.08
+	_water_mesh.visible = _current_ground_state_id == &"wet" or _current_ground_state_id == &"flooded"
 	if water_material:
 		_water_mesh.material_override = water_material
+
+
+func _get_default_water_level(ground_state_id: StringName) -> float:
+	match ground_state_id:
+		&"flooded":
+			return 1.0
+		&"wet":
+			return 0.45
+		&"muddy":
+			return 0.12
+		_:
+			return 0.0
 
 
 func _apply_bund_material() -> void:

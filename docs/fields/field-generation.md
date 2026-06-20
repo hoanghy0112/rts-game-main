@@ -44,7 +44,7 @@ At runtime:
 2. The generator returns `Array[FieldPlotData]`, generated field-road polylines, and the field cells used for the road mask.
 3. `VillageRegion` copies runtime Terrain3D regions, lowers polygon plot floors, paints authored roads, and paints the continuous field road/bund mask.
 4. `VillageRegion` instantiates `default_crop_type.field_scene` for each plot at the lowered floor height.
-5. The concrete field receives `configure_field(plot_data, crop_type, season_weather)`.
+5. The concrete field receives `configure_field(plot_data, crop_type)`.
 6. `FieldTerrainRegistry.register_field(plot_data, field_node)` records the plot for later movement queries.
 
 Navigation rebaking is intentionally out of scope for this refactor. Movement penalties begin through `FieldTerrainRegistry.get_speed_multiplier_at(world_pos, unit_type)`, which checks the polygon footprint rather than the bounding rectangle.
