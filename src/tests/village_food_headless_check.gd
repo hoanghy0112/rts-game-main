@@ -93,6 +93,16 @@ func _check_food_records_and_daily_math(failures: Array[String]) -> void:
 	_expect(_approx(float(summary.get("daily_production_kg", -1.0)), expected_production, 0.001), "daily production should be area times annual rice yield divided by food days", failures)
 
 	var before_reserve := float(summary.get("total_reserve_kg", 0.0))
+	var before_storage := float(summary.get("storage_food_kg", 0.0))
+	var withdrawn := region.withdraw_food_kg(15.0)
+	var after_withdraw_summary := region.get_village_food_summary()
+	_expect(_approx(withdrawn, 15.0, 0.001), "village storage should withdraw requested food when available", failures)
+	_expect(_approx(float(after_withdraw_summary.get("storage_food_kg", 0.0)), before_storage - 15.0, 0.001), "storage withdrawal should reduce central food storage", failures)
+	var deposited := region.deposit_food_kg(5.0)
+	summary = region.get_village_food_summary()
+	_expect(_approx(deposited, 5.0, 0.001), "village storage should accept deposited food", failures)
+	_expect(_approx(float(summary.get("storage_food_kg", 0.0)), before_storage - 10.0, 0.001), "storage deposit should update central food storage", failures)
+	before_reserve = float(summary.get("total_reserve_kg", 0.0))
 	region.advance_food_days(1)
 	var after_summary := region.get_village_food_summary()
 	var expected_after_reserve := before_reserve + expected_production - float(summary.get("daily_consumption_kg", 0.0))
@@ -101,6 +111,8 @@ func _check_food_records_and_daily_math(failures: Array[String]) -> void:
 	_expect(_approx(float(after_summary.get("shortage_kg", -1.0)), 0.0, 0.001), "well-stocked village should not report shortage after one day", failures)
 	_expect(_has_selectable_metadata(region), "generated village should expose flag selection while houses stay non-clickable", failures)
 	_expect(_has_village_selection_ring(region), "generated village should draw a selectable ring around houses", failures)
+	_expect(_has_centered_storage_hut(region), "generated village should place a scaled hut storage at the house-region center", failures)
+	_expect(_houses_clear_centered_storage(region), "generated houses should not overlap the central village storage", failures)
 
 	matching_region.clear_runtime_instances()
 	scene_root.remove_child(matching_region)
@@ -234,6 +246,8 @@ func _summary_has_required_keys(summary: Dictionary) -> bool:
 		"daily_net_kg",
 		"field_area_m2",
 		"food_days_remaining",
+		"storage_food_kg",
+		"storage_world_position",
 	]:
 		if not summary.has(key):
 			return false
@@ -329,6 +343,61 @@ func _has_village_selection_ring(region: VillageRegion) -> bool:
 				return false
 			proxy_count += 1
 	return proxy_count > 0
+
+
+func _has_centered_storage_hut(region: VillageRegion) -> bool:
+	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
+	if not container:
+		return false
+
+	var storage := container.get_node_or_null("VillageStorage") as Node3D
+	if not storage:
+		return false
+
+	var expected_center := _runtime_house_center(container)
+	var actual_center := Vector2(storage.global_position.x, storage.global_position.z)
+	if actual_center.distance_to(expected_center) > 0.05:
+		return false
+
+	var storage_hut := storage.get_node_or_null("StorageHut") as Node3D
+	return storage_hut != null and storage_hut.scale.x >= 2.0
+
+
+func _houses_clear_centered_storage(region: VillageRegion) -> bool:
+	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
+	if not container:
+		return false
+
+	var storage := container.get_node_or_null("VillageStorage") as Node3D
+	if not storage:
+		return false
+
+	var houses := _collect_named_children(container, "House_")
+	if houses.is_empty():
+		return false
+
+	var storage_center := Vector2(storage.global_position.x, storage.global_position.z)
+	var minimum_distance := maxf(region.cell_size * 1.25, 5.0)
+	for house: Node3D in houses:
+		var house_center := Vector2(house.global_position.x, house.global_position.z)
+		if house_center.distance_to(storage_center) < minimum_distance:
+			return false
+	return true
+
+
+func _runtime_house_center(container: Node) -> Vector2:
+	var houses := _collect_named_children(container, "House_")
+	if houses.is_empty():
+		return Vector2.ZERO
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+	for house: Node3D in houses:
+		var position := Vector2(house.global_position.x, house.global_position.z)
+		min_point.x = minf(min_point.x, position.x)
+		min_point.y = minf(min_point.y, position.y)
+		max_point.x = maxf(max_point.x, position.x)
+		max_point.y = maxf(max_point.y, position.y)
+	return min_point.lerp(max_point, 0.5)
 
 
 func _has_collision_proxy_with_type(root_node: Node, expected_type: StringName) -> bool:
