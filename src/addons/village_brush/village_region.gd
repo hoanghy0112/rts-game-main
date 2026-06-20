@@ -6,9 +6,11 @@ const DEFAULT_HOUSE_SCENE: PackedScene = preload("res://addons/village_brush/def
 const DEFAULT_PEASANT_SCENE: PackedScene = preload("res://modules/units/peasant/peasant.tscn")
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
 const DEFAULT_BALANCE_CONFIG: Resource = preload("res://modules/village/default_village_balance.tres")
+const VILLAGE_STORAGE_SCENE: PackedScene = preload("res://modules/village/house/thatched_hut_on_stilts.tscn")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
+const VILLAGE_STORAGE_NODE_NAME := "VillageStorage"
 const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 const SELECTABLE_TYPE_META := &"village_selectable_type"
 const SELECTABLE_REGION_PATH_META := &"village_region_path"
@@ -115,6 +117,8 @@ enum PaintMode {
 @export_range(0.0, 128.0, 0.1, "or_greater") var village_house_ring_margin: float = 6.0
 @export_range(0.0, 8.0, 0.05, "or_greater") var village_ring_surface_offset: float = 0.65
 @export_range(0.0, 64.0, 0.1, "or_greater") var village_ground_highlight_width: float = 12.0
+@export_range(0.1, 8.0, 0.05, "or_greater") var village_storage_model_scale: float = 1.35
+@export_range(0.0, 128.0, 0.1, "or_greater") var village_storage_clearance_radius: float = 0.0
 
 @export_range(0, 512, 1, "or_greater") var peasant_target_count: int = DEFAULT_PEASANT_TARGET_COUNT
 @export_range(0.0, 512.0, 0.1, "or_greater") var peasant_spawn_rate_per_minute: float = DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE
@@ -199,6 +203,8 @@ var _runtime_peasants: Array[Node3D] = []
 var _house_food_records: Array[Dictionary] = []
 var _house_food_record_lookup: Dictionary = {}
 var _village_food_summary: Dictionary = {}
+var _village_storage_food_kg := 0.0
+var _village_storage_node: Node3D
 var _food_total_field_area_m2 := 0.0
 var _food_last_shortage_kg := 0.0
 var _food_cumulative_shortage_kg := 0.0
@@ -537,35 +543,62 @@ func get_village_food_summary() -> Dictionary:
 	return _village_food_summary.duplicate(true)
 
 
+func get_village_storage_summary() -> Dictionary:
+	if _village_food_summary.is_empty():
+		_refresh_food_summary(false)
+	return {
+		"storage_food_kg": _village_storage_food_kg,
+		"storage_world_position": get_village_storage_world_position(),
+		"summary": _village_food_summary.duplicate(true),
+	}
+
+
+func get_village_storage_world_position() -> Vector3:
+	if is_instance_valid(_village_storage_node):
+		return _village_storage_node.global_position
+
+	var center := _get_village_storage_center_local_2d()
+	var terrain := _get_terrain_node()
+	return _get_surface_world_position_from_local_2d(center, terrain)
+
+
+func withdraw_food_kg(amount_kg: float) -> float:
+	var requested := maxf(amount_kg, 0.0)
+	if requested <= 0.0:
+		return 0.0
+
+	var withdrawn := minf(_village_storage_food_kg, requested)
+	if withdrawn <= 0.0:
+		return 0.0
+
+	_village_storage_food_kg = maxf(_village_storage_food_kg - withdrawn, 0.0)
+	_refresh_food_summary(true)
+	return withdrawn
+
+
+func deposit_food_kg(amount_kg: float) -> float:
+	var deposited := maxf(amount_kg, 0.0)
+	if deposited <= 0.0:
+		return 0.0
+
+	_village_storage_food_kg += deposited
+	_refresh_food_summary(true)
+	return deposited
+
+
 func advance_food_days(days: int) -> void:
 	var day_count := maxi(days, 0)
 	if day_count <= 0:
 		return
 
-	var house_count := _house_food_records.size()
 	var daily_production := _get_daily_rice_production_kg()
 	var daily_consumption := _get_daily_rice_consumption_kg()
 	var shortage_total := 0.0
 	for _day: int in range(day_count):
-		if house_count <= 0:
-			shortage_total += daily_consumption
-			continue
-
-		var production_share := daily_production / float(house_count)
-		var consumption_share := daily_consumption / float(house_count)
-		for record: Dictionary in _house_food_records:
-			var reserve := maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
-			reserve += production_share
-			var consumed := minf(reserve, consumption_share)
-			reserve -= consumed
-			var house_shortage := maxf(consumption_share - consumed, 0.0)
-			shortage_total += house_shortage
-			record["food_reserve_kg"] = reserve
-			record["daily_production_share_kg"] = production_share
-			record["daily_consumption_share_kg"] = consumption_share
-			record["daily_net_kg"] = production_share - consumption_share
-			record["shortage_kg"] = house_shortage
-			record["food_days_remaining"] = reserve / consumption_share if consumption_share > 0.0 else 0.0
+		_village_storage_food_kg += daily_production
+		var consumed := minf(_village_storage_food_kg, daily_consumption)
+		_village_storage_food_kg = maxf(_village_storage_food_kg - consumed, 0.0)
+		shortage_total += maxf(daily_consumption - consumed, 0.0)
 
 	_food_last_shortage_kg = shortage_total
 	_food_cumulative_shortage_kg += shortage_total
@@ -653,6 +686,7 @@ func rebuild_runtime_preview() -> void:
 	_generate_fields(terrain, field_generation)
 	_generate_village_ring(terrain, house_placements)
 	_generate_village_flag(terrain)
+	_generate_village_storage(terrain, house_placements)
 	_generate_peasants(terrain, house_placements, road_polylines, field_generation)
 	_refresh_food_summary(true)
 
@@ -734,6 +768,7 @@ func rebuild_runtime_preview_async() -> void:
 	_generate_fields_async(terrain, field_generation)
 	_generate_village_ring(terrain, house_placements)
 	_generate_village_flag(terrain)
+	_generate_village_storage(terrain, house_placements)
 	await _generate_peasants_async(terrain, house_placements, road_polylines, field_generation)
 	_refresh_food_summary(true)
 	_mark_startup_phase("village_ready", {
@@ -750,8 +785,10 @@ func clear_runtime_instances() -> void:
 	_village_ring_node = null
 	_village_ring_material = null
 	_village_ground_highlight_material = null
+	_village_storage_node = null
 	_house_food_records.clear()
 	_house_food_record_lookup.clear()
+	_village_storage_food_kg = 0.0
 	_food_total_field_area_m2 = 0.0
 	_food_last_shortage_kg = 0.0
 	_food_cumulative_shortage_kg = 0.0
@@ -799,6 +836,8 @@ func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) 
 		return placements
 
 	var house_lookup := _to_cell_lookup(active_house_cells)
+	var storage_center := _get_village_storage_center_local_2d()
+	var storage_clearance_radius := _get_village_storage_reserved_radius()
 	var target_house_count := _get_effective_house_max_count()
 	var attempts := maxi(
 		target_house_count * HOUSE_ATTEMPT_MULTIPLIER,
@@ -827,6 +866,8 @@ func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) 
 		if _is_point_near_roads(local_point, road_polylines, road_clearance):
 			continue
 		if not _has_house_spacing(local_point, footprint, placements):
+			continue
+		if _is_house_overlapping_storage(local_point, footprint_radius, storage_center, storage_clearance_radius):
 			continue
 
 		placements.append({
@@ -1199,6 +1240,75 @@ func _generate_village_flag(terrain: Node3D) -> void:
 	flag.add_child(proxy)
 	_configure_runtime_visibility_recursive(
 		flag,
+		village_visible_distance_meters,
+		village_visibility_fade_margin_meters
+	)
+
+
+func _generate_village_storage(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
+	if not _runtime_container:
+		return
+
+	var center := _get_village_storage_center_local_2d(house_placements)
+	var storage := Node3D.new()
+	storage.name = VILLAGE_STORAGE_NODE_NAME
+	_runtime_container.add_child(storage)
+	storage.owner = null
+	_set_runtime_node_position(storage, center, terrain)
+	_village_storage_node = storage
+
+	var storage_model := VILLAGE_STORAGE_SCENE.instantiate()
+	if storage_model is Node3D:
+		var model_node := storage_model as Node3D
+		model_node.name = "StorageHut"
+		model_node.scale *= maxf(village_storage_model_scale, 0.1)
+		storage.add_child(model_node)
+		model_node.owner = null
+	else:
+		storage_model.free()
+
+	var marker := Node3D.new()
+	marker.name = "StorageMarker"
+	var marker_offset := maxf(_get_village_storage_reserved_radius() * 0.42, 2.0)
+	marker.position = Vector3(-marker_offset, 0.0, -marker_offset * 0.62)
+	storage.add_child(marker)
+
+	var pole := MeshInstance3D.new()
+	pole.name = "MarkerPole"
+	var pole_mesh := CylinderMesh.new()
+	pole_mesh.top_radius = 0.1
+	pole_mesh.bottom_radius = 0.1
+	pole_mesh.height = 8.4
+	pole_mesh.radial_segments = 8
+	pole.mesh = pole_mesh
+	pole.position = Vector3(0.0, 4.2, 0.0)
+	pole.material_override = _make_flag_material(Color(0.34, 0.22, 0.11, 1.0))
+	marker.add_child(pole)
+
+	var banner := MeshInstance3D.new()
+	banner.name = "FoodDepotBanner"
+	var banner_mesh := BoxMesh.new()
+	banner_mesh.size = Vector3(3.15, 1.72, 0.08)
+	banner.mesh = banner_mesh
+	banner.position = Vector3(1.58, 7.05, 0.0)
+	banner.material_override = _make_flag_material(Color(0.92, 0.74, 0.24, 1.0))
+	marker.add_child(banner)
+
+	var grain := MeshInstance3D.new()
+	grain.name = "GrainMark"
+	var grain_mesh := CylinderMesh.new()
+	grain_mesh.top_radius = 0.18
+	grain_mesh.bottom_radius = 0.18
+	grain_mesh.height = 0.065
+	grain_mesh.radial_segments = 12
+	grain.mesh = grain_mesh
+	grain.rotation.x = PI * 0.5
+	grain.position = Vector3(1.58, 7.05, 0.055)
+	grain.material_override = _make_flag_material(Color(0.48, 0.32, 0.08, 1.0))
+	marker.add_child(grain)
+
+	_configure_runtime_visibility_recursive(
+		storage,
 		village_visible_distance_meters,
 		village_visibility_fade_margin_meters
 	)
@@ -1835,6 +1945,7 @@ func _initialize_house_food_records(house_placements: Array[Dictionary], field_g
 	_house_food_records.clear()
 	_house_food_record_lookup.clear()
 	_food_total_field_area_m2 = _get_total_field_area_m2(field_generation)
+	_village_storage_food_kg = 0.0
 	_food_last_shortage_kg = 0.0
 	_food_cumulative_shortage_kg = 0.0
 	_food_days_elapsed = 0
@@ -1864,6 +1975,7 @@ func _initialize_house_food_records(house_placements: Array[Dictionary], field_g
 		_house_food_records.append(record)
 		_house_food_record_lookup[house_id] = record
 
+	_village_storage_food_kg = default_reserve * float(_house_food_records.size())
 	_refresh_food_summary(false)
 
 
@@ -1902,10 +2014,7 @@ func _get_daily_rice_consumption_kg() -> float:
 
 
 func _get_total_food_reserve_kg() -> float:
-	var total := 0.0
-	for record: Dictionary in _house_food_records:
-		total += maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
-	return total
+	return maxf(_village_storage_food_kg, 0.0)
 
 
 func _get_total_house_resident_count() -> int:
@@ -1930,11 +2039,15 @@ func _update_house_food_daily_shares() -> void:
 
 	var production_share := _get_daily_rice_production_kg() / float(house_count)
 	var consumption_share := _get_daily_rice_consumption_kg() / float(house_count)
+	var reserve_share := _get_total_food_reserve_kg() / float(house_count)
 	for record: Dictionary in _house_food_records:
-		var reserve := maxf(float(record.get("food_reserve_kg", 0.0)), 0.0)
+		var reserve := maxf(reserve_share, 0.0)
+		var shortage_share := _food_last_shortage_kg / float(house_count)
+		record["food_reserve_kg"] = reserve
 		record["daily_production_share_kg"] = production_share
 		record["daily_consumption_share_kg"] = consumption_share
 		record["daily_net_kg"] = production_share - consumption_share
+		record["shortage_kg"] = shortage_share
 		record["food_days_remaining"] = reserve / consumption_share if consumption_share > 0.0 else 0.0
 
 
@@ -1953,6 +2066,8 @@ func _make_village_food_summary() -> Dictionary:
 		"daily_net_kg": daily_production - daily_consumption,
 		"field_area_m2": _food_total_field_area_m2,
 		"food_days_remaining": days_remaining,
+		"storage_food_kg": total_reserve,
+		"storage_world_position": get_village_storage_world_position(),
 		"shortage_kg": _food_last_shortage_kg,
 		"cumulative_shortage_kg": _food_cumulative_shortage_kg,
 		"food_days_elapsed": _food_days_elapsed,
@@ -3229,6 +3344,48 @@ func _has_house_spacing(point: Vector2, footprint: float, placed_houses: Array[D
 	return true
 
 
+func _is_house_overlapping_storage(
+	point: Vector2,
+	footprint_radius: float,
+	storage_center: Vector2,
+	storage_clearance_radius: float
+) -> bool:
+	var required_spacing := maxf(footprint_radius, 0.0) + maxf(storage_clearance_radius, 0.0)
+	if required_spacing <= 0.0:
+		return false
+	return point.distance_squared_to(storage_center) < required_spacing * required_spacing
+
+
+func _get_village_storage_reserved_radius() -> float:
+	if village_storage_clearance_radius > 0.0:
+		return village_storage_clearance_radius
+
+	var scene_radius := _get_scene_plan_radius(VILLAGE_STORAGE_SCENE, village_storage_model_scale)
+	return maxf(scene_radius + maxf(house_min_spacing, house_footprint_padding), cell_size * 2.2)
+
+
+func _get_scene_plan_radius(scene: PackedScene, scene_scale: float) -> float:
+	if not scene:
+		return 0.0
+
+	var instance := scene.instantiate()
+	if not (instance is Node3D):
+		instance.free()
+		return 0.0
+
+	var spatial := instance as Node3D
+	spatial.scale *= maxf(scene_scale, 0.1)
+	var bounds := _get_node_local_aabb(spatial, Transform3D.IDENTITY)
+	var radius := 0.0
+	if bounds.size.length_squared() > 0.0001:
+		radius = maxf(
+			maxf(absf(bounds.position.x), absf(bounds.end.x)),
+			maxf(absf(bounds.position.z), absf(bounds.end.z))
+		)
+	instance.free()
+	return radius
+
+
 func _get_effective_house_max_count() -> int:
 	return maxi(ceili(float(house_max_count) * _get_safe_house_density()), 0)
 
@@ -3396,6 +3553,31 @@ func _get_village_center_local_2d() -> Vector2:
 		return total / float(_house_food_records.size())
 
 	return Vector2(origin.x, origin.z)
+
+
+func _get_village_storage_center_local_2d(house_placements: Array[Dictionary] = []) -> Vector2:
+	if not house_placements.is_empty():
+		var placement_points: Array[Vector2] = []
+		for placement: Dictionary in house_placements:
+			placement_points.append(placement.get("position", Vector2.ZERO))
+		var placement_bounds := _get_point_bounds_2d(placement_points, 0.0)
+		if not placement_bounds.is_empty():
+			var placement_min: Vector2 = placement_bounds.get("min", Vector2.ZERO)
+			var placement_max: Vector2 = placement_bounds.get("max", Vector2.ZERO)
+			return placement_min.lerp(placement_max, 0.5)
+
+	if not _house_food_records.is_empty():
+		var total := Vector2.ZERO
+		for record: Dictionary in _house_food_records:
+			total += record.get("position", Vector2.ZERO)
+		return total / float(_house_food_records.size())
+
+	var bounds := _get_cell_bounds_2d(get_house_cells(), 0.0)
+	if not bounds.is_empty():
+		var min_point: Vector2 = bounds.get("min", Vector2.ZERO)
+		var max_point: Vector2 = bounds.get("max", Vector2.ZERO)
+		return min_point.lerp(max_point, 0.5)
+	return _get_village_center_local_2d()
 
 
 func _get_cell_corners(cell: Vector2i) -> Array[Vector2]:

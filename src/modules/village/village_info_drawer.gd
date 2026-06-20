@@ -106,7 +106,7 @@ func _apply_village_summary(summary: Dictionary) -> void:
 		int(summary.get("house_count", 0)),
 		int(summary.get("resident_count", 0)),
 	]
-	_reserve_label.text = "Reserve  %s" % [_format_kg(float(summary.get("total_reserve_kg", 0.0)))]
+	_reserve_label.text = "Storage  %s" % [_format_kg(float(summary.get("storage_food_kg", summary.get("total_reserve_kg", 0.0))))]
 	_farmers_label.text = "Farmers  %d" % [int(summary.get("farmer_count", 0))]
 	_production_label.text = "Production/day  %s" % [_format_kg(float(summary.get("daily_production_kg", 0.0)))]
 	_consumption_label.text = "Consumption/day  %s" % [_format_kg(float(summary.get("daily_consumption_kg", 0.0)))]

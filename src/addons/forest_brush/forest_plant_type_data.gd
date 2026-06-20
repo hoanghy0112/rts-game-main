@@ -9,6 +9,7 @@ enum PlantCategory {
 	SHRUB,
 	FERN,
 	GRASS,
+	COW,
 }
 
 enum RenderStrategy {

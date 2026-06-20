@@ -85,6 +85,9 @@ enum PaintMode {
 		tree_billboard_fade_margin_meters = clamped_value
 		_notify_resource_rendering_changed()
 
+@export_group("Gathering")
+@export_range(1.0, 10000.0, 1.0, "or_greater") var wood_per_tree_cell_kg: float = 200.0
+
 @export_group("")
 @export var origin: Vector3 = Vector3.ZERO:
 	set(value):
@@ -300,6 +303,52 @@ func get_cell_plant_ids(cell: Vector2i) -> Array[StringName]:
 		if raw_ids.is_empty():
 			raw_ids = palette.get_default_selected_plant_ids()
 	return raw_ids
+
+
+func get_cell_world_position(cell: Vector2i) -> Vector3:
+	var local_center := cell_to_local_center(cell)
+	return _get_surface_world_position_from_local_2d(Vector2(local_center.x, local_center.z), _get_terrain_node())
+
+
+func is_tree_cell(cell: Vector2i) -> bool:
+	if not _forest_cells_cache.has(cell):
+		return false
+	for plant_id: StringName in get_cell_plant_ids(cell):
+		if _is_wood_plant_id(plant_id):
+			return true
+	return false
+
+
+func get_tree_cells() -> Array[Vector2i]:
+	var tree_cells: Array[Vector2i] = []
+	for cell: Vector2i in _forest_cells_cache:
+		if is_tree_cell(cell):
+			tree_cells.append(cell)
+	return tree_cells
+
+
+func is_cow_cell(cell: Vector2i) -> bool:
+	if not _forest_cells_cache.has(cell):
+		return false
+	for plant_id: StringName in get_cell_plant_ids(cell):
+		if _is_cow_plant_id(plant_id):
+			return true
+	return false
+
+
+func harvest_wood_cell(cell: Vector2i, requested_kg: float) -> float:
+	var requested := maxf(requested_kg, 0.0)
+	if requested <= 0.0 or not is_tree_cell(cell):
+		return 0.0
+	if not _remove_cell_plant_ids(cell, true, false):
+		return 0.0
+	return minf(requested, maxf(wood_per_tree_cell_kg, 0.0))
+
+
+func pickup_cow_cell(cell: Vector2i) -> bool:
+	if not is_cow_cell(cell):
+		return false
+	return _remove_cell_plant_ids(cell, false, true)
 
 
 func to_runtime_data() -> Dictionary:
@@ -1083,6 +1132,52 @@ func _get_region_scale_multiplier_for_plant_type(plant_type: ForestPlantTypeData
 	if plant_type and plant_type.category == ForestPlantTypeData.PlantCategory.TREE:
 		return maxf(tree_scale_multiplier, 0.05)
 	return 1.0
+
+
+func _is_wood_plant_id(plant_id: StringName) -> bool:
+	var plant_type: ForestPlantTypeData = palette.get_plant_type_by_id(plant_id) if palette else null
+	return (
+		plant_type
+		and (
+			plant_type.category == ForestPlantTypeData.PlantCategory.TREE
+			or plant_type.category == ForestPlantTypeData.PlantCategory.PALM
+			or plant_type.category == ForestPlantTypeData.PlantCategory.BAMBOO
+		)
+	)
+
+
+func _is_cow_plant_id(plant_id: StringName) -> bool:
+	var plant_type: ForestPlantTypeData = palette.get_plant_type_by_id(plant_id) if palette else null
+	return plant_type and plant_type.category == ForestPlantTypeData.PlantCategory.COW
+
+
+func _remove_cell_plant_ids(cell: Vector2i, remove_wood: bool, remove_cow: bool) -> bool:
+	if not _forest_cells_cache.has(cell):
+		return false
+
+	var existing_ids := get_cell_plant_ids(cell)
+	var remaining_ids: Array[StringName] = []
+	var removed := false
+	for plant_id: StringName in existing_ids:
+		var should_remove := (remove_wood and _is_wood_plant_id(plant_id)) or (remove_cow and _is_cow_plant_id(plant_id))
+		if should_remove:
+			removed = true
+		elif not remaining_ids.has(plant_id):
+			remaining_ids.append(plant_id)
+
+	if not removed:
+		return false
+
+	var next_cells := copy_cells(_forest_cells_cache)
+	var next_cell_plant_ids := copy_cell_plant_ids(_cell_plant_ids_cache)
+	var key := cell_key(cell)
+	if remaining_ids.is_empty():
+		next_cells.erase(cell)
+		next_cell_plant_ids.erase(key)
+	else:
+		next_cell_plant_ids[key] = remaining_ids
+	set_forest_data(next_cells, next_cell_plant_ids)
+	return true
 
 
 func _get_rng_for_cell_and_plant(cell: Vector2i, plant_id: StringName) -> RandomNumberGenerator:

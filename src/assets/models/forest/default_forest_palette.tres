@@ -20,6 +20,7 @@
 [ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_low_poly_tree_01.tscn" id="17_t4unq"]
 [ext_resource type="PackedScene" path="res://assets/models/forest/proxies/forest_game_tree_01_far_proxy.tscn" id="18_xbfvy"]
 [ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_game_tree_01.tscn" id="19_v66xn"]
+[ext_resource type="PackedScene" path="res://assets/models/forest/plants/forest_cow_01.tscn" id="20_cow"]
 
 [sub_resource type="Resource" id="Resource_cu111"]
 script = ExtResource("1_tfytm")
@@ -228,9 +229,27 @@ billboard_keep_ratio = 0.1
 far_scale_multiplier = 1.28
 billboard_scale_multiplier = 2.0
 
+[sub_resource type="Resource" id="Resource_cow_01"]
+script = ExtResource("1_tfytm")
+id = &"forest_cow_01"
+display_name = "Forest Cow 01"
+description = "Lightweight cattle marker rendered by the ForestRegion plugin."
+category = 6
+default_selected = false
+scene = ExtResource("20_cow")
+density_jitter = 0.0
+cell_edge_margin = 0.24
+near_visible_distance = 120.0
+mid_visible_distance = 260.0
+far_visible_distance = 520.0
+billboard_visible_distance = 1200.0
+mid_keep_ratio = 1.0
+far_keep_ratio = 0.65
+billboard_keep_ratio = 0.0
+
 [resource]
 script = ExtResource("7_31nr8")
 id = &"default_user_forest"
 display_name = "Default User Forest"
 description = "Forest Brush palette generated from user-provided tree and grass source assets copied into res://assets/models/forest/source."
-plant_types = Array[ExtResource("1_tfytm")]([SubResource("Resource_cu111"), SubResource("Resource_green_canopy"), SubResource("Resource_of7mo"), SubResource("Resource_6v2s4"), SubResource("Resource_r5r1p"), SubResource("Resource_0a2cx"), SubResource("Resource_m0hm4"), SubResource("Resource_5i8qo"), SubResource("Resource_y7mws")])
+plant_types = Array[ExtResource("1_tfytm")]([SubResource("Resource_cu111"), SubResource("Resource_green_canopy"), SubResource("Resource_of7mo"), SubResource("Resource_6v2s4"), SubResource("Resource_r5r1p"), SubResource("Resource_0a2cx"), SubResource("Resource_m0hm4"), SubResource("Resource_5i8qo"), SubResource("Resource_y7mws"), SubResource("Resource_cow_01")])

@@ -75,7 +75,7 @@ color = Color(0.77, 0.84, 0.82, 0.22)
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
-text = "Reserve  0.0 kg"
+text = "Storage  0.0 kg"
 
 [node name="FarmersLabel" type="Label" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true
