@@ -287,7 +287,7 @@ month_names = PackedStringArray("Month 01", "Month 02", "Month 03", "Month 04", 
 transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -1525.148, 0, 456.124)
 troop_id = &"midlands_guard"
 display_name = "Midlands Guard"
-soldier_count = 18
+soldier_count = 20
 troop_flag_color = Color(0.82, 0.12, 0.08, 1)
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
@@ -304,6 +304,7 @@ camera_path = NodePath("../RTSCameraRig/Camera3D")
 [node name="TroopSelectionController" type="Node" parent="." unique_id=1283225157]
 script = ExtResource("34_troop_select")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
+forest_region_paths = Array[NodePath]([NodePath("../ForestRegion")])
 
 [node name="FieldTerrainRegistry" type="Node" parent="." unique_id=1657839869]
 script = ExtResource("14_21qn2")

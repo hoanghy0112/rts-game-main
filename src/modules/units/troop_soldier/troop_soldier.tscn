@@ -1,0 +1,170 @@
+[gd_scene load_steps=23 format=3]
+
+[ext_resource type="PackedScene" path="res://modules/units/human/human.tscn" id="1_human"]
+[ext_resource type="Script" path="res://modules/units/troop_soldier/troop_soldier.gd" id="2_troop_soldier"]
+[ext_resource type="PackedScene" path="res://modules/units/human/low_poly_spear.tscn" id="3_spear"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_robe"]
+albedo_color = Color(0.34, 0.52, 0.54, 1)
+roughness = 0.88
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_robe_dark"]
+albedo_color = Color(0.08, 0.24, 0.28, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_trim"]
+albedo_color = Color(0.76, 0.56, 0.38, 1)
+roughness = 0.84
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_pants"]
+albedo_color = Color(0.78, 0.34, 0.18, 1)
+roughness = 0.86
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wrap"]
+albedo_color = Color(0.86, 0.82, 0.74, 1)
+roughness = 0.92
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_hat"]
+albedo_color = Color(0.05, 0.09, 0.13, 1)
+roughness = 0.82
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_red"]
+albedo_color = Color(0.7, 0.12, 0.08, 1)
+roughness = 0.78
+
+[sub_resource type="BoxMesh" id="BoxMesh_outer_robe"]
+size = Vector3(0.54, 0.78, 0.32)
+
+[sub_resource type="BoxMesh" id="BoxMesh_lapel"]
+size = Vector3(0.09, 0.58, 0.035)
+
+[sub_resource type="BoxMesh" id="BoxMesh_sash"]
+size = Vector3(0.56, 0.09, 0.04)
+
+[sub_resource type="BoxMesh" id="BoxMesh_front_panel"]
+size = Vector3(0.16, 0.6, 0.045)
+
+[sub_resource type="BoxMesh" id="BoxMesh_side_panel"]
+size = Vector3(0.16, 0.55, 0.04)
+
+[sub_resource type="BoxMesh" id="BoxMesh_pants"]
+size = Vector3(0.22, 0.36, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_wrap"]
+size = Vector3(0.2, 0.09, 0.19)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_hat_brim"]
+top_radius = 0.48
+bottom_radius = 0.55
+height = 0.045
+radial_segments = 18
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_hat_cap"]
+top_radius = 0.18
+bottom_radius = 0.32
+height = 0.16
+radial_segments = 18
+
+[sub_resource type="SphereMesh" id="SphereMesh_top_knot"]
+radius = 0.075
+height = 0.13
+radial_segments = 8
+rings = 4
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_plume"]
+top_radius = 0.022
+bottom_radius = 0.035
+height = 0.24
+radial_segments = 6
+
+[node name="TroopSoldier" instance=ExtResource("1_human")]
+script = ExtResource("2_troop_soldier")
+formation_visual_only = true
+walk_speed = 1.55
+run_speed = 3.0
+
+[node name="OuterRobe" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="1"]
+transform = Transform3D(1, 0, 0, 0, 0.996195, 0.0871557, 0, -0.0871557, 0.996195, 0, -0.08, -0.005)
+mesh = SubResource("BoxMesh_outer_robe")
+surface_material_override/0 = SubResource("StandardMaterial3D_robe")
+
+[node name="LeftLapel" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="2"]
+transform = Transform3D(0.866025, 0.5, 0, -0.5, 0.866025, 0, 0, 0, 1, -0.105, 0.02, -0.18)
+mesh = SubResource("BoxMesh_lapel")
+surface_material_override/0 = SubResource("StandardMaterial3D_trim")
+
+[node name="RightLapel" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="3"]
+transform = Transform3D(0.866025, -0.5, 0, 0.5, 0.866025, 0, 0, 0, 1, 0.105, 0.02, -0.18)
+mesh = SubResource("BoxMesh_lapel")
+surface_material_override/0 = SubResource("StandardMaterial3D_robe_dark")
+
+[node name="WaistSash" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="4"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, 0.173648, 0, -0.173648, 0.984808, 0, -0.29, -0.17)
+mesh = SubResource("BoxMesh_sash")
+surface_material_override/0 = SubResource("StandardMaterial3D_trim")
+
+[node name="FrontRobePanel" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="5"]
+transform = Transform3D(1, 0, 0, 0, 0.996195, 0.0871557, 0, -0.0871557, 0.996195, -0.08, -0.56, -0.18)
+mesh = SubResource("BoxMesh_front_panel")
+surface_material_override/0 = SubResource("StandardMaterial3D_robe_dark")
+
+[node name="RightRobePanel" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="6"]
+transform = Transform3D(0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 0, 0, 1, 0.14, -0.53, -0.17)
+mesh = SubResource("BoxMesh_side_panel")
+surface_material_override/0 = SubResource("StandardMaterial3D_robe")
+
+[node name="LeftPantsOverlay" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg" index="2"]
+transform = Transform3D(1, 0, 0, 0, 0.996195, -0.0871557, 0, 0.0871557, 0.996195, 0, -0.16, 0)
+mesh = SubResource("BoxMesh_pants")
+surface_material_override/0 = SubResource("StandardMaterial3D_pants")
+
+[node name="RightPantsOverlay" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg" index="2"]
+transform = Transform3D(1, 0, 0, 0, 0.996195, -0.0871557, 0, 0.0871557, 0.996195, 0, -0.16, 0)
+mesh = SubResource("BoxMesh_pants")
+surface_material_override/0 = SubResource("StandardMaterial3D_pants")
+
+[node name="LeftLegWrapUpper" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg" index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, -0.36, -0.01)
+mesh = SubResource("BoxMesh_wrap")
+surface_material_override/0 = SubResource("StandardMaterial3D_wrap")
+
+[node name="LeftLegWrapLower" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg" index="4"]
+transform = Transform3D(0.984808, 0.173648, 0, -0.173648, 0.984808, 0, 0, 0, 1, 0, -0.48, -0.01)
+mesh = SubResource("BoxMesh_wrap")
+surface_material_override/0 = SubResource("StandardMaterial3D_wrap")
+
+[node name="RightLegWrapUpper" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg" index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, -0.36, -0.01)
+mesh = SubResource("BoxMesh_wrap")
+surface_material_override/0 = SubResource("StandardMaterial3D_wrap")
+
+[node name="RightLegWrapLower" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg" index="4"]
+transform = Transform3D(0.984808, 0.173648, 0, -0.173648, 0.984808, 0, 0, 0, 1, 0, -0.48, -0.01)
+mesh = SubResource("BoxMesh_wrap")
+surface_material_override/0 = SubResource("StandardMaterial3D_wrap")
+
+[node name="WideHatBrim" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="2"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.2, -0.015)
+mesh = SubResource("CylinderMesh_hat_brim")
+surface_material_override/0 = SubResource("StandardMaterial3D_hat")
+
+[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.29, -0.005)
+mesh = SubResource("CylinderMesh_hat_cap")
+surface_material_override/0 = SubResource("StandardMaterial3D_hat")
+
+[node name="TopKnot" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="4"]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.41, 0.02)
+mesh = SubResource("SphereMesh_top_knot")
+surface_material_override/0 = SubResource("StandardMaterial3D_red")
+
+[node name="RedPlume" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="5"]
+transform = Transform3D(0.819152, -0.573576, 0, 0.564863, 0.806707, -0.173648, 0.099601, 0.142244, 0.984808, 0.03, 0.47, 0.005)
+mesh = SubResource("CylinderMesh_plume")
+surface_material_override/0 = SubResource("StandardMaterial3D_red")
+
+[node name="LongSpear" type="Node3D" parent="VisualRoot/Armature/RightArm/RightHandSocket" index="0"]
+transform = Transform3D(1, 0, 0, 0, 0.573576, 0.819152, 0, -0.819152, 0.573576, -0.08, -0.02, -0.2)
+
+[node name="LowPolySpear" parent="VisualRoot/Armature/RightArm/RightHandSocket/LongSpear" instance=ExtResource("3_spear")]
+transform = Transform3D(1.25, 0, 0, 0, 3, 0, 0, 0, 1.25, 0, 0, 0)

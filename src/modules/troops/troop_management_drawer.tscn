@@ -31,11 +31,13 @@ mouse_filter = 2
 [node name="Panel" type="PanelContainer" parent="Root"]
 layout_mode = 0
 anchor_left = 1.0
+anchor_top = 1.0
 anchor_right = 1.0
+anchor_bottom = 1.0
 offset_left = -328.0
-offset_top = 372.0
+offset_top = -584.0
 offset_right = -16.0
-offset_bottom = 606.0
+offset_bottom = -16.0
 grow_horizontal = 0
 mouse_filter = 0
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
@@ -100,6 +102,112 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.72, 0.66, 1)
 text = "Last order  -"
+
+[node name="LogisticsSeparator" type="ColorRect" parent="Root/Panel/Margin/Rows"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+color = Color(0.77, 0.84, 0.82, 0.22)
+
+[node name="LoadLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Load  0kg / 0kg"
+
+[node name="AssetsLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Food  0kg   Wood  0kg   Trolleys  0   Cows  0"
+autowrap_mode = 3
+
+[node name="CarrierLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Carriers  0 ready   0 away"
+
+[node name="CampLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.82, 0.38, 1)
+text = "Camp  Packed"
+autowrap_mode = 3
+
+[node name="FoodAmountRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/separation = 8
+
+[node name="FoodAmountLabel" type="Label" parent="Root/Panel/Margin/Rows/FoodAmountRow"]
+custom_minimum_size = Vector2(54, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Food kg"
+
+[node name="FoodAmountSpinBox" type="SpinBox" parent="Root/Panel/Margin/Rows/FoodAmountRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 1000.0
+step = 20.0
+value = 20.0
+
+[node name="CollectFoodButton" type="Button" parent="Root/Panel/Margin/Rows/FoodAmountRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Collect Food"
+
+[node name="WoodCarrierRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/separation = 8
+
+[node name="WoodCarrierLabel" type="Label" parent="Root/Panel/Margin/Rows/WoodCarrierRow"]
+custom_minimum_size = Vector2(104, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Wood team"
+
+[node name="WoodSoldiersSpinBox" type="SpinBox" parent="Root/Panel/Margin/Rows/WoodCarrierRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(86, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 64.0
+step = 1.0
+value = 1.0
+
+[node name="CollectWoodButton" type="Button" parent="Root/Panel/Margin/Rows/WoodCarrierRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Collect Wood"
+
+[node name="CraftTrolleyButton" type="Button" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Craft Trolley"
+
+[node name="CampButtons" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/separation = 8
+
+[node name="EstablishCampButton" type="Button" parent="Root/Panel/Margin/Rows/CampButtons"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Establish Camp"
+
+[node name="PackCampButton" type="Button" parent="Root/Panel/Margin/Rows/CampButtons"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Pack Camp"
 
 [node name="Buttons" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
 layout_mode = 2

@@ -25,7 +25,10 @@ static func find_path(
 	start_world: Vector3,
 	target_world: Vector3,
 	base_speed_mps: float = 1.0,
-	nearest_search_radius_cells: int = 10
+	nearest_search_radius_cells: int = 10,
+	smooth_path: bool = true,
+	corner_radius_cells: float = 1.35,
+	corner_samples: int = 8
 ) -> Dictionary:
 	var data := movement_map as MovementMapData
 	if not data:
@@ -89,7 +92,8 @@ static func find_path(
 			continue
 		if current_id == target_id:
 			var cells := _reconstruct_cells(came_from, current_id, width)
-			var points := _cells_to_points(data, cells, start_world, resolved_destination)
+			var raw_points := _cells_to_points(data, cells, start_world, resolved_destination)
+			var points := _smooth_path_points(data, raw_points, smooth_path, corner_radius_cells, corner_samples)
 			return _make_success(
 				data,
 				cells,
@@ -277,6 +281,172 @@ static func _cells_to_points(
 		points.append(Vector3(center.x, start_world.y, center.y))
 	points.append(resolved_destination)
 	return _dedupe_points(points)
+
+
+static func _smooth_path_points(
+	data: MovementMapData,
+	raw_points: Array[Vector3],
+	smooth_path: bool,
+	corner_radius_cells: float,
+	corner_samples: int
+) -> Array[Vector3]:
+	var points := _dedupe_points(raw_points)
+	if not smooth_path or points.size() <= 2:
+		return points
+
+	var simplified := _simplify_path_points(data, points)
+	return _round_path_corners(data, simplified, corner_radius_cells, corner_samples)
+
+
+static func _simplify_path_points(data: MovementMapData, points: Array[Vector3]) -> Array[Vector3]:
+	if points.size() <= 2:
+		return points
+
+	var simplified: Array[Vector3] = [points[0]]
+	var anchor_index := 0
+	while anchor_index < points.size() - 1:
+		var next_index := points.size() - 1
+		while next_index > anchor_index + 1:
+			if _has_walkable_line(data, points[anchor_index], points[next_index]):
+				break
+			next_index -= 1
+
+		simplified.append(points[next_index])
+		anchor_index = next_index
+	return _dedupe_points(simplified)
+
+
+static func _round_path_corners(
+	data: MovementMapData,
+	points: Array[Vector3],
+	corner_radius_cells: float,
+	corner_samples: int
+) -> Array[Vector3]:
+	var safe_samples := maxi(corner_samples, 0)
+	var radius_world := maxf(corner_radius_cells, 0.0) * maxf(data.cell_size_meters, 0.001)
+	if points.size() <= 2 or radius_world <= 0.01 or safe_samples <= 0:
+		return points
+
+	var rounded: Array[Vector3] = [points[0]]
+	for index: int in range(1, points.size() - 1):
+		var previous := points[index - 1]
+		var corner := points[index]
+		var next := points[index + 1]
+		var incoming := corner - previous
+		var outgoing := next - corner
+		incoming.y = 0.0
+		outgoing.y = 0.0
+
+		var incoming_length := incoming.length()
+		var outgoing_length := outgoing.length()
+		if incoming_length <= 0.01 or outgoing_length <= 0.01:
+			rounded.append(corner)
+			continue
+
+		var incoming_direction := incoming / incoming_length
+		var outgoing_direction := outgoing / outgoing_length
+		var turn_dot := incoming_direction.dot(outgoing_direction)
+		if absf(turn_dot) > 0.985:
+			rounded.append(corner)
+			continue
+
+		var corner_radius := minf(radius_world, minf(incoming_length * 0.45, outgoing_length * 0.45))
+		var entry := corner - incoming_direction * corner_radius
+		var exit := corner + outgoing_direction * corner_radius
+		entry.y = corner.y
+		exit.y = corner.y
+
+		if not _is_curve_walkable(data, entry, corner, exit, safe_samples):
+			rounded.append(corner)
+			continue
+
+		for sample_index: int in range(safe_samples + 1):
+			var t := float(sample_index) / float(safe_samples)
+			rounded.append(_quadratic_bezier(entry, corner, exit, t))
+
+	rounded.append(points.back())
+	return _dedupe_points(rounded)
+
+
+static func _is_curve_walkable(
+	data: MovementMapData,
+	entry: Vector3,
+	control: Vector3,
+	exit: Vector3,
+	corner_samples: int
+) -> bool:
+	var sample_count := maxi(corner_samples * 3, 6)
+	var previous := entry
+	if not _is_walkable_world_point(data, previous):
+		return false
+
+	for sample_index: int in range(1, sample_count + 1):
+		var t := float(sample_index) / float(sample_count)
+		var current := _quadratic_bezier(entry, control, exit, t)
+		if not _is_walkable_world_point(data, current):
+			return false
+		if not _has_walkable_line(data, previous, current):
+			return false
+		previous = current
+	return true
+
+
+static func _quadratic_bezier(start: Vector3, control: Vector3, end: Vector3, t: float) -> Vector3:
+	var inverse := 1.0 - t
+	return start * inverse * inverse + control * 2.0 * inverse * t + end * t * t
+
+
+static func _has_walkable_line(data: MovementMapData, start: Vector3, end: Vector3) -> bool:
+	if not _is_walkable_world_point(data, start) or not _is_walkable_world_point(data, end):
+		return false
+
+	var start_2d := Vector2(start.x, start.z)
+	var end_2d := Vector2(end.x, end.z)
+	var distance := start_2d.distance_to(end_2d)
+	var step_length := maxf(data.cell_size_meters * 0.2, 0.05)
+	var steps := maxi(ceili(distance / step_length), 1)
+	var previous_cell := data.world_to_cell(start)
+	for step: int in range(1, steps + 1):
+		var t := float(step) / float(steps)
+		var point := start.lerp(end, t)
+		var cell := data.world_to_cell(point)
+		if not _is_walkable(data, cell):
+			return false
+		if cell != previous_cell:
+			if not _is_cell_transition_walkable(data, previous_cell, cell):
+				return false
+			previous_cell = cell
+	return true
+
+
+static func _is_cell_transition_walkable(data: MovementMapData, from_cell: Vector2i, to_cell: Vector2i) -> bool:
+	var delta := to_cell - from_cell
+	if absi(delta.x) <= 1 and absi(delta.y) <= 1:
+		if delta.x != 0 and delta.y != 0:
+			return (
+				_is_walkable(data, Vector2i(from_cell.x, to_cell.y))
+				and _is_walkable(data, Vector2i(to_cell.x, from_cell.y))
+			)
+		return true
+
+	var steps := maxi(absi(delta.x), absi(delta.y))
+	var previous := from_cell
+	for step: int in range(1, steps + 1):
+		var t := float(step) / float(steps)
+		var cell := Vector2i(
+			roundi(lerpf(float(from_cell.x), float(to_cell.x), t)),
+			roundi(lerpf(float(from_cell.y), float(to_cell.y), t))
+		)
+		if not _is_walkable(data, cell):
+			return false
+		if cell != previous and not _is_cell_transition_walkable(data, previous, cell):
+			return false
+		previous = cell
+	return true
+
+
+static func _is_walkable_world_point(data: MovementMapData, point: Vector3) -> bool:
+	return _is_walkable(data, data.world_to_cell(point))
 
 
 static func _dedupe_points(points: Array[Vector3]) -> Array[Vector3]:
