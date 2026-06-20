@@ -29,8 +29,6 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	if system_map != null:
 		_system_img = system_map.get_image()
-	else:
-		push_warning("No WaterSystem map!")
 
 
 func _exit_tree() -> void:

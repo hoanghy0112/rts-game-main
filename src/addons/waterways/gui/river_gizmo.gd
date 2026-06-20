@@ -154,6 +154,7 @@ func _get_curve_index(index: int, point_count: int):
 		return (index - point_count - 1) / 2
 	if _is_width_point_left(index, point_count) or _is_width_point_right(index, point_count):
 		return (index - point_count * 3) / 2
+	return -1
 
 
 func _get_point_index(curve_index: int, is_center: bool, is_cp_in: bool, is_cp_out: bool, is_width_left: bool, is_width_right: bool, point_count: int):
@@ -167,6 +168,7 @@ func _get_point_index(curve_index: int, is_center: bool, is_cp_in: bool, is_cp_o
 		return point_count * 3 + curve_index * 2
 	if is_width_right:
 		return point_count * 3 + 1 + curve_index * 2
+	return -1
 
 
 # TODO - figure out of this new "secondary" bool should be used
@@ -183,6 +185,7 @@ func _get_handle_value(gizmo: EditorNode3DGizmo, index: int, secondary: bool):
 		return river.curve.get_point_out(_get_curve_index(index, point_count))
 	if _is_width_point_left(index, point_count) or _is_width_point_right(index, point_count):
 		return river.widths[_get_curve_index(index, point_count)]
+	return null
 
 
 # Called when handle is moved

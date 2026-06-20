@@ -47,6 +47,10 @@ obj/
 *.dylib
 *.pdb
 
+# Terrain3D is a packaged GDExtension addon; its native libraries are source assets.
+!src/addons/terrain_3d/bin/
+!src/addons/terrain_3d/bin/**
+
 # Logs
 *.log
 

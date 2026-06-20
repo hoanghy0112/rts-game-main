@@ -41,6 +41,7 @@ func _get_handle_value(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool
 		return waterfall.points[0]
 	if handle_id == 1:
 		return waterfall.points[1]
+	return null
 
 
 func _set_handle(gizmo: EditorNode3DGizmo, handle_id: int, secondary: bool, camera: Camera3D, screen_pos: Vector2) -> void:

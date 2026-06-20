@@ -185,6 +185,7 @@ func _create_grid() -> void:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
 			particle_node.use_fixed_seed = true
+			particle_node.set_physics_interpolation_mode(Node.PHYSICS_INTERPOLATION_MODE_OFF)
 			if mesh_material_override:
 				particle_node.material_override = mesh_material_override
 			if not particle_nodes.is_empty() and (x > -half_grid or z > -half_grid):
@@ -228,7 +229,6 @@ func _position_grid(pos: Vector3) -> void:
 			continue
 		var snap := Vector3(pos.x, 0.0, pos.z).snapped(Vector3.ONE) + offsets[index]
 		particle_node.global_position = (snap / instance_spacing).round() * instance_spacing
-		particle_node.reset_physics_interpolation()
 		particle_node.restart(true)
 
 
