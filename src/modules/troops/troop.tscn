@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bjuw3vjv5imps"]
+
+[ext_resource type="Script" path="res://modules/troops/troop.gd" id="1_troop"]
+
+[node name="Troop" type="Node3D"]
+script = ExtResource("1_troop")

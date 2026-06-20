@@ -23,6 +23,12 @@
 [ext_resource type="Script" path="res://modules/village/village_selection_controller.gd" id="22_food_select"]
 [ext_resource type="PackedScene" path="res://modules/time/game_time_system.tscn" id="23_game_time"]
 [ext_resource type="PackedScene" path="res://modules/time/game_date_display.tscn" id="24_date_display"]
+[ext_resource type="Resource" path="res://modules/draft/draft_movement_map.res" id="25_draft_move_map"]
+[ext_resource type="Script" path="res://modules/map/movement_map_generator.gd" id="26_move_generator"]
+[ext_resource type="Script" path="res://modules/map/movement_map_overlay.gd" id="27_move_overlay"]
+[ext_resource type="PackedScene" path="res://modules/troops/troop.tscn" id="28_troop"]
+[ext_resource type="PackedScene" path="res://modules/troops/troop_management_drawer.tscn" id="29_troop_drawer"]
+[ext_resource type="Script" path="res://modules/troops/troop_selection_controller.gd" id="30_troop_select"]
 
 [ext_resource type="Resource" path="res://modules/draft/draft_village_cells.tres" id="19_vcells"]
 
@@ -185,15 +191,49 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -193.04454, 16.070778, -37.37
 [node name="FieldTerrainRegistry" type="Node" parent="." unique_id=404295709]
 script = ExtResource("13_field")
 
+[node name="MovementMapGenerator" type="Node" parent="."]
+script = ExtResource("26_move_generator")
+terrain_path = NodePath("../Terrain3D")
+water_system_path = NodePath("../WaterSystem")
+forest_region_paths = Array[NodePath]([NodePath("../ForestRegion")])
+village_region_paths = Array[NodePath]([NodePath("../VillageRegion")])
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+max_grid_size = 256
+max_walkable_slope_degrees = 35.0
+
+[node name="MovementMapOverlay" type="Node3D" parent="."]
+script = ExtResource("27_move_overlay")
+movement_map = ExtResource("25_draft_move_map")
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
+
 [node name="GameTimeSystem" parent="." instance=ExtResource("23_game_time")]
 
 [node name="GameDateDisplay" parent="." instance=ExtResource("24_date_display")]
 
+[node name="Troop_01" parent="." instance=ExtResource("28_troop")]
+transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -170, 0, -66)
+troop_id = &"draft_guard"
+display_name = "Village Guard"
+soldier_count = 14
+team_flag_color = Color(0.1, 0.28, 0.82, 1)
+troop_flag_color = Color(0.82, 0.12, 0.08, 1)
+movement_map = ExtResource("25_draft_move_map")
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
+
 [node name="VillageInfoDrawer" parent="." instance=ExtResource("21_food_drawer")]
 village_region_path = NodePath("../VillageRegion")
+
+[node name="TroopManagementDrawer" parent="." instance=ExtResource("29_troop_drawer")]
 
 [node name="VillageSelectionController" type="Node" parent="."]
 script = ExtResource("22_food_select")
 village_region_path = NodePath("../VillageRegion")
 info_drawer_path = NodePath("../VillageInfoDrawer")
+camera_path = NodePath("../RTSCameraRig/Camera3D")
+
+[node name="TroopSelectionController" type="Node" parent="."]
+script = ExtResource("30_troop_select")
+troop_drawer_path = NodePath("../TroopManagementDrawer")
 camera_path = NodePath("../RTSCameraRig/Camera3D")

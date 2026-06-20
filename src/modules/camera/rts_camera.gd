@@ -35,6 +35,7 @@ const METHOD_GET_MOVE_SENSITIVITY: StringName = &"get_move_sensitivity"
 @export var rotate_sensitivity: float = 0.005
 @export var pan_sensitivity: float = 0.01
 @export var rotation_lerp_speed: float = 14.0
+@export_range(1.0, 48.0, 0.5, "or_greater") var right_drag_threshold: float = 6.0
 
 @export_group("Nodes")
 @export var camera_path: NodePath = ^"Camera3D"
@@ -49,6 +50,8 @@ var _desired_distance: float = DEFAULT_DISTANCE
 var _current_distance: float = DEFAULT_DISTANCE
 var _is_rotating: bool = false
 var _is_middle_orbiting: bool = false
+var _right_mouse_pressed: bool = false
+var _right_mouse_start_position := Vector2.ZERO
 var _camera: Camera3D = null
 var _settings_manager: Node = null
 
@@ -66,6 +69,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_sync_pointer_button_state()
 	_handle_keyboard_movement(delta)
 	_update_smoothed_state(delta)
 	_apply_camera_transform()
@@ -106,8 +110,15 @@ func _handle_keyboard_movement(delta: float) -> void:
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_RIGHT:
-		_is_rotating = event.pressed
-		get_viewport().set_input_as_handled()
+		if event.pressed:
+			_right_mouse_pressed = true
+			_right_mouse_start_position = event.position
+			_is_rotating = false
+		else:
+			var was_rotating := _is_rotating
+			_reset_right_mouse_rotation_state()
+			if was_rotating:
+				get_viewport().set_input_as_handled()
 	elif event.button_index == MOUSE_BUTTON_MIDDLE:
 		_is_middle_orbiting = event.pressed
 		get_viewport().set_input_as_handled()
@@ -120,12 +131,29 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
-	if _is_rotating:
+	_sync_pointer_button_state()
+	if _right_mouse_pressed:
+		if not _is_rotating and event.position.distance_to(_right_mouse_start_position) >= right_drag_threshold:
+			_is_rotating = true
+		if not _is_rotating:
+			return
 		_orbit_target(event.relative, rotate_sensitivity)
 		get_viewport().set_input_as_handled()
 	elif _is_middle_orbiting:
 		_orbit_target(event.relative, pan_sensitivity)
 		get_viewport().set_input_as_handled()
+
+
+func _sync_pointer_button_state() -> void:
+	if _right_mouse_pressed and not Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		_reset_right_mouse_rotation_state()
+	if _is_middle_orbiting and not Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+		_is_middle_orbiting = false
+
+
+func _reset_right_mouse_rotation_state() -> void:
+	_right_mouse_pressed = false
+	_is_rotating = false
 
 
 func _update_smoothed_state(delta: float) -> void:

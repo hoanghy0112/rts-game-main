@@ -29,6 +29,9 @@
 [ext_resource type="Script" uid="uid://bgve0bmpehos" path="res://modules/village/village_selection_controller.gd" id="29_food_select"]
 [ext_resource type="PackedScene" path="res://modules/time/game_time_system.tscn" id="30_game_time"]
 [ext_resource type="PackedScene" path="res://modules/time/game_date_display.tscn" id="31_date_display"]
+[ext_resource type="PackedScene" uid="uid://bjuw3vjv5imps" path="res://modules/troops/troop.tscn" id="32_troop"]
+[ext_resource type="PackedScene" uid="uid://clbbr01uvxpan" path="res://modules/troops/troop_management_drawer.tscn" id="33_troop_drawer"]
+[ext_resource type="Script" uid="uid://c7bvixca1w0d4" path="res://modules/troops/troop_selection_controller.gd" id="34_troop_select"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_ouoeg"]
 size = Vector3(200, 200, 200)
@@ -273,16 +276,33 @@ movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
 
 [node name="RTSCameraRig" parent="." unique_id=1695932625 instance=ExtResource("12_21qn2")]
-transform = Transform3D(-0.083208054, 0, 0.99653214, 0, 1, 0, -0.99653214, 0, -0.083208054, -1607.3186, 10, -87.920616)
+transform = Transform3D(-0.8199773, 0, 0.572396, 0, 1, 0, -0.572396, 0, -0.8199773, -1567.9161, 10, 446.7006)
 
-[node name="GameTimeSystem" parent="." instance=ExtResource("30_game_time")]
+[node name="GameTimeSystem" parent="." unique_id=1647227718 instance=ExtResource("30_game_time")]
+month_names = PackedStringArray("Month 01", "Month 02", "Month 03", "Month 04", "Month 05", "Month 06", "Month 07", "Month 08", "Month 09", "Month 10", "Month 11", "Month 12")
 
-[node name="GameDateDisplay" parent="." instance=ExtResource("31_date_display")]
+[node name="GameDateDisplay" parent="." unique_id=675912049 instance=ExtResource("31_date_display")]
+
+[node name="Troop_01" parent="." unique_id=181912808 instance=ExtResource("32_troop")]
+transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -1525.148, 0, 456.124)
+troop_id = &"midlands_guard"
+display_name = "Midlands Guard"
+soldier_count = 18
+troop_flag_color = Color(0.82, 0.12, 0.08, 1)
+movement_map = ExtResource("16_oh3oi")
+movement_map_path = "res://maps/midlands/midlands_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
 
 [node name="VillageInfoDrawer" parent="." unique_id=146091131 instance=ExtResource("28_food_drawer")]
 
+[node name="TroopManagementDrawer" parent="." unique_id=381193051 instance=ExtResource("33_troop_drawer")]
+
 [node name="VillageSelectionController" type="Node" parent="." unique_id=532361647]
 script = ExtResource("29_food_select")
+camera_path = NodePath("../RTSCameraRig/Camera3D")
+
+[node name="TroopSelectionController" type="Node" parent="." unique_id=1283225157]
+script = ExtResource("34_troop_select")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
 
 [node name="FieldTerrainRegistry" type="Node" parent="." unique_id=1657839869]

@@ -10,7 +10,7 @@ const SELECTABLE_VILLAGE_TYPE := &"village"
 @export var info_drawer_path: NodePath = NodePath("../VillageInfoDrawer")
 @export var camera_path: NodePath = NodePath("")
 @export_range(1.0, 20000.0, 1.0, "or_greater") var max_pick_distance: float = 5000.0
-@export_flags_3d_physics var selection_collision_mask: int = 0xFFFFFFFF
+@export_flags_3d_physics var selection_collision_mask: int = 1
 
 var _pending_click_position := Vector2(INF, INF)
 var _hovered_selectable: Node
