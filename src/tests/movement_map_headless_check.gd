@@ -146,9 +146,11 @@ func _run_checks(failures: Array[String]) -> void:
 	var steep_road_cell = data.world_to_cell(Vector2(52.0, 12.0))
 	var normal_cell = data.world_to_cell(Vector2(36.0, 36.0))
 
-	_expect(not data.is_walkable_cell(water_cell), "water cells should be blocked", failures)
+	_expect(data.is_walkable_cell(water_cell), "shallow water cells should be walkable", failures)
+	_expect(data.get_speed_multiplier_cell(water_cell) < data.get_speed_multiplier_cell(forest_cell), "shallow water cells should be slower than forest terrain", failures)
 	_expect((data.get_flags_cell(water_cell) & MovementMapDataScript.FLAG_RIVER) != 0, "water cells should carry the river flag", failures)
 	_expect((data.get_flags_cell(water_cell) & MovementMapDataScript.FLAG_ROAD) != 0, "road over water should retain the road flag", failures)
+	_expect(data.get_speed_multiplier_cell(water_cell) < data.get_speed_multiplier_cell(road_cell), "road over shallow water should not receive the road speed boost", failures)
 
 	_expect(not data.is_walkable_cell(steep_road_cell), "excessive slope cells should be blocked", failures)
 	_expect((data.get_flags_cell(steep_road_cell) & MovementMapDataScript.FLAG_STEEP_SLOPE) != 0, "steep cells should carry the steep slope flag", failures)

@@ -17,7 +17,7 @@
 [ext_resource type="Script" uid="uid://bqjdo35lwp703" path="res://modules/village/fields/field_terrain_registry.gd" id="14_21qn2"]
 [ext_resource type="Script" uid="uid://fk7m1irtjn3o" path="res://modules/map/macro_detail_atlas.gd" id="15_macro_atlas"]
 [ext_resource type="Script" uid="uid://due6ctm17iow0" path="res://modules/map/macro_detail_overlay.gd" id="16_macro_overlay"]
-[ext_resource type="Resource" uid="uid://ddjvslcyqt2n6" path="res://maps/midlands/midlands_movement_map.res" id="16_oh3oi"]
+[ext_resource type="Resource" uid="uid://dk46gvl2kb07t" path="res://maps/midlands/midlands_movement_map.res" id="16_oh3oi"]
 [ext_resource type="Script" uid="uid://d3wjqj5bpxc8i" path="res://modules/map/movement_map_generator.gd" id="17_movement_generator"]
 [ext_resource type="Script" uid="uid://djmxfbho3p8m7" path="res://modules/map/movement_map_overlay.gd" id="18_movement_overlay"]
 [ext_resource type="PackedScene" uid="uid://cvuack38vnepd" path="res://modules/village/house/thatched_hut_on_stilts.tscn" id="20_kw3xr"]

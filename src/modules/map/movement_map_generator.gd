@@ -19,6 +19,7 @@ const INVALID_TERRAIN_HEIGHT := 1.0e30
 @export_range(1, 8192, 1, "or_greater") var max_grid_size: int = 4096
 @export_range(1024, 4194304, 1024, "or_greater") var max_generated_cells: int = 4194304
 @export_range(0.0, 89.0, 0.1) var max_walkable_slope_degrees: float = 35.0
+@export_range(0.01, 1.0, 0.01) var shallow_water_speed_multiplier: float = 0.35
 @export_range(0.01, 1.0, 0.01) var forest_speed_multiplier: float = 0.65
 @export_range(1.0, 4.0, 0.01, "or_greater") var road_speed_multiplier: float = 1.35
 @export var last_generation_summary := ""
@@ -110,10 +111,12 @@ func generate_movement_map() -> Resource:
 	for index: int in range(width * height):
 		var flags_value := int(terrain_flags[index])
 		var speed := terrain_speeds[index]
+		var is_water := water_mask[index] != 0
 
-		if water_mask[index] != 0:
+		if is_water:
 			flags_value |= MovementMapDataScript.FLAG_RIVER
-			speed = 0.0
+			if speed > 0.0:
+				speed *= shallow_water_speed_multiplier
 
 		if forest_mask[index] != 0:
 			flags_value |= MovementMapDataScript.FLAG_FOREST
@@ -122,7 +125,7 @@ func generate_movement_map() -> Resource:
 
 		if road_mask[index] != 0:
 			flags_value |= MovementMapDataScript.FLAG_ROAD
-			if speed > 0.0:
+			if speed > 0.0 and not is_water:
 				speed = maxf(speed, road_speed_multiplier)
 
 		flag_array[index] = clampi(flags_value, 0, 255)
