@@ -23,6 +23,7 @@ func _run_checks(failures: Array[String]) -> void:
 	_check_default_peasant_scene_loads(failures)
 	_check_humans_face_move_direction(failures)
 	_check_peasant_house_patrol_fallback(failures)
+	_check_peasant_stalled_move_recovers(failures)
 	_check_runtime_data_exports_peasant_settings(failures)
 	_check_initial_population_matches_target(failures)
 	_check_seeded_population_is_deterministic(failures)
@@ -76,6 +77,23 @@ func _check_peasant_house_patrol_fallback(failures: Array[String]) -> void:
 	var offset := (peasant.call("get_move_target") as Vector3) - peasant.position
 	offset.y = 0.0
 	_expect(offset.length() >= 2.0, "fallback patrol target should not be inside the immediate house stop radius", failures)
+	peasant.free()
+
+
+func _check_peasant_stalled_move_recovers(failures: Array[String]) -> void:
+	var peasant := PeasantScene.instantiate() as CharacterBody3D
+	peasant.set("behavior_enabled", false)
+	peasant.set("move_stall_seconds", 0.2)
+	peasant.set("move_stall_min_progress", 0.01)
+	var stalled_callable := Callable(peasant, "_on_move_target_stalled")
+	if peasant.has_signal("move_target_stalled") and not peasant.is_connected("move_target_stalled", stalled_callable):
+		peasant.connect("move_target_stalled", stalled_callable)
+	peasant.call("set_move_target", Vector3(10.0, 0.0, 0.0), false)
+
+	for _step: int in range(8):
+		peasant.call("_update_move_progress", 10.0, 0.05)
+
+	_expect(not bool(peasant.call("has_active_move_target")), "stalled peasant should clear a blocked roaming target instead of staying stuck", failures)
 	peasant.free()
 
 

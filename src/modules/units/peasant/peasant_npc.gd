@@ -27,6 +27,8 @@ var _configured := false
 func _ready() -> void:
 	super._ready()
 	add_to_group(&"peasants")
+	if not move_target_stalled.is_connected(_on_move_target_stalled):
+		move_target_stalled.connect(_on_move_target_stalled)
 	if not _configured:
 		_rng.randomize()
 		_home_position = global_position
@@ -221,3 +223,9 @@ func _random_horizontal_offset(radius: float) -> Vector3:
 func _reset_decision_timer() -> void:
 	var max_wait := maxf(max_idle_seconds, min_idle_seconds)
 	_decision_timer = _rng.randf_range(min_idle_seconds, max_wait)
+
+
+func _on_move_target_stalled(_target: Vector3) -> void:
+	_pending_field_task = false
+	clear_move_target()
+	_decision_timer = _rng.randf_range(0.2, 0.6) if behavior_enabled and is_alive() else 0.0

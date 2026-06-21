@@ -4,6 +4,7 @@ class_name HumanNPC
 signal health_changed(current: float, maximum: float)
 signal state_changed(state: StringName)
 signal died(reason: StringName)
+signal move_target_stalled(target: Vector3)
 
 const STATE_IDLE := &"idle"
 const STATE_WALK := &"walk"
@@ -19,6 +20,11 @@ const STATE_DEAD := &"dead"
 @export_range(0.1, 100.0, 0.1, "or_greater") var acceleration: float = 12.0
 @export_range(0.01, 4.0, 0.01, "or_greater") var stop_distance: float = 0.35
 @export_range(0.1, 30.0, 0.1, "or_greater") var turn_speed: float = 9.0
+
+@export_group("Movement Recovery")
+@export_range(0.2, 5.0, 0.05, "or_greater") var move_stall_seconds: float = 1.15
+@export_range(0.005, 1.0, 0.005, "or_greater") var move_stall_min_progress: float = 0.06
+@export_range(0.0, 4.0, 0.05, "or_greater") var move_stall_recovery_side_speed: float = 0.85
 
 @export_group("Combat")
 @export_range(0.0, 1000.0, 1.0, "or_greater") var attack_damage: float = 8.0
@@ -49,6 +55,10 @@ var _timed_state_duration := 0.0
 var _state_time := 0.0
 var _animation_phase := 0.0
 var _surface_height_source: Node3D
+var _move_last_distance := INF
+var _move_stall_timer := 0.0
+var _move_stall_notified := false
+var _move_recovery_side := 1.0
 
 @onready var _model_root := get_node_or_null(model_root_path) as Node3D
 @onready var _torso := get_node_or_null(torso_path) as Node3D
@@ -95,11 +105,13 @@ func set_move_target(world_position: Vector3, run: bool = false) -> void:
 	_move_run = run
 	_timed_state_remaining = 0.0
 	_timed_state_duration = 0.0
+	_reset_move_progress_tracking()
 	_set_state(STATE_RUN if run else STATE_WALK)
 
 
 func clear_move_target() -> void:
 	_has_move_target = false
+	_reset_move_progress_tracking()
 	if is_alive() and _state != STATE_FIELD_TASK and _state != STATE_TOOL_ACTION:
 		_set_state(STATE_IDLE)
 
@@ -117,6 +129,7 @@ func play_field_task(duration: float = 2.4) -> void:
 		return
 
 	_has_move_target = false
+	_reset_move_progress_tracking()
 	_timed_state_duration = maxf(duration, 0.05)
 	_timed_state_remaining = _timed_state_duration
 	_set_state(STATE_FIELD_TASK)
@@ -133,6 +146,7 @@ func use_tool(target: Node3D = null, duration: float = -1.0) -> void:
 			_face_direction(to_target.normalized(), 1.0)
 
 	_has_move_target = false
+	_reset_move_progress_tracking()
 	_timed_state_duration = maxf(duration if duration > 0.0 else attack_cooldown, 0.05)
 	_timed_state_remaining = _timed_state_duration
 	_set_state(STATE_TOOL_ACTION)
@@ -158,6 +172,7 @@ func kill(reason: StringName = &"death") -> void:
 
 	_health = 0.0
 	_has_move_target = false
+	_reset_move_progress_tracking()
 	_timed_state_remaining = 0.0
 	_timed_state_duration = 0.0
 	velocity = Vector3.ZERO
@@ -170,6 +185,7 @@ func revive_at(world_position: Vector3) -> void:
 	global_position = world_position
 	_health = maxf(max_health, 1.0)
 	_has_move_target = false
+	_reset_move_progress_tracking()
 	_timed_state_remaining = 0.0
 	_timed_state_duration = 0.0
 	velocity = Vector3.ZERO
@@ -221,13 +237,27 @@ func _update_movement(delta: float) -> void:
 		var distance := to_target.length()
 		if distance <= stop_distance:
 			_has_move_target = false
+			_reset_move_progress_tracking()
 			velocity.x = move_toward(velocity.x, 0.0, acceleration * delta)
 			velocity.z = move_toward(velocity.z, 0.0, acceleration * delta)
 			_set_state(STATE_IDLE)
 		else:
 			var direction := to_target / distance
 			var speed := run_speed if _move_run else walk_speed
+			var recovering := _update_move_progress(distance, delta)
+			if not _has_move_target:
+				velocity.x = move_toward(velocity.x, 0.0, acceleration * delta)
+				velocity.z = move_toward(velocity.z, 0.0, acceleration * delta)
+				velocity.y = 0.0
+				if _state == STATE_WALK or _state == STATE_RUN:
+					_set_state(STATE_IDLE)
+				move_and_slide()
+				_snap_to_surface()
+				return
 			var desired_velocity := direction * speed
+			if recovering and move_stall_recovery_side_speed > 0.0:
+				var side := Vector3(-direction.z, 0.0, direction.x) * _move_recovery_side
+				desired_velocity = (desired_velocity + side * move_stall_recovery_side_speed).limit_length(speed)
 			velocity.x = move_toward(velocity.x, desired_velocity.x, acceleration * delta)
 			velocity.z = move_toward(velocity.z, desired_velocity.z, acceleration * delta)
 			velocity.y = 0.0
@@ -242,6 +272,30 @@ func _update_movement(delta: float) -> void:
 
 	move_and_slide()
 	_snap_to_surface()
+
+
+func _update_move_progress(distance: float, delta: float) -> bool:
+	if _move_last_distance == INF or distance <= _move_last_distance - move_stall_min_progress:
+		_move_last_distance = distance
+		_move_stall_timer = 0.0
+		_move_stall_notified = false
+		return false
+
+	_move_stall_timer += delta
+	if _move_stall_timer < move_stall_seconds:
+		return false
+
+	if not _move_stall_notified:
+		_move_stall_notified = true
+		_move_recovery_side *= -1.0
+		move_target_stalled.emit(_move_target)
+	return true
+
+
+func _reset_move_progress_tracking() -> void:
+	_move_last_distance = INF
+	_move_stall_timer = 0.0
+	_move_stall_notified = false
 
 
 func _face_direction(direction: Vector3, delta: float) -> void:
