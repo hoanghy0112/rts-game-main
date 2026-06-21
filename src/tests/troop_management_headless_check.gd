@@ -4,6 +4,7 @@ const MovementMapDataScript = preload("res://modules/map/movement_map_data.gd")
 const MovementMapPathfinderScript = preload("res://modules/troops/movement_map_pathfinder.gd")
 const ForestRegionScript = preload("res://addons/forest_brush/forest_region.gd")
 const TroopSelectionControllerScript = preload("res://modules/troops/troop_selection_controller.gd")
+const TroopEnemySpawnerScript = preload("res://modules/troops/troop_enemy_spawner.gd")
 const TroopScene: PackedScene = preload("res://modules/troops/troop.tscn")
 const TroopDrawerScene: PackedScene = preload("res://modules/troops/troop_management_drawer.tscn")
 const RTSCameraScene: PackedScene = preload("res://modules/camera/rts_camera.tscn")
@@ -86,7 +87,12 @@ func _run_checks(failures: Array[String]) -> void:
 	_check_pathfinder_smooths_open_routes(failures)
 	_check_pathfinder_reports_unreachable(failures)
 	await _check_troop_scene_and_exports(failures)
+	await _check_killed_soldiers_disappear(failures)
 	await _check_troop_route_visuals(failures)
+	await _check_troop_modes_and_combat_stats(failures)
+	await _check_troop_combat_resolution(failures)
+	await _check_troop_desertion(failures)
+	await _check_enemy_spawner(failures)
 	await _check_automatic_logistics_commands(failures)
 	await _check_carrier_visuals_are_independent_and_labeled(failures)
 	await _check_troop_logistics_tasks(failures)
@@ -182,6 +188,11 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	if first_soldier:
 		_expect(first_soldier.has_method("get_right_hand_socket"), "troop soldier should inherit the human unit API", failures)
 		_expect(first_soldier.has_method("set_formation_walking"), "troop soldier should expose formation walking animation control", failures)
+		_expect((first_soldier as Node3D).top_level, "formation soldiers should own world movement instead of inheriting troop movement", failures)
+		_expect(first_soldier.has_method("follow_formation_path"), "troop soldier should receive formation path commands", failures)
+		_expect(first_soldier.has_method("set_independent_move_target"), "troop soldier should receive independent world move targets", failures)
+		_expect(first_soldier.has_method("set_independent_combat"), "troop soldier should expose independent combat control", failures)
+		_expect(first_soldier.has_method("trigger_spear_thrust"), "troop soldier should expose procedural spear thrust animation", failures)
 		_expect(first_soldier.find_child("LowPolySpear", true, false) != null, "troop soldier should carry a long spear", failures)
 	troop.set("soldier_count", 40)
 	await process_frame
@@ -191,6 +202,27 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(proxy != null, "troop should create a selection proxy", failures)
 	if proxy:
 		_expect(proxy.has_meta(&"troop_selectable_type"), "selection proxy should carry troop metadata", failures)
+
+	root.remove_child(troop)
+	troop.free()
+
+
+func _check_killed_soldiers_disappear(failures: Array[String]) -> void:
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 3)
+	troop.set("base_soldier_strength", 10.0)
+	troop.set("soldier_strength_variance", 0.0)
+	root.add_child(troop)
+	await process_frame
+
+	var soldier := troop.get_node_or_null("Soldiers/Soldier_000")
+	_expect(soldier != null, "soldier disappearance check should find a soldier", failures)
+	if soldier and soldier.has_method("apply_strength_damage"):
+		soldier.call("apply_strength_damage", 999.0, &"test")
+		await process_frame
+		_expect(not is_instance_valid(soldier) or not (soldier as Node3D).visible, "killed soldiers should disappear from view", failures)
+		var summary: Dictionary = troop.call("get_troop_summary") as Dictionary
+		_expect(int(summary.get("active_soldier_count", 0)) == 2, "killed disappeared soldiers should leave active troop count", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -211,6 +243,17 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	var moving_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
 	if moving_soldier and moving_soldier.has_method("is_formation_walking"):
 		_expect(bool(moving_soldier.call("is_formation_walking")), "troop soldier should play walking animation while troop moves", failures)
+	if moving_soldier and moving_soldier.has_method("has_independent_motion"):
+		_expect(bool(moving_soldier.call("has_independent_motion")), "troop soldier should own a formation path command while troop moves", failures)
+	if moving_soldier is Node3D:
+		var before_anchor_shift := (moving_soldier as Node3D).global_position
+		troop.global_position += Vector3(2.0, 0.0, 0.0)
+		_expect(
+			(moving_soldier as Node3D).global_position.distance_to(before_anchor_shift) < 0.001,
+			"formation soldiers should not slide when only the troop anchor moves",
+			failures
+		)
+		troop.global_position -= Vector3(2.0, 0.0, 0.0)
 	troop.call("clear_destination")
 	_expect(not bool(troop.call("has_destination")), "clear destination should remove active destination", failures)
 	_expect(int(troop.call("get_route_dash_count")) == 0, "clear destination should clear route dashes", failures)
@@ -221,6 +264,203 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	troop.free()
 
 
+func _check_troop_modes_and_combat_stats(failures: Array[String]) -> void:
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 5)
+	troop.set("carried_food_kg", 100.0)
+	troop.set("base_soldier_endurance", 60.0)
+	troop.set("soldier_endurance_variance", 0.0)
+	troop.set("base_soldier_damage", 5.0)
+	troop.set("soldier_damage_variance", 0.0)
+	root.add_child(troop)
+	await process_frame
+
+	var summary: Dictionary = troop.call("get_troop_summary") as Dictionary
+	_expect(int(summary.get("active_soldier_count", 0)) == 5, "troop summary should count active soldiers", failures)
+	_expect(float(summary.get("average_endurance", 0.0)) > 0.0, "troop summary should expose average soldier endurance", failures)
+
+	troop.call("set_troop_mode", &"training")
+	var damage_before := float((troop.call("get_troop_summary") as Dictionary).get("average_damage", 0.0))
+	var max_endurance_before := float((troop.call("get_troop_summary") as Dictionary).get("average_max_endurance", 0.0))
+	troop.call("_physics_process", 1.0)
+	summary = troop.call("get_troop_summary") as Dictionary
+	_expect(StringName(summary.get("troop_mode", &"")) == &"training", "troop should store selected training mode", failures)
+	_expect(float(summary.get("average_damage", 0.0)) > damage_before, "training mode should increase soldier damage", failures)
+	_expect(float(summary.get("average_max_endurance", 0.0)) > max_endurance_before, "training mode should increase max endurance", failures)
+
+	troop.call("set_movement_mode", &"running")
+	_expect(StringName((troop.call("get_troop_summary") as Dictionary).get("movement_mode", &"")) == &"running", "troop should store selected running mode", failures)
+
+	troop.set("carried_food_kg", 0.0)
+	troop.set("food_kg_per_soldier_per_day", 1000.0)
+	troop.call("_physics_process", 1.0)
+	summary = troop.call("get_troop_summary") as Dictionary
+	_expect(float(summary.get("food_shortage_ratio", 0.0)) > 0.0, "food shortage should be reported when troop has no food", failures)
+
+	root.remove_child(troop)
+	troop.free()
+
+
+func _check_troop_combat_resolution(failures: Array[String]) -> void:
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", 4)
+	player.set("carried_food_kg", 100.0)
+	player.set("combat_seed", 11)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("troop_mode", "attack")
+	player.set("movement_map", _make_map(24, 24))
+	player.set("position", Vector3(6.0, 0.0, 8.0))
+	player.set("detection_range_m", 80.0)
+	player.set("combat_range_m", 80.0)
+	player.set("combat_spear_range_m", 2.6)
+	player.set("combat_slot_follow_speed", 24.0)
+	player.set("combat_frontline_width_per_soldier", 1.25)
+	player.set("attack_engagement_delay", 0.0)
+	player.set("attack_interval", 0.1)
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 4)
+	enemy.set("carried_food_kg", 100.0)
+	enemy.set("combat_seed", 12)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("movement_map", _make_map(24, 24))
+	enemy.set("detection_range_m", 80.0)
+	enemy.set("defensive_engagement_range_m", 80.0)
+	enemy.set("combat_spear_range_m", 2.6)
+	enemy.set("combat_slot_follow_speed", 24.0)
+	enemy.set("combat_frontline_width_per_soldier", 1.25)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.set("attack_interval", 0.1)
+	enemy.position = Vector3(10.0, 0.0, 8.0)
+	root.add_child(enemy)
+	await process_frame
+
+	var enemy_strength_before := float((enemy.call("get_troop_summary") as Dictionary).get("average_strength", 0.0))
+	for _index: int in range(8):
+		_step_troop_with_soldiers(player, 0.2)
+		_step_troop_with_soldiers(enemy, 0.2)
+	var enemy_summary: Dictionary = enemy.call("get_troop_summary") as Dictionary
+	var player_summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(bool(player_summary.get("in_combat", false)), "attacking troop should enter combat against enemy team", failures)
+	_expect(float(enemy_summary.get("average_strength", enemy_strength_before)) < enemy_strength_before, "combat should reduce enemy soldier strength", failures)
+	_expect(bool(player_summary.get("combat_scatter_active", false)), "fighting soldiers should break formation into scattered positions", failures)
+	_expect(int(player_summary.get("combat_assigned_target_count", 0)) > 0, "combat should assign individual soldier targets", failures)
+	_expect(_count_damaged_soldiers(enemy) > 1, "messy combat should damage more than one enemy soldier", failures)
+	_expect(_count_soldiers_away_from_slots(player, 0.18) > 1, "combat should move multiple soldiers away from formation slots", failures)
+	_expect(_minimum_soldier_spacing(player) > 0.42, "combat spacing should keep allied soldiers from overlapping", failures)
+	var any_attacking := false
+	var soldiers := player.get_node_or_null("Soldiers")
+	if soldiers:
+		for child: Node in soldiers.get_children():
+			if child.has_method("is_formation_attacking") and bool(child.call("is_formation_attacking")):
+				any_attacking = true
+				if child.has_method("get_right_hand_socket"):
+					var socket := child.call("get_right_hand_socket") as Node3D
+					if socket:
+						_expect(absf(socket.rotation.y) < 0.22, "spear thrust should stay aligned toward the target instead of sweeping sideways", failures)
+				break
+	_expect(any_attacking, "troop soldiers should play attack animation while fighting", failures)
+	var player_positions_after_fight := _soldier_local_positions(player)
+	enemy.call("queue_free")
+	await process_frame
+	_step_troop_with_soldiers(player, 0.2)
+	player_summary = player.call("get_troop_summary") as Dictionary
+	_expect(bool(player_summary.get("combat_scatter_active", false)), "soldiers should remain scattered after combat ends", failures)
+	_expect(_positions_close(player_positions_after_fight, _soldier_local_positions(player), 0.15), "ended combat should not immediately reform soldiers", failures)
+	_expect(bool(player.call("set_move_destination", Vector3(16.0, 0.0, 8.0))), "manual move after combat should be accepted", failures)
+	player_summary = player.call("get_troop_summary") as Dictionary
+	_expect(not bool(player_summary.get("combat_scatter_active", true)), "manual movement should clear scattered combat positions and regroup", failures)
+	_expect(_any_soldier_has_independent_motion(player), "manual movement after combat should make soldiers walk back by independent commands", failures)
+
+	if is_instance_valid(enemy) and enemy.get_parent():
+		root.remove_child(enemy)
+		enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_troop_desertion(failures: Array[String]) -> void:
+	var small := TroopScene.instantiate()
+	small.set("troop_id", &"small_morale")
+	small.set("team_id", &"player")
+	small.set("soldier_count", 3)
+	small.set("base_soldier_morale", 2.0)
+	small.set("soldier_morale_variance", 0.0)
+	small.set("desertion_morale_threshold", 50.0)
+	small.set("desertion_chance_per_second", 1.0)
+	small.set("detection_range_m", 80.0)
+	small.set("combat_seed", 300)
+	root.add_child(small)
+
+	var large := TroopScene.instantiate()
+	large.set("troop_id", &"large_pressure")
+	large.set("team_id", &"enemy")
+	large.set("controllable", false)
+	large.set("soldier_count", 10)
+	large.set("detection_range_m", 80.0)
+	large.position = Vector3(5.0, 0.0, 0.0)
+	root.add_child(large)
+	await process_frame
+
+	for _index: int in range(10):
+		small.call("_physics_process", 0.5)
+	var summary: Dictionary = small.call("get_troop_summary") as Dictionary
+	_expect(int(summary.get("deserted_soldier_count", 0)) > 0, "low morale soldiers should be able to desert from the troop", failures)
+	_expect(int(summary.get("active_soldier_count", 0)) < 3, "deserted soldiers should leave the active formation", failures)
+
+	root.remove_child(large)
+	large.free()
+	root.remove_child(small)
+	small.free()
+
+
+func _check_enemy_spawner(failures: Array[String]) -> void:
+	var spawner := TroopEnemySpawnerScript.new()
+	spawner.spawn_seed = 123
+	spawner.min_enemy_troops = 2
+	spawner.max_enemy_troops = 2
+	spawner.min_soldiers_per_troop = 4
+	spawner.max_soldiers_per_troop = 6
+	spawner.movement_map = _make_map(8, 8)
+	root.add_child(spawner)
+	await process_frame
+
+	var spawned: Array = spawner.call("get_spawned_troops") as Array
+	_expect(spawned.size() == 2, "enemy spawner should create deterministic enemy troop count", failures)
+	for troop_variant: Variant in spawned:
+		var troop := troop_variant as Node
+		_expect(troop != null and StringName(troop.get("team_id")) == &"enemy", "spawned troops should use enemy team id", failures)
+		_expect(troop != null and not bool(troop.get("controllable")), "spawned enemy troops should not be player-commandable", failures)
+		if troop:
+			_expect(_color_close(troop.get("ring_color") as Color, spawner.enemy_ring_color), "spawned enemy troops should use enemy ring color", failures)
+			var first_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
+			_expect(first_soldier != null, "spawned enemy troops should create soldiers", failures)
+			if first_soldier and first_soldier.has_method("get_outfit_summary"):
+				var outfit: Dictionary = first_soldier.call("get_outfit_summary") as Dictionary
+				_expect(_color_close(outfit.get("robe", Color.TRANSPARENT) as Color, spawner.enemy_robe_color), "spawned enemy soldiers should use the dark red outfit palette", failures)
+
+	for troop_variant: Variant in spawned:
+		var troop := troop_variant as Node
+		if troop and troop.get_parent():
+			troop.get_parent().remove_child(troop)
+			troop.free()
+	root.remove_child(spawner)
+	spawner.free()
+
+
 func _check_automatic_logistics_commands(failures: Array[String]) -> void:
 	var controller := TroopSelectionControllerScript.new()
 	root.add_child(controller)
@@ -229,6 +469,7 @@ func _check_automatic_logistics_commands(failures: Array[String]) -> void:
 	troop.set("soldier_count", 6)
 	troop.set("carrier_speed_mps", 500.0)
 	troop.set("carrier_work_seconds", 0.0)
+	troop.set("food_kg_per_soldier_per_day", 0.0)
 	root.add_child(troop)
 
 	var near_village := FakeVillage.new()
@@ -339,6 +580,7 @@ func _check_troop_logistics_tasks(failures: Array[String]) -> void:
 	troop.set("soldier_count", 6)
 	troop.set("carrier_speed_mps", 500.0)
 	troop.set("carrier_work_seconds", 0.0)
+	troop.set("food_kg_per_soldier_per_day", 0.0)
 	root.add_child(troop)
 
 	var village := FakeVillage.new()
@@ -479,6 +721,8 @@ func _check_drawer_loads(failures: Array[String]) -> void:
 	_expect(drawer.has_method("show_troop"), "troop drawer should expose show_troop", failures)
 	_expect(drawer.has_signal(&"collect_wood_requested"), "troop drawer should expose collect wood command signal", failures)
 	_expect(drawer.find_child("CollectWoodButton", true, false) != null, "troop drawer should show a collect wood button", failures)
+	_expect(drawer.find_child("TroopModeOption", true, false) != null, "troop drawer should show a troop mode selector", failures)
+	_expect(drawer.find_child("MovementModeOption", true, false) != null, "troop drawer should show a movement mode selector", failures)
 	drawer.free()
 
 
@@ -509,6 +753,12 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		_expect(not String(troop.get("movement_map_path")).is_empty(), "%s troop should have a movement map path" % scene_path, failures)
 		var terrain_path: NodePath = troop.get("terrain_path")
 		_expect(not terrain_path.is_empty(), "%s troop should have a terrain path" % scene_path, failures)
+		_expect(StringName(troop.get("team_id")) == &"player", "%s default troop should belong to player team" % scene_path, failures)
+	_expect(
+		instance.find_child("EnemyTroopSpawner", true, false) != null,
+		"%s should include an enemy troop spawner" % scene_path,
+		failures
+	)
 
 	instance.free()
 
@@ -532,8 +782,108 @@ func _step_troop_logistics(troop: Node, steps: int) -> void:
 		troop.call("_physics_process", 0.1)
 
 
+func _step_troop_with_soldiers(troop: Node, delta: float) -> void:
+	if is_instance_valid(troop):
+		troop.call("_physics_process", delta)
+	for soldier: Node in _get_soldier_nodes(troop):
+		if is_instance_valid(soldier) and soldier.has_method("_physics_process"):
+			soldier.call("_physics_process", delta)
+
+
 func _approx(actual: float, expected: float, tolerance: float) -> bool:
 	return absf(actual - expected) <= tolerance
+
+
+func _color_close(actual: Color, expected: Color, tolerance: float = 0.01) -> bool:
+	return (
+		absf(actual.r - expected.r) <= tolerance
+		and absf(actual.g - expected.g) <= tolerance
+		and absf(actual.b - expected.b) <= tolerance
+		and absf(actual.a - expected.a) <= tolerance
+	)
+
+
+func _get_soldier_nodes(troop: Node) -> Array[Node]:
+	var soldiers_container := troop.get_node_or_null("Soldiers")
+	if not soldiers_container:
+		return []
+	return soldiers_container.get_children()
+
+
+func _count_damaged_soldiers(troop: Node) -> int:
+	var count := 0
+	for soldier: Node in _get_soldier_nodes(troop):
+		if not soldier.has_method("get_combat_summary"):
+			continue
+		var summary: Dictionary = soldier.call("get_combat_summary") as Dictionary
+		if float(summary.get("strength", 0.0)) < float(summary.get("max_strength", 0.0)) - 0.01:
+			count += 1
+	return count
+
+
+func _count_soldiers_away_from_slots(troop: Node, threshold: float) -> int:
+	var count := 0
+	for soldier: Node in _get_soldier_nodes(troop):
+		if not (soldier is Node3D):
+			continue
+		var spatial := soldier as Node3D
+		var slot: Vector3 = spatial.get_meta(&"troop_formation_slot", spatial.position)
+		var delta := spatial.global_position - _troop_slot_to_world(troop, slot)
+		delta.y = 0.0
+		if delta.length() > threshold:
+			count += 1
+	return count
+
+
+func _minimum_soldier_spacing(troop: Node) -> float:
+	var soldiers := _get_soldier_nodes(troop)
+	var minimum := INF
+	for index: int in range(soldiers.size()):
+		if not (soldiers[index] is Node3D):
+			continue
+		var a := soldiers[index] as Node3D
+		for other_index: int in range(index + 1, soldiers.size()):
+			if not (soldiers[other_index] is Node3D):
+				continue
+			var b := soldiers[other_index] as Node3D
+			var a_pos := a.global_position
+			var b_pos := b.global_position
+			a_pos.y = 0.0
+			b_pos.y = 0.0
+			minimum = minf(minimum, a_pos.distance_to(b_pos))
+	return minimum if minimum < INF else 0.0
+
+
+func _soldier_local_positions(troop: Node) -> Array[Vector3]:
+	var positions: Array[Vector3] = []
+	for soldier: Node in _get_soldier_nodes(troop):
+		if soldier is Node3D:
+			positions.append((soldier as Node3D).global_position)
+	return positions
+
+
+func _any_soldier_has_independent_motion(troop: Node) -> bool:
+	for soldier: Node in _get_soldier_nodes(troop):
+		if soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion")):
+			return true
+	return false
+
+
+func _troop_slot_to_world(troop: Node, slot: Vector3) -> Vector3:
+	if troop is Node3D:
+		return (troop as Node3D).global_transform * slot
+	return slot
+
+
+func _positions_close(before: Array[Vector3], after: Array[Vector3], tolerance: float) -> bool:
+	if before.size() != after.size():
+		return false
+	for index: int in range(before.size()):
+		var delta := before[index] - after[index]
+		delta.y = 0.0
+		if delta.length() > tolerance:
+			return false
+	return true
 
 
 func _expect(condition: bool, message: String, failures: Array[String]) -> void:
