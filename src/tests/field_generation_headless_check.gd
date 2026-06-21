@@ -37,15 +37,21 @@ func _run_checks(failures: Array[String]) -> void:
 
 	var field_cells := _make_field_cells(20, 14)
 	var roads := _make_road_polylines()
-	var first := _generate_plots(12345, field_cells, roads)
-	var second := _generate_plots(12345, field_cells, roads)
-	var different := _generate_plots(54321, field_cells, roads)
+	var first_layout := _generate_layout(12345, field_cells, roads)
+	var second_layout := _generate_layout(12345, field_cells, roads)
+	var different_layout := _generate_layout(54321, field_cells, roads)
+	var first: Array = first_layout.get("plots", [])
+	var second: Array = second_layout.get("plots", [])
+	var different: Array = different_layout.get("plots", [])
 
 	_expect(not first.is_empty(), "expected generated plots", failures)
 	_expect(_plot_signature(first) == _plot_signature(second), "same seed must generate identical plots and footprints", failures)
 	_expect(_plot_signature(first) != _plot_signature(different), "different seed should change deterministic layout", failures)
 	_expect(_has_size_variation(first), "expected multiple distinct plot widths and lengths", failures)
-	_expect(_has_rectangular_footprints(first), "all generated footprints should be four-point local rectangles", failures)
+	_expect(_has_valid_polygon_footprints(first), "generated footprints should be valid simple polygons", failures)
+	_expect(_has_target_area_distribution(first), "most generated plots should target 300-600 square meters", failures)
+	_expect(_plots_follow_road_alignment(first, roads), "plot subdivision should align to the adjacent road direction", failures)
+	_expect(_has_generated_bund_lines(first_layout), "field generation should emit paddy bund polylines", failures)
 
 	for plot: FieldPlotData in first:
 		_expect(_is_footprint_valid(plot), "invalid footprint for %s" % [str(plot.id)], failures)
@@ -132,15 +138,20 @@ func _village_region_uses_macro_field_data_without_runtime_fields() -> bool:
 	var field_generation := macro_data.get("field_generation", {}) as Dictionary
 	var plots: Array = field_generation.get("plots", [])
 	var generated_cells: Array = field_generation.get("field_cells", [])
+	var paddy_renderers := _get_nodes_with_meta(container, &"village_rice_paddy_renderer") if container else []
 	var dense_layers := _get_nodes_with_meta(container, &"village_rice_dense_plants_layer") if container else []
+	var far_overlays := _get_nodes_with_meta(container, &"village_rice_paddy_far_overlay") if container else []
 	var emitters := _count_descendants_of_type(container, "GPUParticles3D") if container else 0
 	var valid := (
 		container != null
 		and container.get_parent() == region
 		and not plots.is_empty()
 		and generated_cells.size() == region.get_field_cells().size()
-		and dense_layers.is_empty()
-		and emitters == 0
+		and paddy_renderers.size() == 1
+		and dense_layers.size() == 1
+		and far_overlays.size() == 1
+		and emitters > 0
+		and _rice_paddy_lod_is_configured(container)
 		and not _has_descendant_name_prefix(container, "Field_")
 	)
 
@@ -155,7 +166,8 @@ func _village_region_configures_house_visibility() -> bool:
 	if not region:
 		return false
 
-	region.house_cells = _make_field_cells(4, 4)
+	region.house_cells = _make_field_cells(10, 10)
+	region.road_cells = _make_vertical_road_cells(-2, 0, 10)
 	region.generation_seed = 1357
 	region.auto_apply_terrain_textures = false
 	root.add_child(region)
@@ -258,7 +270,57 @@ func _count_descendants_of_type(root_node: Node, class_name_value: String) -> in
 	return count
 
 
+func _rice_paddy_lod_is_configured(root_node: Node) -> bool:
+	if not root_node:
+		return false
+
+	var overlays := _get_nodes_with_meta(root_node, &"village_rice_paddy_far_overlay")
+	if overlays.size() != 1 or not (overlays[0] is GeometryInstance3D):
+		return false
+
+	var overlay := overlays[0] as GeometryInstance3D
+	if not bool(overlay.get_meta(&"village_preserve_visibility_range", false)):
+		return false
+	if overlay.visibility_range_begin <= 0.0:
+		return false
+	if overlay.visibility_range_end < VILLAGE_VISIBLE_DISTANCE_METERS:
+		return false
+
+	return _rice_paddy_particles_lod_is_configured(root_node, overlay)
+
+
+func _rice_paddy_particles_lod_is_configured(root_node: Node, overlay: GeometryInstance3D) -> bool:
+	var particles_nodes := _collect_rice_particles(root_node)
+	if particles_nodes.is_empty():
+		return false
+
+	for particles: GPUParticles3D in particles_nodes:
+		if not bool(particles.get_meta(&"village_preserve_visibility_range", false)):
+			return false
+		if particles.visibility_range_begin > 0.001:
+			return false
+		if particles.visibility_range_end <= 0.0:
+			return false
+		if particles.visibility_range_end > overlay.visibility_range_begin + 64.0:
+			return false
+
+	return true
+
+
+func _collect_rice_particles(root_node: Node) -> Array[GPUParticles3D]:
+	var particles_nodes: Array[GPUParticles3D] = []
+	for child: Node in root_node.get_children(true):
+		if child is GPUParticles3D and _has_ancestor_name_prefix(child, "RiceDensePlantsParticles"):
+			particles_nodes.append(child as GPUParticles3D)
+		particles_nodes.append_array(_collect_rice_particles(child))
+	return particles_nodes
+
+
 func _generate_plots(seed: int, field_cells: Array[Vector2i], roads: Array) -> Array[FieldPlotData]:
+	return _generate_layout(seed, field_cells, roads).get("plots", [])
+
+
+func _generate_layout(seed: int, field_cells: Array[Vector2i], roads: Array) -> Dictionary:
 	var generator := FieldPlotGeneratorScript.new()
 	generator.cell_size = 4.0
 	generator.origin = Vector3.ZERO
@@ -274,7 +336,14 @@ func _generate_plots(seed: int, field_cells: Array[Vector2i], roads: Array) -> A
 	generator.road_clearance = 1.0
 	generator.horizontal_split_bias = 1.0
 	generator.field_shape_variation = 0.65
-	return generator.generate(field_cells, roads)
+	generator.target_plot_area_min_m2 = 300.0
+	generator.target_plot_area_max_m2 = 600.0
+	generator.preferred_plot_area_m2 = 450.0
+	return {
+		"plots": generator.generate(field_cells, roads),
+		"field_road_polylines": generator.generated_road_polylines.duplicate(true),
+		"field_bund_polylines": generator.generated_bund_polylines.duplicate(true),
+	}
 
 
 func _make_field_cells(width: int, height: int) -> Array[Vector2i]:
@@ -282,6 +351,13 @@ func _make_field_cells(width: int, height: int) -> Array[Vector2i]:
 	for x: int in range(width):
 		for y: int in range(height):
 			cells.append(Vector2i(x, y))
+	return cells
+
+
+func _make_vertical_road_cells(x: int, y_from: int, y_count: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for y: int in range(y_from, y_from + y_count):
+		cells.append(Vector2i(x, y))
 	return cells
 
 
@@ -320,12 +396,12 @@ func _has_size_variation(plots: Array[FieldPlotData]) -> bool:
 	return lengths.size() > 1 and widths.size() > 1
 
 
-func _has_rectangular_footprints(plots: Array[FieldPlotData]) -> bool:
+func _has_valid_polygon_footprints(plots: Array) -> bool:
 	if plots.is_empty():
 		return false
 
 	for plot: FieldPlotData in plots:
-		if not _is_rectangular_footprint(plot):
+		if not _is_footprint_valid(plot):
 			return false
 	return true
 
@@ -351,18 +427,44 @@ func _is_orthogonal_footprint(footprint: PackedVector2Array) -> bool:
 
 
 func _is_footprint_valid(plot: FieldPlotData) -> bool:
-	if not _is_rectangular_footprint(plot):
+	if plot.footprint.size() < 3:
 		return false
-
-	var half_length := plot.length * 0.5
-	var half_width := plot.width * 0.5
-	for point: Vector2 in plot.footprint:
-		if absf(point.x) > half_length + 0.001 or absf(point.y) > half_width + 0.001:
-			return false
+	if plot.area <= 0.001:
+		return false
 
 	if not plot.contains_local_point(Vector2.ZERO):
 		return false
 	return _is_polygon_simple(plot.footprint)
+
+
+func _has_target_area_distribution(plots: Array) -> bool:
+	if plots.is_empty():
+		return false
+
+	var in_target := 0
+	for plot: FieldPlotData in plots:
+		if plot.area >= 300.0 and plot.area <= 600.0:
+			in_target += 1
+		elif plot.area > 900.0:
+			return false
+	return float(in_target) / float(plots.size()) >= 0.65
+
+
+func _plots_follow_road_alignment(plots: Array, roads: Array) -> bool:
+	for plot: FieldPlotData in plots:
+		var row_direction := Vector2(plot.row_direction.x, plot.row_direction.z).normalized()
+		var tangent := _nearest_road_tangent(Vector2(plot.center.x, plot.center.z), roads)
+		if tangent.length_squared() <= 0.0001:
+			continue
+		if absf(row_direction.dot(tangent.normalized())) < 0.92:
+			return false
+	return true
+
+
+func _has_generated_bund_lines(layout: Dictionary) -> bool:
+	var bunds: Array = layout.get("field_bund_polylines", [])
+	var plots: Array = layout.get("plots", [])
+	return not plots.is_empty() and bunds.size() >= plots.size()
 
 
 func _has_road_clearance(plot: FieldPlotData, roads: Array, clearance: float) -> bool:
@@ -409,6 +511,21 @@ func _distance_to_roads(point: Vector2, roads: Array) -> float:
 		for index: int in range(road.size() - 1):
 			best = minf(best, _distance_to_segment(point, road[index], road[index + 1]))
 	return best
+
+
+func _nearest_road_tangent(point: Vector2, roads: Array) -> Vector2:
+	var best_tangent := Vector2.ZERO
+	var best_distance := INF
+	for road: PackedVector2Array in roads:
+		for index: int in range(road.size() - 1):
+			var from_point := road[index]
+			var to_point := road[index + 1]
+			var distance := _distance_to_segment(point, from_point, to_point)
+			if distance < best_distance:
+				best_distance = distance
+				var tangent := to_point - from_point
+				best_tangent = tangent.normalized() if tangent.length_squared() > 0.0001 else Vector2.ZERO
+	return best_tangent
 
 
 func _is_polygon_simple(polygon: PackedVector2Array) -> bool:
