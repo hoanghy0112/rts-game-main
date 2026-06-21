@@ -11,6 +11,7 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 
 @export var bund_material: Material
 @export var water_material: Material
+@export var rice_overlay_enabled := false
 @export var rice_overlay_material: Material
 @export_range(0.15, 3.0, 0.05, "or_greater") var bund_base_width: float = 1.05
 @export_range(0.05, 1.5, 0.05, "or_greater") var bund_top_width: float = 0.42
@@ -55,7 +56,10 @@ func configure_from_field_generation(p_terrain: Node3D, p_region: Node3D, field_
 	_resolve_nodes()
 	_rebuild_bund_mesh()
 	_rebuild_water_mesh()
-	_rebuild_rice_overlay_mesh()
+	if rice_overlay_enabled:
+		_rebuild_rice_overlay_mesh()
+	else:
+		_disable_rice_overlay_mesh()
 	_configure_rice_layer()
 
 
@@ -80,23 +84,26 @@ func _resolve_nodes() -> void:
 	if water_material:
 		_water_mesh.material_override = water_material
 
-	if not _rice_overlay_mesh:
-		_rice_overlay_mesh = get_node_or_null("RiceMacroOverlay") as MeshInstance3D
-	if not _rice_overlay_mesh:
-		_rice_overlay_mesh = MeshInstance3D.new()
-		_rice_overlay_mesh.name = "RiceMacroOverlay"
-		add_child(_rice_overlay_mesh, false, INTERNAL_MODE_BACK)
-		_rice_overlay_mesh.owner = null
-	_rice_overlay_mesh.set_meta(RICE_FAR_OVERLAY_META, true)
-	_rice_overlay_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_rice_overlay_mesh.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	if rice_overlay_material:
-		_rice_overlay_mesh.material_override = rice_overlay_material
-	elif not _rice_overlay_mesh.material_override:
-		var material := ShaderMaterial.new()
-		material.shader = RICE_OVERLAY_SHADER
-		_rice_overlay_mesh.material_override = material
-	_apply_rice_overlay_visibility()
+	if rice_overlay_enabled:
+		if not _rice_overlay_mesh:
+			_rice_overlay_mesh = get_node_or_null("RiceMacroOverlay") as MeshInstance3D
+		if not _rice_overlay_mesh:
+			_rice_overlay_mesh = MeshInstance3D.new()
+			_rice_overlay_mesh.name = "RiceMacroOverlay"
+			add_child(_rice_overlay_mesh, false, INTERNAL_MODE_BACK)
+			_rice_overlay_mesh.owner = null
+		_rice_overlay_mesh.set_meta(RICE_FAR_OVERLAY_META, true)
+		_rice_overlay_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_rice_overlay_mesh.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		if rice_overlay_material:
+			_rice_overlay_mesh.material_override = rice_overlay_material
+		elif not _rice_overlay_mesh.material_override:
+			var material := ShaderMaterial.new()
+			material.shader = RICE_OVERLAY_SHADER
+			_rice_overlay_mesh.material_override = material
+		_apply_rice_overlay_visibility()
+	else:
+		_disable_rice_overlay_mesh()
 
 	if not _rice_layer:
 		_rice_layer = get_node_or_null("RiceDensePlantsParticles") as Node3D
@@ -191,6 +198,9 @@ func _rebuild_water_mesh() -> void:
 
 
 func _rebuild_rice_overlay_mesh() -> void:
+	if not rice_overlay_enabled:
+		_disable_rice_overlay_mesh()
+		return
 	if not _rice_overlay_mesh:
 		return
 
@@ -229,6 +239,20 @@ func _rebuild_rice_overlay_mesh() -> void:
 	_rice_overlay_mesh.mesh = _make_mesh(vertices, normals, uvs, indices)
 	_rice_overlay_mesh.visible = _rice_overlay_mesh.mesh != null
 	_apply_rice_overlay_visibility()
+
+
+func _disable_rice_overlay_mesh() -> void:
+	if not _rice_overlay_mesh:
+		_rice_overlay_mesh = get_node_or_null("RiceMacroOverlay") as MeshInstance3D
+	if not _rice_overlay_mesh:
+		return
+
+	_rice_overlay_mesh.visible = false
+	_rice_overlay_mesh.mesh = null
+	_rice_overlay_mesh.visibility_range_begin = 0.0
+	_rice_overlay_mesh.visibility_range_begin_margin = 0.0
+	_rice_overlay_mesh.visibility_range_end = 0.0
+	_rice_overlay_mesh.visibility_range_end_margin = 0.0
 
 
 func _configure_rice_layer() -> void:

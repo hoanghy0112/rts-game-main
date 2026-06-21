@@ -140,7 +140,6 @@ func _village_region_uses_macro_field_data_without_runtime_fields() -> bool:
 	var generated_cells: Array = field_generation.get("field_cells", [])
 	var paddy_renderers := _get_nodes_with_meta(container, &"village_rice_paddy_renderer") if container else []
 	var dense_layers := _get_nodes_with_meta(container, &"village_rice_dense_plants_layer") if container else []
-	var far_overlays := _get_nodes_with_meta(container, &"village_rice_paddy_far_overlay") if container else []
 	var emitters := _count_descendants_of_type(container, "GPUParticles3D") if container else 0
 	var valid := (
 		container != null
@@ -149,9 +148,9 @@ func _village_region_uses_macro_field_data_without_runtime_fields() -> bool:
 		and generated_cells.size() == region.get_field_cells().size()
 		and paddy_renderers.size() == 1
 		and dense_layers.size() == 1
-		and far_overlays.size() == 1
 		and emitters > 0
 		and _rice_paddy_lod_is_configured(container)
+		and _rice_paddy_far_overlay_is_disabled(container)
 		and not _has_descendant_name_prefix(container, "Field_")
 	)
 
@@ -274,22 +273,10 @@ func _rice_paddy_lod_is_configured(root_node: Node) -> bool:
 	if not root_node:
 		return false
 
-	var overlays := _get_nodes_with_meta(root_node, &"village_rice_paddy_far_overlay")
-	if overlays.size() != 1 or not (overlays[0] is GeometryInstance3D):
-		return false
-
-	var overlay := overlays[0] as GeometryInstance3D
-	if not bool(overlay.get_meta(&"village_preserve_visibility_range", false)):
-		return false
-	if overlay.visibility_range_begin <= 0.0:
-		return false
-	if overlay.visibility_range_end < VILLAGE_VISIBLE_DISTANCE_METERS:
-		return false
-
-	return _rice_paddy_particles_lod_is_configured(root_node, overlay)
+	return _rice_paddy_particles_lod_is_configured(root_node)
 
 
-func _rice_paddy_particles_lod_is_configured(root_node: Node, overlay: GeometryInstance3D) -> bool:
+func _rice_paddy_particles_lod_is_configured(root_node: Node) -> bool:
 	var particles_nodes := _collect_rice_particles(root_node)
 	if particles_nodes.is_empty():
 		return false
@@ -301,9 +288,21 @@ func _rice_paddy_particles_lod_is_configured(root_node: Node, overlay: GeometryI
 			return false
 		if particles.visibility_range_end <= 0.0:
 			return false
-		if particles.visibility_range_end > overlay.visibility_range_begin + 64.0:
+		if particles.visibility_range_end > VILLAGE_VISIBLE_DISTANCE_METERS:
 			return false
 
+	return true
+
+
+func _rice_paddy_far_overlay_is_disabled(root_node: Node) -> bool:
+	var overlays := _get_nodes_with_meta(root_node, &"village_rice_paddy_far_overlay")
+	for overlay_node: Node in overlays:
+		if overlay_node is MeshInstance3D:
+			var overlay := overlay_node as MeshInstance3D
+			if overlay.visible or overlay.mesh != null:
+				return false
+		elif overlay_node is GeometryInstance3D and (overlay_node as GeometryInstance3D).visible:
+			return false
 	return true
 
 

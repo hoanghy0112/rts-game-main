@@ -11,6 +11,7 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 @export var muddy_material: Material
 @export var water_material: Material
 @export var bund_material: Material
+@export var rice_overlay_enabled := false
 @export var rice_overlay_material: Material
 @export_range(0.03, 1.0, 0.01, "or_greater") var bund_edge_width: float = 0.14
 @export_range(0.0, 4.0, 0.01, "or_greater") var rice_overlay_surface_offset: float = 0.075
@@ -69,8 +70,6 @@ func rebuild_visuals() -> void:
 	_visual_root.scale = Vector3.ONE
 	var footprint := _get_visual_footprint()
 	var surface_mesh := _build_surface_mesh(footprint)
-	var rice_overlay_footprint := _get_rice_overlay_footprint(footprint)
-	var rice_overlay_mesh := _build_surface_mesh(rice_overlay_footprint)
 
 	if _ground_mesh:
 		_ground_mesh.scale = Vector3.ONE
@@ -82,15 +81,23 @@ func rebuild_visuals() -> void:
 		_bund_edge_mesh.scale = Vector3.ONE
 		_bund_edge_mesh.mesh = _build_bund_edge_mesh(footprint)
 	if _rice_overlay_mesh:
-		_rice_overlay_mesh.scale = Vector3.ONE
-		_rice_overlay_mesh.position = Vector3(0.0, rice_overlay_surface_offset, 0.0)
-		_rice_overlay_mesh.mesh = rice_overlay_mesh
-		_rice_overlay_mesh.visible = rice_overlay_mesh != null
+		if rice_overlay_enabled:
+			var rice_overlay_footprint := _get_rice_overlay_footprint(footprint)
+			var rice_overlay_mesh := _build_surface_mesh(rice_overlay_footprint)
+			_rice_overlay_mesh.scale = Vector3.ONE
+			_rice_overlay_mesh.position = Vector3(0.0, rice_overlay_surface_offset, 0.0)
+			_rice_overlay_mesh.mesh = rice_overlay_mesh
+			_rice_overlay_mesh.visible = rice_overlay_mesh != null
+		else:
+			_disable_rice_overlay_mesh()
 
 	_apply_ground_material()
 	_apply_water_visual()
 	_apply_bund_material()
-	_apply_rice_overlay_visual()
+	if rice_overlay_enabled:
+		_apply_rice_overlay_visual()
+	else:
+		_disable_rice_overlay_mesh()
 
 
 func configure_rice_overlay_visibility(
@@ -180,6 +187,9 @@ func _apply_rice_overlay_visual() -> void:
 	_resolve_nodes()
 	if not _rice_overlay_mesh:
 		return
+	if not rice_overlay_enabled:
+		_disable_rice_overlay_mesh()
+		return
 
 	if rice_overlay_material:
 		_rice_overlay_mesh.material_override = rice_overlay_material
@@ -195,6 +205,9 @@ func _apply_rice_overlay_visual() -> void:
 func _apply_rice_overlay_visibility() -> void:
 	if not _rice_overlay_mesh:
 		return
+	if not rice_overlay_enabled:
+		_disable_rice_overlay_mesh()
+		return
 
 	var begin_distance := maxf(rice_overlay_begin_distance, 0.0)
 	var end_distance := maxf(rice_overlay_end_distance, begin_distance)
@@ -204,6 +217,20 @@ func _apply_rice_overlay_visibility() -> void:
 	_rice_overlay_mesh.visibility_range_end = end_distance
 	_rice_overlay_mesh.visibility_range_end_margin = clampf(rice_overlay_end_fade_margin, 0.0, end_distance)
 	_rice_overlay_mesh.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+
+
+func _disable_rice_overlay_mesh() -> void:
+	if not _rice_overlay_mesh:
+		_rice_overlay_mesh = get_node_or_null("VisualRoot/RiceMacroOverlay") as MeshInstance3D
+	if not _rice_overlay_mesh:
+		return
+
+	_rice_overlay_mesh.visible = false
+	_rice_overlay_mesh.mesh = null
+	_rice_overlay_mesh.visibility_range_begin = 0.0
+	_rice_overlay_mesh.visibility_range_begin_margin = 0.0
+	_rice_overlay_mesh.visibility_range_end = 0.0
+	_rice_overlay_mesh.visibility_range_end_margin = 0.0
 
 
 func _build_bund_edge_mesh(footprint: PackedVector2Array) -> ArrayMesh:
