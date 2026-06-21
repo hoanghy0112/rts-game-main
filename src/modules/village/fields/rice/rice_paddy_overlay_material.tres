@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://modules/village/fields/rice_field_overlay.gdshader" id="1_overlay_shader"]
+
+[resource]
+render_priority = 1
+shader = ExtResource("1_overlay_shader")
+shader_parameter/base_color = Color(0.23, 0.48, 0.14, 1)
+shader_parameter/dark_color = Color(0.13, 0.33, 0.09, 1)
+shader_parameter/light_color = Color(0.42, 0.68, 0.21, 1)
+shader_parameter/overlay_alpha = 0.72
+shader_parameter/patch_size_meters = 3.5
+shader_parameter/edge_fade_uv = 0.035
+shader_parameter/alpha_threshold = 0.04

@@ -12,11 +12,14 @@ varying vec3 stage_tint;
 
 void vertex() {
 	stage_tint = COLOR.rgb;
-	data[2] = clamp(VERTEX.y + 0.55, 0.0, 1.0);
+	data.rg = INSTANCE_CUSTOM.rg;
+	data[2] = clamp(VERTEX.y, 0.0, 1.0);
 	data[2] *= data[2];
 
-	VERTEX.xz *= 1.0 - data[2] * 0.92;
-	data.rg = INSTANCE_CUSTOM.rg;
+	float bend = pow(data[2], 1.35);
+	VERTEX.x += (data.r - 0.5) * 0.18 * bend;
+	VERTEX.z += (data.g - 0.5) * 0.12 * bend;
+	VERTEX.xz *= 1.0 - data[2] * 0.18;
 
 	vec3 w_vertex = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	VERTEX = (VIEW_MATRIX * vec4(w_vertex, 1.0)).xyz;

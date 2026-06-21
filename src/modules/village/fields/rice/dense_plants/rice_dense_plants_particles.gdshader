@@ -143,6 +143,26 @@ vec3 rice_stage_tint(int code) {
 }
 
 
+float rice_stage_height(int code) {
+	if (code == 1) {
+		return 0.42;
+	}
+	if (code == 2) {
+		return 0.72;
+	}
+	if (code == 3) {
+		return 1.0;
+	}
+	if (code == 4) {
+		return 1.08;
+	}
+	if (code == 5) {
+		return 0.32;
+	}
+	return 1.0;
+}
+
+
 void hide_particle(inout vec3 pos) {
 	pos.y = 0.0 / 0.0;
 	pos.xz = vec2(100000.0);
@@ -220,7 +240,7 @@ void start() {
 	float width_modifier = mix(1.0, far_width_boost, smoothstep(max_dist * 0.35, max_dist, dist));
 	vec3 scale = vec3(
 		mix(min_scale.x, max_scale.x, r.x) * width_modifier,
-		mix(min_scale.y, max_scale.y, r.y),
+		mix(min_scale.y, max_scale.y, r.y) * rice_stage_height(stage_code),
 		mix(min_scale.z, max_scale.z, r.z) * width_modifier
 	);
 	vec3 offset = position_offset;

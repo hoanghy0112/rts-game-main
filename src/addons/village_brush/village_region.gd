@@ -7,6 +7,7 @@ const DEFAULT_PEASANT_SCENE: PackedScene = preload("res://modules/units/peasant/
 const DEFAULT_CROP_TYPE: CropTypeData = preload("res://modules/village/fields/crops/rice_crop.tres")
 const DEFAULT_BALANCE_CONFIG: Resource = preload("res://modules/village/default_village_balance.tres")
 const VILLAGE_STORAGE_SCENE: PackedScene = preload("res://modules/village/house/thatched_hut_on_stilts.tscn")
+const RICE_PADDY_RENDERER_SCENE: PackedScene = preload("res://modules/village/fields/rice/rice_paddy_renderer.tscn")
 const FieldPlotGeneratorScript = preload("res://modules/village/fields/field_plot_generator.gd")
 const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
@@ -23,6 +24,8 @@ const ROAD_NEIGHBOR_OFFSETS := [
 	Vector2i(0, -1),
 ]
 const HOUSE_ATTEMPT_MULTIPLIER := 80
+const HOUSE_STALE_ATTEMPT_MULTIPLIER := 12
+const HOUSE_STALE_MIN_ATTEMPTS := 384
 const MIN_TERRAIN_PAINT_STEP := 0.25
 const TERRAIN_PAINT_RECORD_STEP := 0.25
 const PAINT_PRIORITY_FIELD := 10
@@ -137,6 +140,9 @@ enum PaintMode {
 @export_range(0.0, 32.0, 0.1, "or_greater") var field_road_clearance: float = 1.0
 @export_range(0.0, 1.0, 0.01) var field_horizontal_split_bias: float = 1.0
 @export_range(0.0, 1.0, 0.01) var field_shape_variation: float = 0.65
+@export_range(25.0, 5000.0, 1.0, "or_greater") var field_target_plot_area_min_m2: float = 300.0
+@export_range(25.0, 5000.0, 1.0, "or_greater") var field_target_plot_area_max_m2: float = 600.0
+@export_range(25.0, 5000.0, 1.0, "or_greater") var field_preferred_plot_area_m2: float = 450.0
 @export_range(0.0, 16.0, 0.1, "or_greater") var field_region_road_margin: float = 0.6
 @export_range(0.0, 4.0, 0.01, "or_greater") var field_floor_drop: float = 0.5
 @export_range(0.0, 1.0, 0.01, "or_greater") var field_visual_surface_offset: float = 0.06
@@ -224,6 +230,8 @@ var _cached_road_polylines_key := ""
 var _cached_road_polylines: Array = []
 var _cached_field_generation_key := ""
 var _cached_field_generation: Dictionary = {}
+var _last_house_placement_attempt_count := 0
+var _last_house_placement_stale_count := 0
 
 
 static func normalize_cells(value: Array[Vector2i]) -> Array[Vector2i]:
@@ -500,6 +508,9 @@ func to_runtime_data() -> Dictionary:
 		"field_road_clearance": field_road_clearance,
 		"field_horizontal_split_bias": field_horizontal_split_bias,
 		"field_shape_variation": field_shape_variation,
+		"field_target_plot_area_min_m2": field_target_plot_area_min_m2,
+		"field_target_plot_area_max_m2": field_target_plot_area_max_m2,
+		"field_preferred_plot_area_m2": field_preferred_plot_area_m2,
 		"field_region_road_margin": field_region_road_margin,
 		"field_floor_drop": field_floor_drop,
 		"field_visual_surface_offset": field_visual_surface_offset,
@@ -728,11 +739,17 @@ func rebuild_runtime_preview_async() -> void:
 	})
 
 	var road_polylines := _build_road_polylines()
+	_mark_startup_phase("village_roads_ready", {
+		"roads": road_polylines.size(),
+	})
 	await get_tree().process_frame
 	if not is_inside_tree():
 		return
 
 	var field_generation := _build_field_generation(road_polylines)
+	_mark_startup_phase("village_field_generation_ready", {
+		"plots": (field_generation.get("plots", []) as Array).size(),
+	})
 	await get_tree().process_frame
 	if not is_inside_tree():
 		return
@@ -742,9 +759,14 @@ func rebuild_runtime_preview_async() -> void:
 	var house_placements := _build_house_placements(road_polylines, rng)
 	_initialize_house_food_records(house_placements, field_generation)
 	_mark_startup_phase("village_layout_ready", {
+		"attempts": _last_house_placement_attempt_count,
 		"houses": house_placements.size(),
 		"plots": (field_generation.get("plots", []) as Array).size(),
+		"stale_attempts": _last_house_placement_stale_count,
 	})
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
 
 	if apply_runtime_terrain_edits or auto_apply_terrain_textures:
 		_apply_field_terrain_and_road_texture(
@@ -757,6 +779,10 @@ func rebuild_runtime_preview_async() -> void:
 		)
 	else:
 		_runtime_field_terrain_shape_applied = false
+	_mark_startup_phase("village_terrain_ready", {
+		"terrain_edits": apply_runtime_terrain_edits,
+		"terrain_textures": auto_apply_terrain_textures,
+	})
 	await get_tree().process_frame
 	if not is_inside_tree():
 		return
@@ -765,7 +791,13 @@ func rebuild_runtime_preview_async() -> void:
 	if not is_inside_tree():
 		return
 
-	_generate_fields_async(terrain, field_generation)
+	_mark_startup_phase("village_fields_start", {
+		"plots": (field_generation.get("plots", []) as Array).size(),
+	})
+	await _generate_fields_async(terrain, field_generation)
+	_mark_startup_phase("village_fields_ready", {
+		"plots": (field_generation.get("plots", []) as Array).size(),
+	})
 	_generate_village_ring(terrain, house_placements)
 	_generate_village_flag(terrain)
 	_generate_village_storage(terrain, house_placements)
@@ -830,6 +862,8 @@ func _lookup_to_cells(lookup: Dictionary) -> Array[Vector2i]:
 
 func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) -> Array[Dictionary]:
 	var placements: Array[Dictionary] = []
+	_last_house_placement_attempt_count = 0
+	_last_house_placement_stale_count = 0
 	var scenes := _get_house_scenes()
 	var active_house_cells := get_house_cells()
 	if scenes.is_empty() or active_house_cells.is_empty() or house_max_count <= 0:
@@ -843,9 +877,15 @@ func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) 
 		target_house_count * HOUSE_ATTEMPT_MULTIPLIER,
 		ceili(float(active_house_cells.size()) * 12.0 * _get_safe_house_density())
 	)
+	var stale_attempt_limit := maxi(target_house_count * HOUSE_STALE_ATTEMPT_MULTIPLIER, HOUSE_STALE_MIN_ATTEMPTS)
+	var saturated_house_count := maxi(floori(float(target_house_count) * 0.35), 1)
+	var stale_attempts := 0
 
 	for _attempt: int in range(attempts):
+		_last_house_placement_attempt_count += 1
 		if placements.size() >= target_house_count:
+			break
+		if placements.size() >= saturated_house_count and stale_attempts >= stale_attempt_limit:
 			break
 
 		var cell := active_house_cells[rng.randi_range(0, active_house_cells.size() - 1)]
@@ -861,13 +901,14 @@ func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) 
 		var placement_margin := house_region_margin + footprint_radius
 		var road_clearance := maxf(0.0, road_width * 0.5 + house_road_clearance + footprint_radius)
 
-		if not _is_point_in_shrunken_cells(local_point, house_lookup, placement_margin):
-			continue
-		if _is_point_near_roads(local_point, road_polylines, road_clearance):
-			continue
-		if not _has_house_spacing(local_point, footprint, placements):
-			continue
-		if _is_house_overlapping_storage(local_point, footprint_radius, storage_center, storage_clearance_radius):
+		var accepted := (
+			_is_point_in_shrunken_cells(local_point, house_lookup, placement_margin)
+			and not _is_point_near_roads(local_point, road_polylines, road_clearance)
+			and _has_house_spacing(local_point, footprint, placements)
+			and not _is_house_overlapping_storage(local_point, footprint_radius, storage_center, storage_clearance_radius)
+		)
+		if not accepted:
+			stale_attempts += 1
 			continue
 
 		placements.append({
@@ -877,7 +918,9 @@ func _build_house_placements(road_polylines: Array, rng: RandomNumberGenerator) 
 			"footprint": footprint,
 			"radius": footprint_radius,
 		})
+		stale_attempts = 0
 
+	_last_house_placement_stale_count = stale_attempts
 	return placements
 
 
@@ -1340,6 +1383,7 @@ func _build_field_generation_uncached(crop_type: CropTypeData, road_polylines: A
 			"crop_type": crop_type,
 			"plots": [],
 			"field_road_polylines": [],
+			"field_bund_polylines": [],
 			"field_cells": [],
 		}
 
@@ -1358,22 +1402,50 @@ func _build_field_generation_uncached(crop_type: CropTypeData, road_polylines: A
 	generator.road_clearance = field_road_clearance
 	generator.horizontal_split_bias = field_horizontal_split_bias
 	generator.field_shape_variation = field_shape_variation
+	generator.target_plot_area_min_m2 = field_target_plot_area_min_m2
+	generator.target_plot_area_max_m2 = field_target_plot_area_max_m2
+	generator.preferred_plot_area_m2 = field_preferred_plot_area_m2
 
 	var plots: Array[FieldPlotData] = generator.generate(active_field_cells, road_polylines)
 	return {
 		"crop_type": crop_type,
 		"plots": plots,
 		"field_road_polylines": generator.generated_road_polylines.duplicate(true),
+		"field_bund_polylines": generator.generated_bund_polylines.duplicate(true),
 		"field_cells": active_field_cells,
 	}
 
 
-func _generate_fields(_terrain: Node3D, _field_generation: Dictionary) -> void:
+func _generate_fields(terrain: Node3D, field_generation: Dictionary) -> void:
 	_clear_runtime_field_registry()
+	_create_paddy_renderer(terrain, field_generation)
 
 
-func _generate_fields_async(_terrain: Node3D, _field_generation: Dictionary) -> void:
+func _generate_fields_async(terrain: Node3D, field_generation: Dictionary) -> void:
 	_clear_runtime_field_registry()
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_create_paddy_renderer(terrain, field_generation)
+
+
+func _create_paddy_renderer(terrain: Node3D, field_generation: Dictionary) -> void:
+	var plots: Array = field_generation.get("plots", [])
+	if plots.is_empty() or not _runtime_container:
+		return
+
+	var renderer := RICE_PADDY_RENDERER_SCENE.instantiate() as Node3D
+	if not renderer:
+		return
+
+	renderer.name = "RicePaddyRenderer"
+	renderer.set("rice_overlay_end_distance", village_visible_distance_meters)
+	renderer.set("rice_overlay_end_fade_margin", village_visibility_fade_margin_meters)
+	_runtime_container.add_child(renderer, false, INTERNAL_MODE_BACK)
+	renderer.owner = null
+	if renderer.has_method("configure_from_field_generation"):
+		renderer.call("configure_from_field_generation", terrain, self, field_generation)
+	_configure_runtime_visibility_recursive(renderer, village_visible_distance_meters, village_visibility_fade_margin_meters)
 
 
 func _generate_peasants(
@@ -1871,7 +1943,7 @@ func _get_road_polylines_cache_key() -> String:
 
 
 func _get_field_generation_cache_key(crop_type: CropTypeData, road_polylines: Array) -> String:
-	return "fields|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
+	return "fields|%s|%s|%.4f|%s|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s" % [
 		_get_cells_cache_key(get_field_cells()),
 		_get_resource_cache_key(crop_type),
 		cell_size,
@@ -1887,6 +1959,9 @@ func _get_field_generation_cache_key(crop_type: CropTypeData, road_polylines: Ar
 		field_road_clearance,
 		field_horizontal_split_bias,
 		field_shape_variation,
+		field_target_plot_area_min_m2,
+		field_target_plot_area_max_m2,
+		field_preferred_plot_area_m2,
 		_get_polylines_cache_key(road_polylines),
 	]
 
@@ -1937,6 +2012,7 @@ func _duplicate_field_generation(field_generation: Dictionary) -> Dictionary:
 		"crop_type": field_generation.get("crop_type"),
 		"plots": duplicated_plots,
 		"field_road_polylines": _duplicate_polylines(field_generation.get("field_road_polylines", [])),
+		"field_bund_polylines": _duplicate_polylines(field_generation.get("field_bund_polylines", [])),
 		"field_cells": _copy_cells_from_variant(field_generation.get("field_cells", [])),
 	}
 

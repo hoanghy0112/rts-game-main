@@ -1,0 +1,11 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://modules/village/fields/rice/rice_paddy_water.gdshader" id="1_water_shader"]
+
+[resource]
+render_priority = -1
+shader = ExtResource("1_water_shader")
+shader_parameter/water_color = Color(0.24, 0.42, 0.39, 0.52)
+shader_parameter/shallow_mud_tint = Vector3(0.18, 0.12, 0.06)
+shader_parameter/ripple_scale = 0.08
+shader_parameter/ripple_strength = 0.035

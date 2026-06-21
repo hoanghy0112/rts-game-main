@@ -1,0 +1,27 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://modules/village/fields/rice/rice_paddy_renderer.gd" id="1_renderer"]
+[ext_resource type="Material" path="res://modules/village/fields/rice/rice_paddy_bund_material.tres" id="2_bund"]
+[ext_resource type="Material" path="res://modules/village/fields/rice/rice_paddy_water_material.tres" id="3_water"]
+[ext_resource type="Material" path="res://modules/village/fields/rice/rice_paddy_overlay_material.tres" id="4_overlay"]
+
+[node name="RicePaddyRenderer" type="Node3D"]
+script = ExtResource("1_renderer")
+bund_material = ExtResource("2_bund")
+water_material = ExtResource("3_water")
+rice_overlay_material = ExtResource("4_overlay")
+metadata/village_rice_paddy_renderer = true
+
+[node name="Bunds" type="MeshInstance3D" parent="."]
+material_override = ExtResource("2_bund")
+
+[node name="Water" type="MeshInstance3D" parent="."]
+material_override = ExtResource("3_water")
+
+[node name="RiceMacroOverlay" type="MeshInstance3D" parent="."]
+visible = false
+cast_shadow = 0
+gi_mode = 0
+material_override = ExtResource("4_overlay")
+metadata/village_rice_paddy_far_overlay = true
+metadata/village_preserve_visibility_range = true

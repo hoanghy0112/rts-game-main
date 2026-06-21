@@ -2,6 +2,8 @@
 extends Node3D
 class_name RiceDensePlantsParticles
 
+const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
+
 @export var terrain: Node3D:
 	set(value):
 		if terrain == value:
@@ -9,7 +11,7 @@ class_name RiceDensePlantsParticles
 		terrain = value
 		_create_grid()
 
-@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 0.9375:
+@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 1.0:
 	set(value):
 		instance_spacing = clamp(round(value * 64.0) * 0.015625, 0.125, 2.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -17,13 +19,14 @@ class_name RiceDensePlantsParticles
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(8.0, 256.0, 1.0) var cell_width: float = 240.0:
+@export_range(8.0, 256.0, 1.0) var cell_width: float = 96.0:
 	set(value):
 		cell_width = clamp(value, 8.0, 256.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
 		amount = rows * rows
 		min_draw_distance = 1.0
 		_update_particle_aabbs()
+		_update_particle_visibility_ranges()
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
@@ -35,9 +38,9 @@ class_name RiceDensePlantsParticles
 		min_draw_distance = 1.0
 		_create_grid()
 
-@export_storage var rows: int = 256
+@export_storage var rows: int = 96
 
-@export_storage var amount: int = 65536:
+@export_storage var amount: int = 9216:
 	set(value):
 		amount = maxi(value, 1)
 		particle_count = amount * grid_width * grid_width
@@ -54,6 +57,13 @@ class_name RiceDensePlantsParticles
 
 @export var process_material: ShaderMaterial
 @export var mesh: Mesh
+@export var use_procedural_rice_blade_mesh := true
+
+@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 8.0
+@export_range(0.0, 128.0, 1.0, "or_greater") var near_visibility_fade_margin: float = 32.0:
+	set(value):
+		near_visibility_fade_margin = maxf(value, 0.0)
+		_update_particle_visibility_ranges()
 
 @export var shadow_mode: GeometryInstance3D.ShadowCastingSetting = (
 	GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -71,12 +81,13 @@ var mesh_material_override: Material:
 			particle_node.material_override = mesh_material_override
 
 @export_group("Info")
-@export var min_draw_distance: float = 360.0:
+@export var min_draw_distance: float = 144.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
+		_update_particle_visibility_ranges()
 		_mark_static_process_parameters_dirty()
 
-@export var particle_count: int = 589824:
+@export var particle_count: int = 82944:
 	set(value):
 		particle_count = amount * grid_width * grid_width
 
@@ -97,6 +108,7 @@ var _static_process_parameters_dirty := true
 
 func _ready() -> void:
 	_ensure_unique_materials()
+	_ensure_rice_blade_mesh()
 	_create_grid()
 
 
@@ -110,15 +122,10 @@ func _physics_process(_delta: float) -> void:
 		set_physics_process(false)
 		return
 
-	var camera := _get_terrain_camera()
 	if _static_process_parameters_dirty:
 		_upload_static_process_parameters()
 
-	if camera and last_pos.distance_squared_to(camera.global_position) > 1.0:
-		var pos := camera.global_position.snapped(Vector3.ONE)
-		_position_grid(pos)
-		_set_camera_position_parameter(pos)
-		last_pos = camera.global_position
+	_sync_grid_to_camera(false)
 
 
 func configure_from_plot_mask(
@@ -146,6 +153,7 @@ func configure_from_plot_mask(
 		_create_grid()
 	_apply_mask_parameters()
 	_upload_static_process_parameters()
+	_sync_grid_to_camera(true)
 
 
 func configure_from_plots(p_terrain: Node3D, region: Node3D, mask_info: Dictionary) -> void:
@@ -178,8 +186,82 @@ func _ensure_unique_materials() -> void:
 	_unique_materials = true
 
 
+func _ensure_rice_blade_mesh() -> void:
+	if not use_procedural_rice_blade_mesh:
+		return
+	if mesh is ArrayMesh and mesh.resource_name == "ProceduralRiceBladeClump":
+		return
+	mesh = _create_rice_blade_clump_mesh()
+
+
+func _create_rice_blade_clump_mesh() -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var blade_count := 3
+	for blade_index: int in range(blade_count):
+		var angle := TAU * float(blade_index) / float(blade_count)
+		var radial := Vector3(cos(angle), 0.0, sin(angle))
+		var tangent := Vector3(-radial.z, 0.0, radial.x)
+		var base_offset := radial * (0.045 + 0.012 * float(blade_index % 2))
+		var height := 0.82 + 0.07 * float(blade_index % 3)
+		var curve := radial * (0.14 + 0.02 * float((blade_index + 1) % 2))
+		var width := 0.54 + 0.06 * float(blade_index % 2)
+		_append_blade_strip(vertices, normals, uvs, indices, base_offset, tangent, curve, height, width)
+
+	var mesh_resource := ArrayMesh.new()
+	mesh_resource.resource_name = "ProceduralRiceBladeClump"
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	mesh_resource.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh_resource
+
+
+func _append_blade_strip(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	uvs: PackedVector2Array,
+	indices: PackedInt32Array,
+	base_offset: Vector3,
+	tangent: Vector3,
+	curve: Vector3,
+	height: float,
+	width: float
+) -> void:
+	var start_index := vertices.size()
+	var segment_count := 3
+	for segment_index: int in range(segment_count + 1):
+		var t := float(segment_index) / float(segment_count)
+		var center := base_offset + Vector3.UP * (height * t) + curve * pow(t, 1.55)
+		var half_width := width * (0.5 - 0.45 * t)
+		var normal := tangent.cross((Vector3.UP + curve * 0.45).normalized()).normalized()
+		if normal.length_squared() <= 0.0001:
+			normal = Vector3.FORWARD
+		vertices.append(center - tangent * half_width)
+		vertices.append(center + tangent * half_width)
+		normals.append(normal)
+		normals.append(normal)
+		uvs.append(Vector2(0.0, t))
+		uvs.append(Vector2(1.0, t))
+
+	for segment_index: int in range(segment_count):
+		var row := start_index + segment_index * 2
+		indices.append(row)
+		indices.append(row + 1)
+		indices.append(row + 3)
+		indices.append(row)
+		indices.append(row + 3)
+		indices.append(row + 2)
+
+
 func _create_grid() -> void:
 	_destroy_grid()
+	_ensure_rice_blade_mesh()
 	if not process_material or not mesh:
 		set_physics_process(false)
 		return
@@ -204,6 +286,7 @@ func _create_grid() -> void:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
 			particle_node.use_fixed_seed = true
+			_configure_particle_visibility(particle_node)
 			particle_node.set_physics_interpolation_mode(Node.PHYSICS_INTERPOLATION_MODE_OFF)
 			if mesh_material_override:
 				particle_node.material_override = mesh_material_override
@@ -216,6 +299,7 @@ func _create_grid() -> void:
 	last_pos = Vector3.ZERO
 	_apply_mask_parameters()
 	_upload_static_process_parameters()
+	_sync_grid_to_camera(true)
 
 
 func _set_offsets() -> void:
@@ -249,6 +333,21 @@ func _position_grid(pos: Vector3) -> void:
 		var snap := Vector3(pos.x, 0.0, pos.z).snapped(Vector3.ONE) + offsets[index]
 		particle_node.global_position = (snap / instance_spacing).round() * instance_spacing
 		particle_node.restart(true)
+
+
+func _sync_grid_to_camera(force: bool) -> void:
+	var camera := _get_terrain_camera()
+	if not camera:
+		return
+
+	var threshold := maxf(reposition_threshold_meters, instance_spacing)
+	if not force and last_pos.distance_squared_to(camera.global_position) <= threshold * threshold:
+		return
+
+	var pos := camera.global_position.snapped(Vector3.ONE)
+	_position_grid(pos)
+	_set_camera_position_parameter(pos)
+	last_pos = camera.global_position
 
 
 func _upload_static_process_parameters() -> bool:
@@ -326,6 +425,21 @@ func _update_particle_aabbs() -> void:
 	var particle_aabb := _get_particle_aabb()
 	for particle_node: GPUParticles3D in particle_nodes:
 		particle_node.custom_aabb = particle_aabb
+
+
+func _update_particle_visibility_ranges() -> void:
+	for particle_node: GPUParticles3D in particle_nodes:
+		if is_instance_valid(particle_node):
+			_configure_particle_visibility(particle_node)
+
+
+func _configure_particle_visibility(particle_node: GPUParticles3D) -> void:
+	particle_node.set_meta(PRESERVE_VISIBILITY_RANGE_META, true)
+	particle_node.visibility_range_begin = 0.0
+	particle_node.visibility_range_begin_margin = 0.0
+	particle_node.visibility_range_end = maxf(min_draw_distance, 1.0)
+	particle_node.visibility_range_end_margin = clampf(near_visibility_fade_margin, 0.0, particle_node.visibility_range_end)
+	particle_node.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 func _get_particle_aabb() -> AABB:

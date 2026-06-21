@@ -23,6 +23,10 @@ var road_clearance: float = 1.0
 var horizontal_split_bias: float = 1.0
 var field_shape_variation: float = 0.65
 var generated_road_polylines: Array = []
+var generated_bund_polylines: Array = []
+var target_plot_area_min_m2: float = 300.0
+var target_plot_area_max_m2: float = 600.0
+var preferred_plot_area_m2: float = 450.0
 var _road_segments: Array[Dictionary] = []
 var _road_segment_buckets: Dictionary = {}
 var _road_bucket_size := 4.0
@@ -31,6 +35,7 @@ var _road_bucket_size := 4.0
 func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[FieldPlotData]:
 	var plots: Array[FieldPlotData] = []
 	generated_road_polylines.clear()
+	generated_bund_polylines.clear()
 	_build_road_segment_buckets(road_polylines)
 	if field_cells.is_empty():
 		return plots
@@ -47,107 +52,627 @@ func generate(field_cells: Array[Vector2i], road_polylines: Array) -> Array[Fiel
 
 		var rng := RandomNumberGenerator.new()
 		rng.seed = _component_seed(component_index, component)
-
 		var component_center := _get_component_center(component)
-		var row_direction := _get_nearest_road_tangent(component_center, road_polylines)
-		if row_direction.length_squared() <= 0.0001:
-			row_direction = Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU))
-		row_direction = row_direction.normalized()
-		row_direction = _bias_direction_horizontal(row_direction)
+		var road_direction := _get_nearest_road_tangent(component_center, road_polylines)
+		if road_direction.length_squared() <= 0.0001:
+			road_direction = Vector2.RIGHT.rotated(rng.randf_range(0.0, TAU))
+		road_direction = _normalize_or_right(road_direction)
+		road_direction = _canonical_axis_direction(road_direction)
+		var depth_direction := Vector2(-road_direction.y, road_direction.x).normalized()
 
-		var lateral_direction := Vector2(-row_direction.y, row_direction.x).normalized()
-		var bounds := _get_component_oriented_bounds(component, component_center, row_direction, lateral_direction)
-		var min_u: float = bounds["min_u"]
-		var max_u: float = bounds["max_u"]
-		var min_v: float = bounds["min_v"]
-		var max_v: float = bounds["max_v"]
-		var safe_min_width := maxf(min_plot_width, 0.1)
-		var safe_max_width := maxf(max_plot_width, safe_min_width)
-		var safe_gap := maxf(maxf(field_road_gap_width, bund_gap), 0.0)
-		var safe_sample_step := maxf(sample_step, minf(cell_size, safe_min_width) * 0.25)
-		var vertical_corridor_centers := _get_vertical_corridor_centers(min_u, max_u, safe_gap, rng)
-		_append_vertical_corridor_roads(
-			vertical_corridor_centers,
+		var component_outline := _build_component_outline(component)
+		if component_outline.size() < 3:
+			component_outline = _build_component_bounds_outline(component, component_center, road_direction, depth_direction)
+		if component_outline.size() < 3:
+			continue
+
+		var component_plots := _build_area_targeted_plots(
+			component_index,
+			component_outline,
 			component_center,
-			row_direction,
-			lateral_direction,
-			min_v,
-			max_v,
-			safe_sample_step,
+			road_direction,
+			depth_direction,
 			field_lookup,
-			road_polylines
+			road_polylines,
+			rng,
+			plot_index
 		)
-		var row_index := 0
-		var band_min_v := min_v
 
-		while band_min_v <= max_v:
-			var band_width := _pick_high_variance_extent(safe_min_width, safe_max_width, rng)
-			var band_max_v := band_min_v + band_width
-			var band_center_v := (band_min_v + band_max_v) * 0.5
-			var intervals := _get_valid_u_intervals(
-				component_center,
-				row_direction,
-				lateral_direction,
-				min_u,
-				max_u,
-				band_center_v,
-				band_width,
-				safe_sample_step,
-				field_lookup,
-				road_polylines
-			)
-
-			for interval_index: int in range(intervals.size()):
-				var interval: Vector2 = intervals[interval_index]
-				if interval.y - interval.x < min_plot_length:
-					continue
-
-				var split_intervals := _split_plot_interval(interval, safe_gap, vertical_corridor_centers, rng)
-				_append_vertical_split_gap_roads(
-					split_intervals,
-					component_center,
-					row_direction,
-					lateral_direction,
-					band_center_v,
-					band_width
-				)
-
-				for segment_index: int in range(split_intervals.size()):
-					var split_interval: Vector2 = split_intervals[segment_index]
-					var plot_length := split_interval.y - split_interval.x
-					var center_u := (split_interval.x + split_interval.y) * 0.5
-					var center_2d := component_center + row_direction * center_u + lateral_direction * band_center_v
-					if not _is_plot_valid(center_2d, row_direction, lateral_direction, plot_length, band_width, field_lookup, road_polylines):
-						continue
-
-					var footprint := _build_plot_footprint(plot_length, band_width)
-					var plot := FieldPlotData.new()
-					plot.configure(
-						_get_plot_id(component_index, row_index, interval_index, segment_index, plot_index),
-						Vector3(center_2d.x, 0.0, center_2d.y),
-						Vector3(row_direction.x, 0.0, row_direction.y),
-						Vector3(lateral_direction.x, 0.0, lateral_direction.y),
-						plot_length,
-						band_width,
-						footprint
-					)
-					plots.append(plot)
-					plot_index += 1
-
-			_append_horizontal_row_gap_roads(
-				intervals,
-				component_center,
-				row_direction,
-				lateral_direction,
-				band_max_v,
-				max_v,
-				safe_gap
-			)
-
-			row_index += 1
-			band_min_v = band_max_v + safe_gap
+		for plot: FieldPlotData in component_plots:
+			plots.append(plot)
+			_append_plot_bund_polylines(plot)
+			plot_index += 1
 
 	return plots
+
+
+func _build_area_targeted_plots(
+	component_index: int,
+	component_outline: PackedVector2Array,
+	component_center: Vector2,
+	road_direction: Vector2,
+	depth_direction: Vector2,
+	field_lookup: Dictionary,
+	road_polylines: Array,
+	rng: RandomNumberGenerator,
+	plot_index_start: int
+) -> Array[FieldPlotData]:
+	var plots: Array[FieldPlotData] = []
+	var bounds := _get_polygon_oriented_bounds(component_outline, component_center, road_direction, depth_direction)
+	if bounds.is_empty():
+		return plots
+
+	var min_u := float(bounds.get("min_u", 0.0))
+	var max_u := float(bounds.get("max_u", 0.0))
+	var min_v := float(bounds.get("min_v", 0.0))
+	var max_v := float(bounds.get("max_v", 0.0))
+	if max_u - min_u <= 0.1 or max_v - min_v <= 0.1:
+		return plots
+
+	var safe_gap := maxf(bund_gap, 0.0)
+	var safe_min_area := maxf(target_plot_area_min_m2, 25.0)
+	var safe_max_area := maxf(target_plot_area_max_m2, safe_min_area)
+	var safe_preferred_area := clampf(preferred_plot_area_m2, safe_min_area, safe_max_area)
+	var min_frontage := clampf(sqrt(safe_min_area / 2.25), 8.0, 30.0)
+	var max_frontage := clampf(sqrt(safe_max_area * 1.2), min_frontage, 36.0)
+	var preferred_frontage := clampf(sqrt(safe_preferred_area / 1.5), min_frontage, max_frontage)
+	var frontage_intervals := _build_random_intervals(min_u, max_u, min_frontage, max_frontage, preferred_frontage, safe_gap, rng)
+
+	for frontage_index: int in range(frontage_intervals.size()):
+		var frontage_interval: Vector2 = frontage_intervals[frontage_index]
+		var frontage_width := maxf(frontage_interval.y - frontage_interval.x, 0.1)
+		var min_depth := clampf(safe_min_area / frontage_width, 10.0, 72.0)
+		var max_depth := clampf(safe_max_area / frontage_width, min_depth, 96.0)
+		var preferred_depth := clampf(safe_preferred_area / frontage_width, min_depth, max_depth)
+		var depth_intervals := _build_random_intervals(min_v, max_v, min_depth, max_depth, preferred_depth, safe_gap, rng)
+
+		for depth_index: int in range(depth_intervals.size()):
+			var depth_interval: Vector2 = depth_intervals[depth_index]
+			var polygon := _clip_polygon_to_oriented_rect(
+				component_outline,
+				component_center,
+				road_direction,
+				depth_direction,
+				frontage_interval.x,
+				frontage_interval.y,
+				depth_interval.x,
+				depth_interval.y
+			)
+			_append_area_constrained_plot_polygons(
+				plots,
+				component_index,
+				frontage_index,
+				depth_index,
+				polygon,
+				component_center,
+				road_direction,
+				depth_direction,
+				field_lookup,
+				road_polylines,
+				rng,
+				plot_index_start
+			)
+
+	return plots
+
+
+func _append_area_constrained_plot_polygons(
+	plots: Array[FieldPlotData],
+	component_index: int,
+	frontage_index: int,
+	depth_index: int,
+	polygon: PackedVector2Array,
+	component_center: Vector2,
+	road_direction: Vector2,
+	depth_direction: Vector2,
+	field_lookup: Dictionary,
+	road_polylines: Array,
+	rng: RandomNumberGenerator,
+	plot_index_start: int,
+	split_depth: int = 0
+) -> void:
+	if polygon.size() < 3:
+		return
+
+	polygon = _clean_polygon(polygon)
+	var area := absf(_get_polygon_signed_area(polygon))
+	var safe_min_area := maxf(target_plot_area_min_m2, 25.0)
+	var safe_max_area := maxf(target_plot_area_max_m2, safe_min_area)
+	if area < safe_min_area * 0.35:
+		return
+
+	var bounds := _get_polygon_oriented_bounds(polygon, component_center, road_direction, depth_direction)
+	var u_extent := float(bounds.get("max_u", 0.0)) - float(bounds.get("min_u", 0.0))
+	var v_extent := float(bounds.get("max_v", 0.0)) - float(bounds.get("min_v", 0.0))
+	if area > safe_max_area * 1.25 and split_depth < 4 and maxf(u_extent, v_extent) > 4.0:
+		var split_axis := road_direction if u_extent >= v_extent else depth_direction
+		var split_min := float(bounds.get("min_u", 0.0)) if u_extent >= v_extent else float(bounds.get("min_v", 0.0))
+		var split_max := float(bounds.get("max_u", 0.0)) if u_extent >= v_extent else float(bounds.get("max_v", 0.0))
+		var split_coord := lerpf(split_min, split_max, rng.randf_range(0.44, 0.56))
+		var first := _clip_polygon_with_axis_max(polygon, component_center, split_axis, split_coord)
+		var second := _clip_polygon_with_axis_min(polygon, component_center, split_axis, split_coord)
+		if first.size() >= 3 and second.size() >= 3:
+			_append_area_constrained_plot_polygons(
+				plots, component_index, frontage_index, depth_index, first, component_center,
+				road_direction, depth_direction, field_lookup, road_polylines, rng, plot_index_start, split_depth + 1
+			)
+			_append_area_constrained_plot_polygons(
+				plots, component_index, frontage_index, depth_index, second, component_center,
+				road_direction, depth_direction, field_lookup, road_polylines, rng, plot_index_start, split_depth + 1
+			)
+			return
+
+	if not _is_candidate_polygon_valid(polygon, field_lookup, road_polylines):
+		return
+
+	var center := _find_polygon_interior_point(polygon)
+	var footprint := _build_local_footprint(polygon, center, road_direction, depth_direction)
+	if footprint.size() < 3:
+		return
+
+	var plot := FieldPlotData.new()
+	plot.configure(
+		_get_plot_id(component_index, frontage_index, depth_index, split_depth, plot_index_start + plots.size()),
+		Vector3(center.x, 0.0, center.y),
+		Vector3(road_direction.x, 0.0, road_direction.y),
+		Vector3(depth_direction.x, 0.0, depth_direction.y),
+		0.0,
+		0.0,
+		footprint
+	)
+	plots.append(plot)
+
+
+func _build_random_intervals(
+	min_value: float,
+	max_value: float,
+	min_extent: float,
+	max_extent: float,
+	preferred_extent: float,
+	gap: float,
+	rng: RandomNumberGenerator
+) -> Array[Vector2]:
+	var intervals: Array[Vector2] = []
+	var total := max_value - min_value
+	var safe_gap := maxf(gap, 0.0)
+	var safe_min := maxf(min_extent, 0.25)
+	var safe_max := maxf(max_extent, safe_min)
+	if total <= safe_min + safe_gap:
+		intervals.append(Vector2(min_value, max_value))
+		return intervals
+
+	var min_count := maxi(1, ceili((total + safe_gap) / (safe_max + safe_gap)))
+	var max_count := maxi(min_count, floori((total + safe_gap) / (safe_min + safe_gap)))
+	var preferred_count := maxi(1, roundi((total + safe_gap) / (maxf(preferred_extent, safe_min) + safe_gap)))
+	var count_min := maxi(min_count, preferred_count - 1)
+	var count_max := mini(max_count, preferred_count + 1)
+	var segment_count := clampi(preferred_count, min_count, max_count)
+	if count_max >= count_min:
+		segment_count = rng.randi_range(count_min, count_max)
+
+	var usable_total := total - safe_gap * float(segment_count - 1)
+	if segment_count <= 1 or usable_total <= safe_min:
+		intervals.append(Vector2(min_value, max_value))
+		return intervals
+
+	var lengths := _distribute_plot_lengths(usable_total, segment_count, safe_min, safe_max, rng)
+	var start := min_value
+	for length: float in lengths:
+		var end := minf(start + length, max_value)
+		if end - start >= 0.25:
+			intervals.append(Vector2(start, end))
+		start = end + safe_gap
+
+	return intervals
+
+
+func _build_component_outline(component: Array) -> PackedVector2Array:
+	var component_lookup: Dictionary = {}
+	for cell: Vector2i in component:
+		component_lookup[cell] = true
+
+	var edges: Array[Dictionary] = []
+	for cell: Vector2i in component:
+		var corners := _get_cell_corners(cell)
+		if not component_lookup.has(cell + Vector2i(0, -1)):
+			edges.append({"from": corners[0], "to": corners[1]})
+		if not component_lookup.has(cell + Vector2i(1, 0)):
+			edges.append({"from": corners[1], "to": corners[2]})
+		if not component_lookup.has(cell + Vector2i(0, 1)):
+			edges.append({"from": corners[2], "to": corners[3]})
+		if not component_lookup.has(cell + Vector2i(-1, 0)):
+			edges.append({"from": corners[3], "to": corners[0]})
+
+	var best_loop := PackedVector2Array()
+	var best_area := 0.0
+	while not edges.is_empty():
+		var first_edge := edges.pop_front() as Dictionary
+		var start: Vector2 = first_edge["from"]
+		var current: Vector2 = first_edge["to"]
+		var loop := PackedVector2Array()
+		loop.append(start)
+		var safety := component.size() * 8 + 16
+		while _point_key(current) != _point_key(start) and safety > 0:
+			safety -= 1
+			loop.append(current)
+			var next_index := _find_edge_starting_at(edges, current)
+			if next_index < 0:
+				break
+			var next_edge := edges.pop_at(next_index) as Dictionary
+			current = next_edge["to"]
+
+		var cleaned := _clean_polygon(loop)
+		var area := absf(_get_polygon_signed_area(cleaned))
+		if cleaned.size() >= 3 and area > best_area:
+			best_loop = cleaned
+			best_area = area
+
+	return best_loop
+
+
+func _build_component_bounds_outline(component: Array, center: Vector2, road_direction: Vector2, depth_direction: Vector2) -> PackedVector2Array:
+	var bounds := _get_component_oriented_bounds(component, center, road_direction, depth_direction)
+	var min_u: float = bounds["min_u"]
+	var max_u: float = bounds["max_u"]
+	var min_v: float = bounds["min_v"]
+	var max_v: float = bounds["max_v"]
+	return PackedVector2Array([
+		center + road_direction * min_u + depth_direction * min_v,
+		center + road_direction * max_u + depth_direction * min_v,
+		center + road_direction * max_u + depth_direction * max_v,
+		center + road_direction * min_u + depth_direction * max_v,
+	])
+
+
+func _find_edge_starting_at(edges: Array[Dictionary], point: Vector2) -> int:
+	var key := _point_key(point)
+	for index: int in range(edges.size()):
+		var edge := edges[index]
+		if _point_key(edge["from"]) == key:
+			return index
+	return -1
+
+
+func _point_key(point: Vector2) -> String:
+	return "%d,%d" % [roundi(point.x * 1000.0), roundi(point.y * 1000.0)]
+
+
+func _clip_polygon_to_oriented_rect(
+	polygon: PackedVector2Array,
+	center: Vector2,
+	u_axis: Vector2,
+	v_axis: Vector2,
+	min_u: float,
+	max_u: float,
+	min_v: float,
+	max_v: float
+) -> PackedVector2Array:
+	var clipped := _clip_polygon_with_axis_min(polygon, center, u_axis, min_u)
+	clipped = _clip_polygon_with_axis_max(clipped, center, u_axis, max_u)
+	clipped = _clip_polygon_with_axis_min(clipped, center, v_axis, min_v)
+	clipped = _clip_polygon_with_axis_max(clipped, center, v_axis, max_v)
+	return _clean_polygon(clipped)
+
+
+func _clip_polygon_with_axis_min(
+	polygon: PackedVector2Array,
+	center: Vector2,
+	axis: Vector2,
+	min_coordinate: float
+) -> PackedVector2Array:
+	return _clip_polygon_with_axis_threshold(polygon, center, axis, min_coordinate, true)
+
+
+func _clip_polygon_with_axis_max(
+	polygon: PackedVector2Array,
+	center: Vector2,
+	axis: Vector2,
+	max_coordinate: float
+) -> PackedVector2Array:
+	return _clip_polygon_with_axis_threshold(polygon, center, axis, max_coordinate, false)
+
+
+func _clip_polygon_with_axis_threshold(
+	polygon: PackedVector2Array,
+	center: Vector2,
+	axis: Vector2,
+	threshold: float,
+	keep_greater: bool
+) -> PackedVector2Array:
+	var clipped := PackedVector2Array()
+	if polygon.size() < 3:
+		return clipped
+
+	var previous := polygon[polygon.size() - 1]
+	var previous_coordinate := (previous - center).dot(axis)
+	var previous_inside := previous_coordinate >= threshold if keep_greater else previous_coordinate <= threshold
+	for current: Vector2 in polygon:
+		var current_coordinate := (current - center).dot(axis)
+		var current_inside := current_coordinate >= threshold if keep_greater else current_coordinate <= threshold
+		if current_inside != previous_inside:
+			var denominator := current_coordinate - previous_coordinate
+			if absf(denominator) > 0.000001:
+				var t := clampf((threshold - previous_coordinate) / denominator, 0.0, 1.0)
+				clipped.append(previous + (current - previous) * t)
+		if current_inside:
+			clipped.append(current)
+		previous = current
+		previous_coordinate = current_coordinate
+		previous_inside = current_inside
+
+	return _clean_polygon(clipped)
+
+
+func _clean_polygon(polygon: PackedVector2Array) -> PackedVector2Array:
+	var cleaned := PackedVector2Array()
+	for point: Vector2 in polygon:
+		if cleaned.is_empty() or cleaned[cleaned.size() - 1].distance_squared_to(point) > 0.000001:
+			cleaned.append(point)
+	if cleaned.size() > 1 and cleaned[0].distance_squared_to(cleaned[cleaned.size() - 1]) <= 0.000001:
+		cleaned.remove_at(cleaned.size() - 1)
+
+	var simplified := PackedVector2Array()
+	for index: int in range(cleaned.size()):
+		var previous := cleaned[(index - 1 + cleaned.size()) % cleaned.size()]
+		var current := cleaned[index]
+		var next := cleaned[(index + 1) % cleaned.size()]
+		var before := current - previous
+		var after := next - current
+		if before.length_squared() <= 0.000001 or after.length_squared() <= 0.000001:
+			continue
+		if absf(_cross_2d(before.normalized(), after.normalized())) <= 0.0001 and before.dot(after) > 0.0:
+			continue
+		simplified.append(current)
+	return simplified
+
+
+func _get_polygon_oriented_bounds(polygon: PackedVector2Array, center: Vector2, u_axis: Vector2, v_axis: Vector2) -> Dictionary:
+	if polygon.size() < 3:
+		return {}
+
+	var min_u := INF
+	var max_u := -INF
+	var min_v := INF
+	var max_v := -INF
+	for point: Vector2 in polygon:
+		var relative := point - center
+		var u := relative.dot(u_axis)
+		var v := relative.dot(v_axis)
+		min_u = minf(min_u, u)
+		max_u = maxf(max_u, u)
+		min_v = minf(min_v, v)
+		max_v = maxf(max_v, v)
+
+	return {
+		"min_u": min_u,
+		"max_u": max_u,
+		"min_v": min_v,
+		"max_v": max_v,
+	}
+
+
+func _is_candidate_polygon_valid(polygon: PackedVector2Array, field_lookup: Dictionary, road_polylines: Array) -> bool:
+	if polygon.size() < 3 or absf(_get_polygon_signed_area(polygon)) <= 0.001:
+		return false
+	if not _is_polygon_simple(polygon):
+		return false
+
+	var clearance := maxf(0.0, road_width * 0.5 + road_clearance)
+	var center := _find_polygon_interior_point(polygon)
+	for point: Vector2 in polygon:
+		var inset_point := point.lerp(center, 0.02)
+		if not field_lookup.has(_local_2d_to_cell(inset_point)):
+			return false
+		if _is_point_near_roads(point, road_polylines, clearance):
+			return false
+
+	if not field_lookup.has(_local_2d_to_cell(center)):
+		return false
+	if _is_point_near_roads(center, road_polylines, clearance):
+		return false
+	return true
+
+
+func _find_polygon_interior_point(polygon: PackedVector2Array) -> Vector2:
+	var centroid := _get_polygon_centroid(polygon)
+	if _is_point_in_polygon(centroid, polygon):
+		return centroid
+
+	var min_point := Vector2(INF, INF)
+	var max_point := Vector2(-INF, -INF)
+	for point: Vector2 in polygon:
+		min_point.x = minf(min_point.x, point.x)
+		min_point.y = minf(min_point.y, point.y)
+		max_point.x = maxf(max_point.x, point.x)
+		max_point.y = maxf(max_point.y, point.y)
+
+	var best_point := polygon[0]
+	var best_distance := -INF
+	for x_index: int in range(7):
+		for y_index: int in range(7):
+			var candidate := Vector2(
+				lerpf(min_point.x, max_point.x, (float(x_index) + 0.5) / 7.0),
+				lerpf(min_point.y, max_point.y, (float(y_index) + 0.5) / 7.0)
+			)
+			if not _is_point_in_polygon(candidate, polygon):
+				continue
+			var distance := _get_polygon_edge_distance(candidate, polygon)
+			if distance > best_distance:
+				best_distance = distance
+				best_point = candidate
+	return best_point
+
+
+func _get_polygon_centroid(polygon: PackedVector2Array) -> Vector2:
+	var signed_area := _get_polygon_signed_area(polygon)
+	if absf(signed_area) <= 0.000001:
+		var average := Vector2.ZERO
+		for point: Vector2 in polygon:
+			average += point
+		return average / float(maxi(polygon.size(), 1))
+
+	var cx := 0.0
+	var cy := 0.0
+	for index: int in range(polygon.size()):
+		var current := polygon[index]
+		var next := polygon[(index + 1) % polygon.size()]
+		var cross := current.x * next.y - next.x * current.y
+		cx += (current.x + next.x) * cross
+		cy += (current.y + next.y) * cross
+	var factor := 1.0 / (6.0 * signed_area)
+	return Vector2(cx * factor, cy * factor)
+
+
+func _build_local_footprint(
+	polygon: PackedVector2Array,
+	center: Vector2,
+	road_direction: Vector2,
+	depth_direction: Vector2
+) -> PackedVector2Array:
+	var footprint := PackedVector2Array()
+	for point: Vector2 in polygon:
+		var relative := point - center
+		footprint.append(Vector2(relative.dot(road_direction), relative.dot(depth_direction)))
+	return footprint
+
+
+func _append_plot_bund_polylines(plot: FieldPlotData) -> void:
+	var outline := plot.get_region_outline_2d()
+	if outline.size() < 2:
+		return
+
+	for index: int in range(outline.size()):
+		_append_unique_polyline(generated_bund_polylines, outline[index], outline[(index + 1) % outline.size()])
+		_append_unique_polyline(generated_road_polylines, outline[index], outline[(index + 1) % outline.size()])
+
+
+func _append_unique_polyline(polylines: Array, from_point: Vector2, to_point: Vector2) -> void:
+	if from_point.distance_squared_to(to_point) <= 0.0001:
+		return
+
+	var forward_key := "%s>%s" % [_point_key(from_point), _point_key(to_point)]
+	var reverse_key := "%s>%s" % [_point_key(to_point), _point_key(from_point)]
+	for polyline: PackedVector2Array in polylines:
+		if polyline.size() < 2:
+			continue
+		var existing_key := "%s>%s" % [_point_key(polyline[0]), _point_key(polyline[1])]
+		if existing_key == forward_key or existing_key == reverse_key:
+			return
+
+	var polyline := PackedVector2Array()
+	polyline.append(from_point)
+	polyline.append(to_point)
+	polylines.append(polyline)
+
+
+func _is_point_in_polygon(point: Vector2, polygon: PackedVector2Array) -> bool:
+	var inside := false
+	var previous_index := polygon.size() - 1
+	for current_index: int in range(polygon.size()):
+		var current := polygon[current_index]
+		var previous := polygon[previous_index]
+		if _is_point_on_segment(point, previous, current):
+			return true
+		if (current.y > point.y) != (previous.y > point.y):
+			var denominator := previous.y - current.y
+			if absf(denominator) > 0.000001:
+				var crossing_x := (previous.x - current.x) * (point.y - current.y) / denominator + current.x
+				if point.x <= crossing_x:
+					inside = not inside
+		previous_index = current_index
+	return inside
+
+
+func _get_polygon_edge_distance(point: Vector2, polygon: PackedVector2Array) -> float:
+	var min_distance := INF
+	for index: int in range(polygon.size()):
+		min_distance = minf(min_distance, _distance_to_segment(point, polygon[index], polygon[(index + 1) % polygon.size()]))
+	return min_distance
+
+
+func _is_polygon_simple(polygon: PackedVector2Array) -> bool:
+	for first_index: int in range(polygon.size()):
+		var first_from := polygon[first_index]
+		var first_to := polygon[(first_index + 1) % polygon.size()]
+		for second_index: int in range(first_index + 1, polygon.size()):
+			if abs(second_index - first_index) <= 1:
+				continue
+			if first_index == 0 and second_index == polygon.size() - 1:
+				continue
+			if _segments_intersect(first_from, first_to, polygon[second_index], polygon[(second_index + 1) % polygon.size()]):
+				return false
+	return true
+
+
+func _segments_intersect(a: Vector2, b: Vector2, c: Vector2, d: Vector2) -> bool:
+	var ab_c := _cross_2d(b - a, c - a)
+	var ab_d := _cross_2d(b - a, d - a)
+	var cd_a := _cross_2d(d - c, a - c)
+	var cd_b := _cross_2d(d - c, b - c)
+	if _opposite_signs(ab_c, ab_d) and _opposite_signs(cd_a, cd_b):
+		return true
+	if absf(ab_c) <= 0.000001 and _is_point_on_segment(c, a, b):
+		return true
+	if absf(ab_d) <= 0.000001 and _is_point_on_segment(d, a, b):
+		return true
+	if absf(cd_a) <= 0.000001 and _is_point_on_segment(a, c, d):
+		return true
+	if absf(cd_b) <= 0.000001 and _is_point_on_segment(b, c, d):
+		return true
+	return false
+
+
+func _opposite_signs(a: float, b: float) -> bool:
+	return (a < 0.0 and b > 0.0) or (a > 0.0 and b < 0.0)
+
+
+func _is_point_on_segment(point: Vector2, from_point: Vector2, to_point: Vector2) -> bool:
+	var segment := to_point - from_point
+	var length_squared := segment.length_squared()
+	if length_squared <= 0.000001:
+		return point.distance_squared_to(from_point) <= 0.000001
+
+	var weight := (point - from_point).dot(segment) / length_squared
+	if weight < -0.0001 or weight > 1.0001:
+		return false
+	var closest := from_point + segment * clampf(weight, 0.0, 1.0)
+	return point.distance_squared_to(closest) <= 0.000001
+
+
+func _distance_to_segment(point: Vector2, from_point: Vector2, to_point: Vector2) -> float:
+	var segment := to_point - from_point
+	var length_squared := segment.length_squared()
+	if length_squared <= 0.000001:
+		return point.distance_to(from_point)
+
+	var weight := clampf((point - from_point).dot(segment) / length_squared, 0.0, 1.0)
+	return point.distance_to(from_point + segment * weight)
+
+
+func _cross_2d(a: Vector2, b: Vector2) -> float:
+	return a.x * b.y - a.y * b.x
+
+
+func _get_polygon_signed_area(polygon: PackedVector2Array) -> float:
+	var area := 0.0
+	for index: int in range(polygon.size()):
+		var current := polygon[index]
+		var next := polygon[(index + 1) % polygon.size()]
+		area += current.x * next.y - next.x * current.y
+	return area * 0.5
+
+
+func _normalize_or_right(direction: Vector2) -> Vector2:
+	if direction.length_squared() <= 0.0001:
+		return Vector2.RIGHT
+	return direction.normalized()
+
+
+func _canonical_axis_direction(direction: Vector2) -> Vector2:
+	var normalized := _normalize_or_right(direction)
+	if absf(normalized.x) >= absf(normalized.y):
+		return normalized if normalized.x >= 0.0 else -normalized
+	return normalized if normalized.y >= 0.0 else -normalized
 
 
 func _get_vertical_corridor_centers(min_u: float, max_u: float, safe_gap: float, rng: RandomNumberGenerator) -> Array[float]:

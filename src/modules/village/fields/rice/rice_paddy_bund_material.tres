@@ -1,0 +1,11 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://modules/village/fields/rice/rice_paddy_bund.gdshader" id="1_bund_shader"]
+
+[resource]
+shader = ExtResource("1_bund_shader")
+shader_parameter/mud_color = Vector3(0.2, 0.12, 0.065)
+shader_parameter/wet_mud_color = Vector3(0.11, 0.075, 0.045)
+shader_parameter/grass_color = Vector3(0.2, 0.36, 0.11)
+shader_parameter/grass_blend = 0.44
+shader_parameter/noise_scale = 0.09
