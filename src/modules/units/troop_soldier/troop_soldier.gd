@@ -37,6 +37,9 @@ var _independent_arrival_radius := 0.24
 var _independent_motion_active := false
 var _deserted := false
 var _desert_direction := Vector3.ZERO
+var _desert_speed_multiplier := 1.0
+var _corpse_state_applied := false
+var _corpse_roll := PI * 0.5
 
 
 func _ready() -> void:
@@ -58,6 +61,13 @@ func _physics_process(delta: float) -> void:
 	_state_time += delta
 	_spear_thrust_remaining = maxf(_spear_thrust_remaining - delta, 0.0)
 	_hit_reaction_remaining = maxf(_hit_reaction_remaining - delta, 0.0)
+	if not is_alive():
+		_formation_walking = false
+		_formation_attacking = false
+		_independent_motion_active = false
+		_has_independent_target = false
+		_update_procedural_pose(delta)
+		return
 	var moving_independently := _update_independent_motion(delta)
 	if _formation_attacking:
 		_formation_attack_time += delta
@@ -84,6 +94,10 @@ func _physics_process(delta: float) -> void:
 
 
 func set_formation_walking(active: bool, speed_mps: float = 1.0) -> void:
+	if not is_alive():
+		_formation_walking = false
+		_formation_speed_scale = 1.0
+		return
 	_formation_walking = active
 	_formation_speed_scale = clampf(speed_mps / maxf(walk_speed, 0.1), 0.7, 2.4)
 	if formation_visual_only:
@@ -135,6 +149,9 @@ func get_outfit_summary() -> Dictionary:
 
 
 func follow_formation_path(path_points: Array, slot_offset: Vector3, speed_mps: float, arrival_radius_m: float = 0.28) -> void:
+	if not is_alive():
+		clear_independent_motion()
+		return
 	_independent_path_points.clear()
 	for point_variant: Variant in path_points:
 		if point_variant is Vector3:
@@ -151,6 +168,9 @@ func follow_formation_path(path_points: Array, slot_offset: Vector3, speed_mps: 
 
 
 func set_independent_move_target(world_position: Vector3, speed_mps: float, arrival_radius_m: float = 0.24) -> void:
+	if not is_alive():
+		clear_independent_motion()
+		return
 	_independent_path_points.clear()
 	_independent_path_index = 0
 	_independent_target = world_position
@@ -235,7 +255,7 @@ func apply_strength_damage(amount: float, reason: StringName = &"combat") -> voi
 		_hit_reaction_remaining = _hit_reaction_duration
 	apply_damage(amount, reason)
 	if not is_alive():
-		_disappear_after_death()
+		_enter_corpse_state()
 	combat_stats_changed.emit(get_combat_summary())
 
 
@@ -273,12 +293,14 @@ func train_stats(strength_amount: float, damage_amount: float, morale_amount: fl
 	combat_stats_changed.emit(get_combat_summary())
 
 
-func mark_deserted(run_direction: Vector3) -> void:
+func mark_deserted(run_direction: Vector3, speed_multiplier: float = 1.0) -> void:
 	if _deserted:
 		return
 	_deserted = true
 	_formation_attacking = false
 	_formation_walking = true
+	_desert_speed_multiplier = maxf(speed_multiplier, 1.0)
+	_formation_speed_scale = clampf((run_speed * _desert_speed_multiplier) / maxf(walk_speed, 0.1), 0.7, 3.6)
 	_desert_direction = run_direction
 	_desert_direction.y = 0.0
 	if _desert_direction.length_squared() <= 0.0001:
@@ -319,12 +341,13 @@ func get_combat_summary() -> Dictionary:
 		"max_endurance": max_endurance,
 		"alive": is_alive(),
 		"deserted": _deserted,
+		"desert_speed_multiplier": _desert_speed_multiplier,
 	}
 
 
 func kill(reason: StringName = &"death") -> void:
 	super.kill(reason)
-	_disappear_after_death()
+	_enter_corpse_state()
 
 
 func _update_procedural_pose(delta: float) -> void:
@@ -332,6 +355,7 @@ func _update_procedural_pose(delta: float) -> void:
 	if not formation_visual_only:
 		return
 	if not is_alive():
+		_apply_corpse_pose()
 		return
 	if not _formation_attacking and _hit_reaction_remaining <= 0.0:
 		_relax_spear_socket(delta)
@@ -373,7 +397,7 @@ func _update_procedural_pose(delta: float) -> void:
 
 
 func _update_independent_motion(delta: float) -> bool:
-	if _deserted or not _independent_motion_active:
+	if _deserted or not is_alive() or not _independent_motion_active:
 		return false
 	var target: Variant = _get_current_independent_target()
 	if target == null:
@@ -444,21 +468,63 @@ func _get_offset_path_point(path_index: int) -> Vector3:
 	return target
 
 
-func _disappear_after_death() -> void:
-	if not is_inside_tree():
+func _enter_corpse_state() -> void:
+	if _corpse_state_applied:
+		_apply_corpse_pose()
 		return
-	visible = false
+	_corpse_state_applied = true
+	_corpse_roll = PI * 0.5
+	if absi(hash(name)) % 2 == 0:
+		_corpse_roll = -PI * 0.5
+	visible = true
 	_independent_motion_active = false
 	_has_independent_target = false
 	_independent_path_points.clear()
 	_formation_attacking = false
 	_formation_walking = false
+	_combat_target = null
+	_combat_in_range = false
+	_spear_thrust_remaining = 0.0
+	_spear_thrust_duration = 0.0
+	velocity = Vector3.ZERO
 	if self is CollisionObject3D:
 		var collision := self as CollisionObject3D
 		collision.collision_layer = 0
 		collision.collision_mask = 0
 		collision.input_ray_pickable = false
-	call_deferred("queue_free")
+	_disable_collision_recursive(self)
+	_apply_corpse_pose()
+
+
+func _apply_corpse_pose() -> void:
+	if _model_root:
+		_model_root.rotation.z = _corpse_roll
+		_model_root.position.y = 0.03
+	if _torso:
+		_torso.rotation.x = 0.12
+		_torso.rotation.z = 0.0
+	if _left_arm:
+		_left_arm.rotation.x = -0.32
+	if _right_arm:
+		_right_arm.rotation.x = 0.24
+	if _left_leg:
+		_left_leg.rotation.x = 0.18
+	if _right_leg:
+		_right_leg.rotation.x = -0.16
+	if _right_hand_socket:
+		_right_hand_socket.rotation = Vector3.ZERO
+
+
+func _disable_collision_recursive(node: Node) -> void:
+	if node is CollisionObject3D:
+		var collision := node as CollisionObject3D
+		collision.collision_layer = 0
+		collision.collision_mask = 0
+		collision.input_ray_pickable = false
+	if node is CollisionShape3D:
+		(node as CollisionShape3D).disabled = true
+	for child: Node in node.get_children():
+		_disable_collision_recursive(child)
 
 
 func _sync_combat_stats_to_human() -> void:
@@ -474,7 +540,7 @@ func _sync_combat_stats_to_human() -> void:
 func _update_desertion_motion(delta: float) -> void:
 	if not _deserted or _desert_direction.length_squared() <= 0.0001:
 		return
-	global_position += _desert_direction * run_speed * delta
+	global_position += _desert_direction * run_speed * _desert_speed_multiplier * delta
 	_face_direction(_desert_direction, delta)
 
 

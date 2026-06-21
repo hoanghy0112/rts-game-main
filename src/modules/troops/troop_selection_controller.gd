@@ -5,6 +5,7 @@ const SELECTABLE_TYPE_META := &"troop_selectable_type"
 const SELECTABLE_NODE_PATH_META := &"troop_node_path"
 const SELECTABLE_TROOP_TYPE := &"troop"
 const SELECTABLE_CAMP_TYPE := &"camp"
+const TEAM_PLAYER := &"player"
 const VILLAGE_SELECTABLE_TYPE_META := &"village_selectable_type"
 const VILLAGE_SELECTABLE_REGION_PATH_META := &"village_region_path"
 
@@ -19,7 +20,9 @@ const VILLAGE_SELECTABLE_REGION_PATH_META := &"village_region_path"
 @export_flags_3d_physics var village_selection_collision_mask: int = 1
 
 var _selected_troop: Node
+var _hovered_troop: Node
 var _pending_select_position := Vector2(INF, INF)
+var _pending_hover_position := Vector2(INF, INF)
 var _pending_command_position := Vector2(INF, INF)
 var _pending_food_select_position := Vector2(INF, INF)
 var _right_press_position := Vector2(INF, INF)
@@ -34,9 +37,16 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		_handle_mouse_button(event as InputEventMouseButton)
+	elif event is InputEventMouseMotion:
+		_handle_mouse_motion(event as InputEventMouseMotion)
 
 
 func _physics_process(_delta: float) -> void:
+	if is_finite(_pending_hover_position.x):
+		var hover_position := _pending_hover_position
+		_pending_hover_position = Vector2(INF, INF)
+		_update_hovered_troop_at(hover_position)
+
 	if is_finite(_pending_select_position.x):
 		var select_position := _pending_select_position
 		_pending_select_position = Vector2(INF, INF)
@@ -54,7 +64,9 @@ func _physics_process(_delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	_set_hovered_troop(null)
 	_select_troop(null)
+	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
@@ -89,6 +101,14 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	get_viewport().set_input_as_handled()
 
 
+func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
+	if _is_pointer_over_ui():
+		_pending_hover_position = Vector2(INF, INF)
+		_set_hovered_troop(null)
+		return
+	_pending_hover_position = event.position
+
+
 func _pick_troop(screen_position: Vector2) -> void:
 	var troop := _get_troop_at(screen_position)
 	_select_troop(troop)
@@ -97,8 +117,12 @@ func _pick_troop(screen_position: Vector2) -> void:
 
 
 func _issue_move_command(screen_position: Vector2) -> void:
-	if not _selected_troop:
+	if not _is_commandable_troop(_selected_troop):
 		return
+	var target_troop := _get_troop_at(screen_position)
+	if _try_issue_attack_target(target_troop):
+		return
+
 	var destination: Variant = _get_world_destination(screen_position)
 	if destination == null:
 		return
@@ -116,7 +140,7 @@ func _issue_move_command(screen_position: Vector2) -> void:
 
 func _issue_food_collection(screen_position: Vector2) -> void:
 	var troop := _food_collection_troop
-	if not is_instance_valid(troop):
+	if not _is_commandable_troop(troop):
 		_clear_food_collection_targeting()
 		return
 
@@ -133,7 +157,7 @@ func _issue_food_collection(screen_position: Vector2) -> void:
 
 
 func _try_issue_forest_logistics(world_position: Vector3) -> bool:
-	if not _selected_troop:
+	if not _is_commandable_troop(_selected_troop):
 		return false
 
 	var forest_data := _get_forest_region_and_cell(world_position)
@@ -161,7 +185,7 @@ func _try_issue_forest_logistics(world_position: Vector3) -> bool:
 
 
 func _select_troop(troop: Node) -> void:
-	if troop and not _is_commandable_troop(troop):
+	if troop and not _is_selectable_troop(troop):
 		troop = null
 	if _selected_troop == troop:
 		if troop:
@@ -181,6 +205,27 @@ func _select_troop(troop: Node) -> void:
 		var drawer := _get_troop_drawer()
 		if drawer and drawer.has_method("hide_drawer"):
 			drawer.call("hide_drawer")
+
+
+func _update_hovered_troop_at(screen_position: Vector2) -> void:
+	_set_hovered_troop(_get_troop_at(screen_position))
+
+
+func _set_hovered_troop(troop: Node) -> void:
+	if troop and not _is_selectable_troop(troop):
+		troop = null
+	if _hovered_troop == troop:
+		return
+	if is_instance_valid(_hovered_troop) and _hovered_troop.has_method("set_hovered"):
+		_hovered_troop.call("set_hovered", false)
+	_hovered_troop = troop
+	if is_instance_valid(_hovered_troop) and _hovered_troop.has_method("set_hovered"):
+		_hovered_troop.call("set_hovered", true)
+	_update_pointer_cursor()
+
+
+func _update_pointer_cursor() -> void:
+	Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if is_instance_valid(_hovered_troop) else Input.CURSOR_ARROW)
 
 
 func _show_drawer(troop: Node) -> void:
@@ -333,23 +378,62 @@ func _get_troop_for_selectable(selectable: Node) -> Node:
 	var troop_path: NodePath = selectable.get_meta(SELECTABLE_NODE_PATH_META, NodePath(""))
 	if not troop_path.is_empty():
 		var troop := get_node_or_null(troop_path)
-		if _is_commandable_troop(troop):
+		if _is_selectable_troop(troop):
 			return troop
 
 	var current := selectable
 	while current:
-		if _is_commandable_troop(current):
+		if _is_selectable_troop(current):
 			return current
 		current = current.get_parent()
 	return null
+
+
+func _try_issue_attack_target(target_troop: Node) -> bool:
+	if not _is_commandable_troop(_selected_troop):
+		return false
+	if not _is_enemy_troop(_selected_troop, target_troop):
+		return false
+	if not _selected_troop.has_method("command_attack_troop"):
+		return false
+
+	var accepted := bool(_selected_troop.call("command_attack_troop", target_troop))
+	if accepted:
+		var drawer := _get_troop_drawer()
+		if drawer and drawer.has_method("refresh"):
+			drawer.call("refresh")
+	return accepted
+
+
+func _is_enemy_troop(source: Node, target: Node) -> bool:
+	if not source or not target or source == target:
+		return false
+	if not _is_selectable_troop(target):
+		return false
+	var source_team: Variant = source.get("team_id")
+	var target_team: Variant = target.get("team_id")
+	if source_team == null or target_team == null:
+		return false
+	return StringName(source_team) != StringName(target_team)
+
+
+func _is_selectable_troop(troop: Node) -> bool:
+	if not troop or not troop.has_method("get_troop_summary"):
+		return false
+	if troop.has_method("is_defeated") and bool(troop.call("is_defeated")):
+		return false
+	return true
 
 
 func _is_commandable_troop(troop: Node) -> bool:
 	if not troop or not troop.has_method("set_move_destination"):
 		return false
 	var controllable: Variant = troop.get("controllable")
-	if controllable is bool:
-		return bool(controllable)
+	if controllable is bool and not bool(controllable):
+		return false
+	var team: Variant = troop.get("team_id")
+	if team != null and StringName(team) != TEAM_PLAYER:
+		return false
 	return true
 
 
@@ -452,7 +536,7 @@ func _bind_drawer_signals() -> void:
 
 
 func _on_collect_food_requested(troop: Node, amount_kg: float) -> void:
-	if not is_instance_valid(troop):
+	if not _is_commandable_troop(troop):
 		return
 	_select_troop(troop)
 	_clear_food_collection_targeting()
@@ -463,7 +547,7 @@ func _on_collect_food_requested(troop: Node, amount_kg: float) -> void:
 
 
 func _on_collect_wood_requested(troop: Node, soldier_count: int) -> void:
-	if not is_instance_valid(troop):
+	if not _is_commandable_troop(troop):
 		return
 	_select_troop(troop)
 	_issue_nearest_wood_collection(troop, soldier_count)

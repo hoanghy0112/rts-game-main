@@ -14,6 +14,7 @@ const MOVEMENT_MODE_OPTIONS := [
 	{"label": "Walking", "value": &"walking"},
 	{"label": "Running", "value": &"running"},
 ]
+const TEAM_PLAYER := &"player"
 
 @onready var _root_control: Control = %Root
 @onready var _title_label: Label = %TitleLabel
@@ -96,12 +97,15 @@ func refresh() -> void:
 	var dead_soldiers := int(summary.get("dead_soldier_count", 0))
 	var deserted_soldiers := int(summary.get("deserted_soldier_count", 0))
 	var state := String(summary.get("state", &"idle")).capitalize()
+	var team_id := StringName(summary.get("team_id", TEAM_PLAYER))
 	var troop_mode := StringName(summary.get("troop_mode", &"defensive"))
 	var movement_mode := StringName(summary.get("movement_mode", &"walking"))
 	var controllable := bool(summary.get("controllable", true))
+	var read_only := _is_summary_read_only(summary)
 	var in_combat := bool(summary.get("in_combat", false))
 	var food_shortage := float(summary.get("food_shortage_ratio", 0.0))
 	var avg_strength := float(summary.get("average_strength", 0.0))
+	var avg_max_strength := float(summary.get("average_max_strength", 0.0))
 	var avg_damage := float(summary.get("average_damage", 0.0))
 	var avg_morale := float(summary.get("average_morale", 0.0))
 	var avg_endurance := float(summary.get("average_endurance", 0.0))
@@ -134,8 +138,28 @@ func refresh() -> void:
 	var trolley_craft_seconds := float(summary.get("cargo_trolley_craft_seconds", 5.0))
 
 	_title_label.text = display_name
-	_subtitle_label.text = "%s  %d active / %d soldiers" % [troop_id, active_soldiers, soldier_count]
 	_state_label.text = "State  %s" % state
+	if read_only:
+		_apply_read_only_visibility(true)
+		_subtitle_label.text = "%s  Team %s" % [troop_id, String(team_id).capitalize()]
+		_combat_label.text = "Combat  %s   Active %d / %d   Dead %d" % [
+			"engaged" if in_combat else "ready",
+			active_soldiers,
+			soldier_count,
+			dead_soldiers,
+		]
+		_stats_label.text = "Troops  %d active   %d total   %d dead   %d deserted" % [
+			active_soldiers,
+			soldier_count,
+			dead_soldiers,
+			deserted_soldiers,
+		]
+		_troop_mode_option.disabled = true
+		_movement_mode_option.disabled = true
+		return
+
+	_apply_read_only_visibility(false)
+	_subtitle_label.text = "%s  %d active / %d soldiers" % [troop_id, active_soldiers, soldier_count]
 	_select_option_value(_troop_mode_option, troop_mode)
 	_select_option_value(_movement_mode_option, movement_mode)
 	_troop_mode_option.disabled = not controllable
@@ -146,8 +170,9 @@ func refresh() -> void:
 		deserted_soldiers,
 		food_shortage * 100.0,
 	]
-	_stats_label.text = "Avg  STR %.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f" % [
+	_stats_label.text = "Avg  HP %.0f/%.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f" % [
 		avg_strength,
+		avg_max_strength,
 		avg_damage,
 		avg_morale,
 		avg_endurance,
@@ -273,52 +298,102 @@ func _on_troop_changed(_value: Variant = null) -> void:
 	refresh()
 
 
+func _is_summary_read_only(summary: Dictionary) -> bool:
+	var team := StringName(summary.get("team_id", TEAM_PLAYER))
+	return team != TEAM_PLAYER or not bool(summary.get("controllable", true))
+
+
+func _is_current_troop_commandable() -> bool:
+	if not _troop or not _troop.has_method("get_troop_summary"):
+		return false
+	var summary: Dictionary = _troop.call("get_troop_summary") as Dictionary
+	return not _is_summary_read_only(summary)
+
+
+func _apply_read_only_visibility(read_only: bool) -> void:
+	var show_controls := not read_only
+	var mode_rows: Control = null
+	if _troop_mode_option:
+		mode_rows = _troop_mode_option.get_parent() as Control
+	var buttons_row: Control = null
+	if _stop_button:
+		buttons_row = _stop_button.get_parent() as Control
+	var food_row: Control = null
+	if _food_amount_spin_box:
+		food_row = _food_amount_spin_box.get_parent() as Control
+	var wood_row: Control = null
+	if _wood_soldiers_spin_box:
+		wood_row = _wood_soldiers_spin_box.get_parent() as Control
+	var camp_buttons: Control = null
+	if _establish_camp_button:
+		camp_buttons = _establish_camp_button.get_parent() as Control
+	_set_control_visible(mode_rows, show_controls)
+	_set_control_visible(_destination_label, show_controls)
+	_set_control_visible(_path_label, show_controls)
+	_set_control_visible(_eta_label, show_controls)
+	_set_control_visible(_failure_label, show_controls)
+	_set_control_visible(buttons_row, show_controls)
+	_set_control_visible(_load_label, show_controls)
+	_set_control_visible(_assets_label, show_controls)
+	_set_control_visible(_carrier_label, show_controls)
+	_set_control_visible(_camp_label, show_controls)
+	_set_control_visible(food_row, show_controls)
+	_set_control_visible(wood_row, show_controls)
+	_set_control_visible(_craft_trolley_button, show_controls)
+	_set_control_visible(camp_buttons, show_controls)
+
+
+func _set_control_visible(control: Control, visible: bool) -> void:
+	if control:
+		control.visible = visible
+
+
 func _on_stop_pressed() -> void:
-	if _troop and _troop.has_method("stop_movement"):
+	if _is_current_troop_commandable() and _troop.has_method("stop_movement"):
 		_troop.call("stop_movement")
 	refresh()
 
 
 func _on_clear_pressed() -> void:
-	if _troop and _troop.has_method("clear_destination"):
+	if _is_current_troop_commandable() and _troop.has_method("clear_destination"):
 		_troop.call("clear_destination")
 	refresh()
 
 
 func _on_collect_food_pressed() -> void:
-	if not _troop:
+	if not _is_current_troop_commandable():
 		return
 	collect_food_requested.emit(_troop, get_food_collection_amount_kg())
 	refresh()
 
 
 func _on_collect_wood_pressed() -> void:
-	if not _troop:
+	if not _is_current_troop_commandable():
 		return
 	collect_wood_requested.emit(_troop, get_wood_collection_soldiers())
 	refresh()
 
 
 func _on_craft_trolley_pressed() -> void:
-	if _troop and _troop.has_method("craft_cargo_trolley"):
+	if _is_current_troop_commandable() and _troop.has_method("craft_cargo_trolley"):
 		_troop.call("craft_cargo_trolley")
 	refresh()
 
 
 func _on_establish_camp_pressed() -> void:
-	if _troop and _troop.has_method("establish_camp"):
+	if _is_current_troop_commandable() and _troop.has_method("establish_camp"):
 		_troop.call("establish_camp")
 	refresh()
 
 
 func _on_pack_camp_pressed() -> void:
-	if _troop and _troop.has_method("pack_camp"):
+	if _is_current_troop_commandable() and _troop.has_method("pack_camp"):
 		_troop.call("pack_camp")
 	refresh()
 
 
 func _on_troop_mode_selected(index: int) -> void:
-	if not _troop or not _troop.has_method("set_troop_mode"):
+	if not _is_current_troop_commandable() or not _troop.has_method("set_troop_mode"):
 		return
 	var mode := _get_option_value(_troop_mode_option, index)
 	_troop.call("set_troop_mode", mode)
@@ -326,7 +401,7 @@ func _on_troop_mode_selected(index: int) -> void:
 
 
 func _on_movement_mode_selected(index: int) -> void:
-	if not _troop or not _troop.has_method("set_movement_mode"):
+	if not _is_current_troop_commandable() or not _troop.has_method("set_movement_mode"):
 		return
 	var mode := _get_option_value(_movement_mode_option, index)
 	_troop.call("set_movement_mode", mode)

@@ -35,7 +35,13 @@ const SELECTABLE_CAMP_TYPE := &"camp"
 
 const SOLDIER_CONTAINER_NAME := "Soldiers"
 const RING_NODE_NAME := "TroopRing"
-const SELECTION_PROXY_NAME := "TroopClickProxy"
+const MANAGEMENT_FLAG_NODE_NAME := "TroopManagementFlag"
+const SELECTION_PROXY_NAME := "TroopFlagClickProxy"
+const SELECTION_HIGHLIGHT_NAME := "TroopSelectionHighlight"
+const FLAG_BORDER_NODE_NAME := "FlagHoverBorder"
+const UNIT_HOVER_BORDER_NAME := "TroopUnitHoverBorder"
+const UNIT_SELECTION_MARKER_NAME := "TroopUnitSelectionMarker"
+const UNIT_SELECTION_PROXY_NAME := "TroopUnitClickProxy"
 const ROUTE_VISUAL_NAME := "TroopRouteVisual"
 const CARRIER_CONTAINER_NAME := "CarrierTasks"
 const CAMP_NODE_NAME := "TroopCamp"
@@ -81,7 +87,7 @@ const TASK_RETURNING := &"returning"
 		formation_columns = maxi(value, 1)
 		if is_inside_tree():
 			rebuild_formation()
-@export_range(0.2, 16.0, 0.05, "or_greater") var formation_spacing: float = 1.45:
+@export_range(0.2, 16.0, 0.05, "or_greater") var formation_spacing: float = 4.35:
 	set(value):
 		formation_spacing = maxf(value, 0.2)
 		if is_inside_tree():
@@ -165,6 +171,27 @@ const TASK_RETURNING := &"returning"
 		carried_flag_roll_degrees = value
 		if is_inside_tree():
 			rebuild_formation()
+@export var management_flag_offset: Vector3 = Vector3(0.0, 0.16, 0.0):
+	set(value):
+		management_flag_offset = value
+		if is_inside_tree():
+			_rebuild_management_flag()
+@export_range(2.0, 14.0, 0.05, "or_greater") var management_flag_pole_height: float = 7.2:
+	set(value):
+		management_flag_pole_height = maxf(value, 2.0)
+		if is_inside_tree():
+			_rebuild_management_flag()
+@export_range(0.01, 0.5, 0.005, "or_greater") var management_flag_pole_radius: float = 0.055:
+	set(value):
+		management_flag_pole_radius = maxf(value, 0.01)
+		if is_inside_tree():
+			_rebuild_management_flag()
+@export var management_flag_banner_size: Vector2 = Vector2(1.8, 2.9):
+	set(value):
+		management_flag_banner_size = Vector2(maxf(value.x, 0.2), maxf(value.y, 0.2))
+		if is_inside_tree():
+			_rebuild_management_flag()
+@export var management_flag_face_camera := true
 
 @export_group("Visibility")
 @export_range(0.0, 128.0, 0.1, "or_greater") var ring_radius: float = 0.0:
@@ -204,6 +231,23 @@ const TASK_RETURNING := &"returning"
 		selected_ring_color = value
 		if is_inside_tree():
 			_update_ring_material()
+			_rebuild_selection_highlight()
+
+@export_range(0.0, 16.0, 0.05, "or_greater") var selection_highlight_surface_offset: float = 0.28:
+	set(value):
+		selection_highlight_surface_offset = maxf(value, 0.0)
+		if is_inside_tree():
+			_rebuild_selection_highlight()
+@export_range(0.1, 4.0, 0.05, "or_greater") var selection_highlight_radius_multiplier: float = 1.18:
+	set(value):
+		selection_highlight_radius_multiplier = maxf(value, 0.1)
+		if is_inside_tree():
+			_rebuild_selection_highlight()
+@export_range(0.05, 2.0, 0.01, "or_greater") var unit_selection_marker_radius: float = 0.58:
+	set(value):
+		unit_selection_marker_radius = maxf(value, 0.05)
+		if is_inside_tree():
+			_rebuild_unit_selection_markers()
 
 @export_group("Selection")
 @export_flags_3d_physics var selection_collision_layer: int = 1 << 5:
@@ -211,6 +255,17 @@ const TASK_RETURNING := &"returning"
 		selection_collision_layer = value
 		if is_inside_tree():
 			_rebuild_selection_proxy()
+			_rebuild_unit_selection_proxies()
+@export_range(0.1, 4.0, 0.05, "or_greater") var unit_selection_proxy_radius: float = 0.85:
+	set(value):
+		unit_selection_proxy_radius = maxf(value, 0.1)
+		if is_inside_tree():
+			_rebuild_unit_selection_proxies()
+@export_range(0.5, 8.0, 0.05, "or_greater") var unit_selection_proxy_height: float = 2.6:
+	set(value):
+		unit_selection_proxy_height = maxf(value, 0.5)
+		if is_inside_tree():
+			_rebuild_unit_selection_proxies()
 
 @export_group("Movement")
 @export var movement_map: Resource
@@ -241,6 +296,8 @@ const TASK_RETURNING := &"returning"
 		if is_inside_tree():
 			_refresh_formation_slot_metas()
 @export_range(0.0, 4.0, 0.05, "or_greater") var formation_walkout_stagger: float = 0.75
+@export_range(0.0, 8.0, 0.05, "or_greater") var formation_collision_distance: float = 2.64
+@export_range(0.0, 16.0, 0.05, "or_greater") var formation_collision_push_speed: float = 3.2
 @export_range(0.05, 2.0, 0.05, "or_greater") var route_refresh_interval: float = 0.25
 
 @export_group("Logistics")
@@ -278,7 +335,7 @@ const TASK_RETURNING := &"returning"
 @export_range(0.1, 20.0, 0.1, "or_greater") var carrier_speed_mps: float = 3.2
 @export_range(0.05, 8.0, 0.05, "or_greater") var carrier_arrival_radius: float = 0.55
 @export_range(0.0, 10.0, 0.05, "or_greater") var carrier_work_seconds: float = 1.0
-@export_range(0.2, 8.0, 0.05, "or_greater") var carrier_formation_spacing: float = 1.25
+@export_range(0.2, 16.0, 0.05, "or_greater") var carrier_formation_spacing: float = 3.75
 @export_range(0.5, 8.0, 0.05, "or_greater") var carrier_resource_icon_height: float = 2.45
 @export_range(0.05, 2.0, 0.05, "or_greater") var carrier_resource_icon_size: float = 0.34
 @export_range(1.0, 32.0, 0.1, "or_greater") var carrier_turn_responsiveness: float = 14.0
@@ -304,12 +361,15 @@ const TASK_RETURNING := &"returning"
 @export_range(1.0, 256.0, 0.5, "or_greater") var combat_range_m: float = 18.0
 @export_range(0.05, 10.0, 0.05, "or_greater") var combat_scan_interval: float = 0.35
 @export_range(0.05, 10.0, 0.05, "or_greater") var attack_interval: float = 1.1
-@export_range(0.4, 12.0, 0.05, "or_greater") var combat_spear_range_m: float = 2.35
-@export_range(0.15, 4.0, 0.05, "or_greater") var soldier_personal_space_radius: float = 0.72
-@export_range(0.15, 4.0, 0.05, "or_greater") var enemy_personal_space_radius: float = 0.82
-@export_range(0.2, 6.0, 0.05, "or_greater") var combat_frontline_width_per_soldier: float = 1.1
+@export_range(0.4, 16.0, 0.05, "or_greater") var combat_spear_range_m: float = 9.4
+@export_range(0.15, 8.0, 0.05, "or_greater") var soldier_personal_space_radius: float = 2.88
+@export_range(0.15, 8.0, 0.05, "or_greater") var enemy_personal_space_radius: float = 3.28
+@export_range(0.2, 12.0, 0.05, "or_greater") var combat_frontline_width_per_soldier: float = 4.4
 @export_range(0.1, 24.0, 0.1, "or_greater") var combat_slot_follow_speed: float = 4.4
 @export_range(0.0, 12.0, 0.05, "or_greater") var combat_separation_strength: float = 6.2
+@export_range(0.0, 2.0, 0.01, "or_greater") var combat_attack_shuffle_radius: float = 0.18
+@export_range(0.05, 4.0, 0.01, "or_greater") var combat_attack_shuffle_interval: float = 0.35
+@export_range(0.01, 4.0, 0.01, "or_greater") var combat_attack_shuffle_speed: float = 0.55
 @export_range(0.05, 10.0, 0.05, "or_greater") var chase_repath_interval: float = 0.75
 @export_range(0.0, 10.0, 0.05, "or_greater") var rest_engagement_delay: float = 2.5
 @export_range(0.0, 10.0, 0.05, "or_greater") var training_engagement_delay: float = 2.0
@@ -319,6 +379,7 @@ const TASK_RETURNING := &"returning"
 @export_range(0.0, 100.0, 0.05, "or_greater") var run_endurance_loss_per_second: float = 0.9
 @export_range(0.0, 100.0, 0.05, "or_greater") var fight_endurance_loss_per_second: float = 0.7
 @export_range(0.0, 100.0, 0.05, "or_greater") var attack_mode_endurance_loss_per_second: float = 0.45
+@export_range(0.01, 1.0, 0.01) var endurance_rate_scale: float = 0.2
 @export_range(0.0, 100.0, 0.05, "or_greater") var rest_endurance_recovery_per_second: float = 7.5
 @export_range(0.0, 100.0, 0.05, "or_greater") var defensive_endurance_recovery_per_second: float = 2.2
 @export_range(0.0, 100.0, 0.05, "or_greater") var training_endurance_loss_per_second: float = 0.35
@@ -334,6 +395,11 @@ const TASK_RETURNING := &"returning"
 @export_range(0.0, 100.0, 0.05, "or_greater") var food_shortage_endurance_loss_per_second: float = 0.7
 @export_range(0.0, 100.0, 0.1) var desertion_morale_threshold: float = 24.0
 @export_range(0.0, 1.0, 0.001) var desertion_chance_per_second: float = 0.025
+@export var survivor_rout_enabled := true
+@export_range(1, 64, 1, "or_greater") var survivor_rout_active_threshold: int = 5
+@export_range(0, 64, 1, "or_greater") var survivor_rout_min_active_soldiers: int = 3
+@export_range(0.05, 1.0, 0.01) var survivor_rout_fraction: float = 0.4
+@export_range(1.0, 4.0, 0.05, "or_greater") var survivor_rout_speed_multiplier: float = 1.5
 @export_range(0.0, 20.0, 0.01, "or_greater") var food_kg_per_soldier_per_day: float = 1.2
 
 @export_group("Route Visual")
@@ -406,7 +472,9 @@ const TASK_RETURNING := &"returning"
 
 var _soldier_container: Node3D
 var _ring_instance: MeshInstance3D
+var _management_flag: Node3D
 var _selection_proxy: StaticBody3D
+var _selection_highlight: MeshInstance3D
 var _route_visual: Node
 var _terrain: Node3D
 var _movement_map: Resource
@@ -437,6 +505,7 @@ var _camp_world_position := Vector3.ZERO
 var _time_system: Node
 var _rng := RandomNumberGenerator.new()
 var _active_enemy: Node
+var _manual_attack_target: Node
 var _combat_scan_remaining := 0.0
 var _chase_repath_remaining := 0.0
 var _engagement_windup_remaining := 0.0
@@ -444,14 +513,20 @@ var _combat_action_remaining := 0.0
 var _last_target_instance_id := 0
 var _combat_soldier_targets: Dictionary = {}
 var _combat_soldier_offsets: Dictionary = {}
+var _combat_soldier_lock_positions: Dictionary = {}
+var _combat_soldier_shuffle_offsets: Dictionary = {}
+var _combat_soldier_shuffle_timers: Dictionary = {}
 var _combat_soldier_attack_timers: Dictionary = {}
 var _combat_scatter_active := false
 var _manual_move_override_active := false
 var _low_endurance_seconds := 0.0
 var _food_shortage_ratio := 0.0
 var _deserted_soldier_count := 0
+var _survivor_rout_triggered := false
 var _last_combat_emit_time := 0.0
 var _was_in_combat := false
+var _defeated_presentation_active := false
+var _hovered := false
 
 
 func _ready() -> void:
@@ -461,9 +536,7 @@ func _ready() -> void:
 	_ensure_scene_nodes()
 	_load_movement_map()
 	rebuild_formation()
-	_rebuild_ring()
-	_rebuild_selection_proxy()
-	_update_ring_material()
+	_rebuild_management_flag()
 	_snap_to_surface()
 	_rebuild_cargo_trolley_visuals()
 	_emit_destination_changed()
@@ -477,6 +550,8 @@ func _physics_process(delta: float) -> void:
 	_update_carrier_tasks(delta)
 	_update_food_and_modes(delta)
 	_update_combat_ai(delta)
+	_rebuild_unit_selection_proxies()
+	_update_defeated_presentation()
 
 	if _state == STATE_MOVING:
 		_follow_path(delta)
@@ -488,20 +563,26 @@ func _physics_process(delta: float) -> void:
 		_last_turn_delta = 0.0
 		_last_turn_intensity = 0.0
 	_update_formation_soldier_slots(delta)
+	_update_management_flag_position()
 	_update_combat_soldier_animation()
 	_maybe_emit_combat_changed(delta)
 
 
 func _process(_delta: float) -> void:
-	_update_screen_constant_ring_width()
+	_update_management_flag_position()
+	_update_management_flag_facing()
 
 
 func rebuild_formation() -> void:
 	_ensure_scene_nodes()
 	_combat_soldier_targets.clear()
 	_combat_soldier_offsets.clear()
+	_combat_soldier_lock_positions.clear()
+	_combat_soldier_shuffle_offsets.clear()
+	_combat_soldier_shuffle_timers.clear()
 	_combat_soldier_attack_timers.clear()
 	_combat_scatter_active = false
+	_survivor_rout_triggered = false
 	_clear_children(_soldier_container)
 
 	var scene := soldier_scene if soldier_scene else DEFAULT_SOLDIER_SCENE
@@ -526,23 +607,26 @@ func rebuild_formation() -> void:
 		spatial.set_meta(&"troop_formation_phase", float(index) * 1.618)
 		spatial.rotation.y = rotation.y
 		spatial.scale = Vector3.ONE * soldier_scale
+		_add_unit_selection_proxy(spatial)
 
 		if index == 0:
 			_attach_flag_to_soldier(spatial, "TeamFlag", team_flag_color, troop_flag_color)
 		elif index == 1:
 			_attach_flag_to_soldier(spatial, "TroopFlag", troop_flag_color, team_flag_color)
 
-	_rebuild_ring()
-	_rebuild_selection_proxy()
+	_rebuild_management_flag()
+	_update_hover_visuals()
 	_update_formation_soldier_locomotion()
 	_emit_destination_changed()
 
 
 func set_selected(selected: bool) -> void:
+	if selected and is_defeated():
+		selected = false
 	if _selected == selected:
 		return
 	_selected = selected
-	_update_ring_material()
+	_update_hover_visuals()
 	selected_changed.emit(_selected)
 
 
@@ -550,8 +634,20 @@ func is_selected() -> bool:
 	return _selected
 
 
+func set_hovered(hovered: bool) -> void:
+	if _hovered == hovered:
+		return
+	_hovered = hovered
+	_update_hover_visuals()
+
+
+func is_hovered() -> bool:
+	return _hovered
+
+
 func set_move_destination(world_position: Vector3, manual_command: bool = true) -> bool:
 	if manual_command:
+		_manual_attack_target = null
 		_clear_independent_combat(true)
 	_load_movement_map()
 	if not _movement_map:
@@ -596,6 +692,7 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 
 
 func stop_movement() -> void:
+	_manual_attack_target = null
 	_path_points.clear()
 	_current_path_index = 0
 	_has_destination = false
@@ -617,6 +714,32 @@ func has_destination() -> bool:
 
 func get_destination() -> Vector3:
 	return _destination
+
+
+func command_attack_troop(enemy: Node) -> bool:
+	if not _is_valid_enemy(enemy):
+		return false
+	_manual_attack_target = enemy
+	_active_enemy = enemy
+	_manual_move_override_active = false
+	_chase_repath_remaining = 0.0
+	_engagement_windup_remaining = 0.0
+	_last_target_instance_id = enemy.get_instance_id()
+	_clear_independent_combat(true)
+	if global_position.distance_to((enemy as Node3D).global_position) > _get_mode_engagement_range():
+		return _repath_to_attack_target(enemy)
+	_clear_route_visual()
+	_set_state(STATE_FIGHTING)
+	_emit_combat_changed()
+	return true
+
+
+func has_attack_target() -> bool:
+	return _is_valid_enemy(_manual_attack_target)
+
+
+func get_attack_target() -> Node:
+	return _manual_attack_target if _is_valid_enemy(_manual_attack_target) else null
 
 
 func begin_food_collection(village: Node, requested_kg: float) -> bool:
@@ -919,12 +1042,54 @@ func get_selection_proxy() -> StaticBody3D:
 	return _selection_proxy
 
 
+func get_management_flag_world_position() -> Vector3:
+	return _management_flag.global_position if is_instance_valid(_management_flag) else Vector3.ZERO
+
+
 func get_route_dash_count() -> int:
 	return int(_route_visual.call("get_dash_count")) if _route_visual and _route_visual.has_method("get_dash_count") else 0
 
 
 func has_destination_marker() -> bool:
 	return bool(_route_visual.call("has_destination_flag")) if _route_visual and _route_visual.has_method("has_destination_flag") else false
+
+
+func has_selection_indicator() -> bool:
+	return is_instance_valid(_management_flag) and is_instance_valid(_selection_proxy)
+
+
+func has_selection_highlight() -> bool:
+	return false
+
+
+func has_management_flag() -> bool:
+	return is_instance_valid(_management_flag) and is_instance_valid(_selection_proxy)
+
+
+func has_unit_hover_borders() -> bool:
+	for soldier: Node in _get_formation_soldiers():
+		var border := soldier.get_node_or_null(UNIT_HOVER_BORDER_NAME) as MeshInstance3D
+		if border and border.visible:
+			return true
+	return false
+
+
+func has_unit_selection_markers() -> bool:
+	for soldier: Node in _get_formation_soldiers():
+		var marker := soldier.get_node_or_null(UNIT_SELECTION_MARKER_NAME) as MeshInstance3D
+		if marker and marker.visible:
+			return true
+	return false
+
+
+func get_combat_lock_position_for_soldier(soldier: Node) -> Vector3:
+	if not is_instance_valid(soldier):
+		return Vector3.ZERO
+	return _combat_soldier_lock_positions.get(soldier.get_instance_id(), Vector3.ZERO)
+
+
+func has_combat_lock_for_soldier(soldier: Node) -> bool:
+	return is_instance_valid(soldier) and _combat_soldier_lock_positions.has(soldier.get_instance_id())
 
 
 func set_troop_mode(mode: Variant) -> void:
@@ -975,6 +1140,10 @@ func is_defeated() -> bool:
 
 func get_average_strength() -> float:
 	return _get_average_soldier_value(&"strength")
+
+
+func get_average_max_strength() -> float:
+	return _get_average_soldier_value(&"max_strength")
 
 
 func get_average_damage() -> float:
@@ -1196,20 +1365,15 @@ func _create_flag(flag_name: String, banner_color: Color, accent_color: Color) -
 
 
 func _rebuild_ring() -> void:
-	if _ring_instance and is_instance_valid(_ring_instance):
-		remove_child(_ring_instance)
-		_ring_instance.free()
+	_clear_ring()
 
-	_ring_instance = MeshInstance3D.new()
-	_ring_instance.name = RING_NODE_NAME
-	_ring_instance.mesh = _build_ring_mesh(_get_effective_ring_radius())
-	_last_ring_world_width = _get_current_ring_world_width()
-	_ring_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_ring_instance.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	_ring_instance.position.y = ring_surface_offset
-	add_child(_ring_instance)
-	_ring_instance.owner = null
-	_update_ring_material()
+
+func _clear_ring() -> void:
+	if _ring_instance and is_instance_valid(_ring_instance):
+		if _ring_instance.get_parent():
+			_ring_instance.get_parent().remove_child(_ring_instance)
+		_ring_instance.free()
+	_ring_instance = null
 
 
 func _build_ring_mesh(radius: float) -> ArrayMesh:
@@ -1259,10 +1423,82 @@ func _build_ring_mesh(radius: float) -> ArrayMesh:
 
 
 func _rebuild_selection_proxy() -> void:
-	if _selection_proxy and is_instance_valid(_selection_proxy):
-		remove_child(_selection_proxy)
-		_selection_proxy.free()
+	_rebuild_management_flag()
 
+
+func _clear_selection_proxy() -> void:
+	if _selection_proxy and is_instance_valid(_selection_proxy):
+		if _selection_proxy.get_parent():
+			_selection_proxy.get_parent().remove_child(_selection_proxy)
+		_selection_proxy.free()
+	_selection_proxy = null
+
+
+func _rebuild_management_flag() -> void:
+	_clear_management_flag()
+	if is_defeated():
+		return
+
+	_management_flag = Node3D.new()
+	_management_flag.name = MANAGEMENT_FLAG_NODE_NAME
+	_management_flag.top_level = true
+	add_child(_management_flag)
+	_management_flag.owner = null
+
+	var pole := MeshInstance3D.new()
+	pole.name = "Pole"
+	var pole_mesh := CylinderMesh.new()
+	pole_mesh.top_radius = management_flag_pole_radius
+	pole_mesh.bottom_radius = management_flag_pole_radius
+	pole_mesh.height = management_flag_pole_height
+	pole_mesh.radial_segments = 8
+	pole.mesh = pole_mesh
+	pole.position = Vector3(0.0, management_flag_pole_height * 0.5, 0.0)
+	pole.material_override = _make_material(Color(0.42, 0.28, 0.12, 1.0))
+	_management_flag.add_child(pole)
+
+	var banner_center := Vector3(
+		management_flag_banner_size.x * 0.5,
+		management_flag_pole_height * 0.82,
+		0.0
+	)
+	var banner := MeshInstance3D.new()
+	banner.name = "Banner"
+	var banner_mesh := BoxMesh.new()
+	banner_mesh.size = Vector3(management_flag_banner_size.x, management_flag_banner_size.y, 0.055)
+	banner.mesh = banner_mesh
+	banner.position = banner_center
+	banner.material_override = _make_flag_material(troop_flag_color)
+	_management_flag.add_child(banner)
+
+	var stripe := MeshInstance3D.new()
+	stripe.name = "TeamStripe"
+	var stripe_mesh := BoxMesh.new()
+	stripe_mesh.size = Vector3(management_flag_banner_size.x * 1.04, management_flag_banner_size.y * 0.24, 0.065)
+	stripe.mesh = stripe_mesh
+	stripe.position = banner_center + Vector3(0.0, -management_flag_banner_size.y * 0.32, 0.035)
+	stripe.material_override = _make_flag_material(team_flag_color)
+	_management_flag.add_child(stripe)
+
+	_add_management_flag_border(banner_center)
+	_add_management_flag_proxy(banner_center)
+	_update_management_flag_position()
+	_update_hover_visuals()
+	_update_management_flag_facing()
+
+
+func _clear_management_flag() -> void:
+	_clear_selection_proxy()
+	if _management_flag and is_instance_valid(_management_flag):
+		if _management_flag.get_parent():
+			_management_flag.get_parent().remove_child(_management_flag)
+		_management_flag.free()
+	_management_flag = null
+
+
+func _add_management_flag_proxy(banner_center: Vector3) -> void:
+	if not _management_flag:
+		return
 	_selection_proxy = StaticBody3D.new()
 	_selection_proxy.name = SELECTION_PROXY_NAME
 	_selection_proxy.collision_layer = selection_collision_layer
@@ -1272,33 +1508,463 @@ func _rebuild_selection_proxy() -> void:
 	_selection_proxy.set_meta(SELECTABLE_NODE_PATH_META, get_path() if is_inside_tree() else NodePath("."))
 
 	var shape := CollisionShape3D.new()
-	var cylinder := CylinderShape3D.new()
-	cylinder.radius = _get_effective_ring_radius() + maxf(formation_spacing * 0.75, ring_width)
-	cylinder.height = 5.0
-	shape.shape = cylinder
-	shape.position = Vector3(0.0, 2.0, 0.0)
+	var box := BoxShape3D.new()
+	box.size = Vector3(
+		management_flag_banner_size.x + 0.28,
+		management_flag_banner_size.y + 0.24,
+		0.34
+	)
+	shape.shape = box
+	shape.position = banner_center
 	_selection_proxy.add_child(shape)
-	add_child(_selection_proxy)
+	_management_flag.add_child(_selection_proxy)
 	_selection_proxy.owner = null
 
 
-func _update_ring_material() -> void:
-	if not _ring_instance:
+func _add_unit_selection_proxy(soldier: Node3D) -> void:
+	if not soldier:
 		return
+	_remove_unit_selection_proxy(soldier)
 
-	var color := selected_ring_color if _selected else ring_color
+	var proxy := StaticBody3D.new()
+	proxy.name = UNIT_SELECTION_PROXY_NAME
+	proxy.collision_layer = selection_collision_layer
+	proxy.collision_mask = 0
+	proxy.input_ray_pickable = true
+	proxy.set_meta(SELECTABLE_TYPE_META, SELECTABLE_TROOP_TYPE)
+	proxy.set_meta(SELECTABLE_NODE_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+
+	var shape := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = maxf(unit_selection_proxy_radius * soldier_scale, 0.18)
+	capsule.height = maxf(unit_selection_proxy_height * soldier_scale, capsule.radius * 2.0 + 0.05)
+	shape.shape = capsule
+	shape.position = Vector3(0.0, capsule.height * 0.5, 0.0)
+	proxy.add_child(shape)
+	soldier.add_child(proxy)
+	proxy.owner = null
+
+
+func _remove_unit_selection_proxy(soldier: Node) -> void:
+	if not soldier:
+		return
+	var proxy := soldier.get_node_or_null(UNIT_SELECTION_PROXY_NAME)
+	if proxy:
+		if proxy.get_parent():
+			proxy.get_parent().remove_child(proxy)
+		proxy.free()
+
+
+func _rebuild_unit_selection_proxies() -> void:
+	for soldier_node: Node in _get_formation_soldiers():
+		if not (soldier_node is Node3D) or not _is_soldier_active(soldier_node):
+			_remove_unit_selection_proxy(soldier_node)
+			var marker := soldier_node.get_node_or_null(UNIT_SELECTION_MARKER_NAME) as MeshInstance3D
+			if marker:
+				marker.visible = false
+			continue
+
+		var proxy := soldier_node.get_node_or_null(UNIT_SELECTION_PROXY_NAME) as StaticBody3D
+		if not proxy:
+			_add_unit_selection_proxy(soldier_node as Node3D)
+			continue
+		proxy.collision_layer = selection_collision_layer
+		proxy.collision_mask = 0
+		proxy.input_ray_pickable = true
+		proxy.set_meta(SELECTABLE_TYPE_META, SELECTABLE_TROOP_TYPE)
+		proxy.set_meta(SELECTABLE_NODE_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+
+
+func _add_management_flag_border(banner_center: Vector3) -> void:
+	if not _management_flag:
+		return
+	var thickness := maxf(minf(management_flag_banner_size.x, management_flag_banner_size.y) * 0.07, 0.045)
+	var color := _get_hover_border_color()
+	var z := 0.07
+	var half_w := management_flag_banner_size.x * 0.5
+	var half_h := management_flag_banner_size.y * 0.5
+	_add_flag_border_strip(
+		"Top",
+		Vector3(management_flag_banner_size.x + thickness * 2.0, thickness, 0.07),
+		banner_center + Vector3(0.0, half_h + thickness * 0.5, z),
+		color
+	)
+	_add_flag_border_strip(
+		"Bottom",
+		Vector3(management_flag_banner_size.x + thickness * 2.0, thickness, 0.07),
+		banner_center + Vector3(0.0, -half_h - thickness * 0.5, z),
+		color
+	)
+	_add_flag_border_strip(
+		"Left",
+		Vector3(thickness, management_flag_banner_size.y, 0.07),
+		banner_center + Vector3(-half_w - thickness * 0.5, 0.0, z),
+		color
+	)
+	_add_flag_border_strip(
+		"Right",
+		Vector3(thickness, management_flag_banner_size.y, 0.07),
+		banner_center + Vector3(half_w + thickness * 0.5, 0.0, z),
+		color
+	)
+
+
+func _add_flag_border_strip(strip_name: String, size: Vector3, position_value: Vector3, color: Color) -> void:
+	var strip := MeshInstance3D.new()
+	strip.name = "%s_%s" % [FLAG_BORDER_NODE_NAME, strip_name]
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	strip.mesh = mesh
+	strip.position = position_value
+	strip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	strip.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	strip.material_override = _make_hover_border_material(color)
+	strip.visible = false
+	_management_flag.add_child(strip)
+
+
+func _rebuild_selection_highlight() -> void:
+	if _selection_highlight and is_instance_valid(_selection_highlight):
+		if _selection_highlight.get_parent():
+			_selection_highlight.get_parent().remove_child(_selection_highlight)
+		_selection_highlight.free()
+	_selection_highlight = null
+
+
+func _build_selection_highlight_mesh(radius: float) -> ArrayMesh:
+	var safe_radius := maxf(radius, 0.25)
+	var segments := 96
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	var team_color := Color(team_flag_color.r, team_flag_color.g, team_flag_color.b, 0.18)
+	var selected_color := Color(selected_ring_color.r, selected_ring_color.g, selected_ring_color.b, 0.22)
+	var outer_color := Color(selected_ring_color.r, selected_ring_color.g, selected_ring_color.b, 0.0)
+
+	vertices.append(Vector3.ZERO)
+	normals.append(Vector3.UP)
+	colors.append(team_color)
+	for index: int in range(segments):
+		var angle := TAU * float(index) / float(segments)
+		var direction := Vector3(cos(angle), 0.0, sin(angle))
+		vertices.append(direction * safe_radius * 0.42)
+		normals.append(Vector3.UP)
+		colors.append(selected_color)
+	for index: int in range(segments):
+		var angle := TAU * float(index) / float(segments)
+		var direction := Vector3(cos(angle), 0.0, sin(angle))
+		vertices.append(direction * safe_radius)
+		normals.append(Vector3.UP)
+		colors.append(outer_color)
+
+	for index: int in range(segments):
+		var next_index := (index + 1) % segments
+		var inner_a := 1 + index
+		var inner_b := 1 + next_index
+		var outer_a := 1 + segments + index
+		var outer_b := 1 + segments + next_index
+		indices.append(0)
+		indices.append(inner_a)
+		indices.append(inner_b)
+		indices.append(inner_a)
+		indices.append(outer_a)
+		indices.append(outer_b)
+		indices.append(inner_a)
+		indices.append(outer_b)
+		indices.append(inner_b)
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _update_ring_material() -> void:
+	_update_hover_visuals()
+
+
+func _update_selection_highlight_material() -> void:
+	if not _selection_highlight:
+		return
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.no_depth_test = true
-	material.render_priority = 22
+	material.render_priority = 19
 	material.vertex_color_use_as_albedo = true
+	material.albedo_color = Color(1.0, 1.0, 1.0, 0.78)
+	material.emission_enabled = true
+	material.emission = Color(selected_ring_color.r, selected_ring_color.g, selected_ring_color.b, 1.0)
+	material.emission_energy_multiplier = 0.08
+	_selection_highlight.material_override = material
+
+
+func _update_selection_highlight_visibility() -> void:
+	_update_hover_visuals()
+
+
+func _update_defeated_presentation() -> void:
+	var defeated := is_defeated()
+	if defeated == _defeated_presentation_active:
+		if not defeated:
+			_update_hover_visuals()
+		return
+
+	_defeated_presentation_active = defeated
+	if defeated:
+		_selected = false
+		_hovered = false
+		_clear_route_visual()
+		_clear_ring()
+		_clear_management_flag()
+		_rebuild_unit_selection_proxies()
+		_rebuild_selection_highlight()
+		_update_unit_selection_markers()
+		selected_changed.emit(false)
+	else:
+		_rebuild_management_flag()
+		_rebuild_unit_selection_proxies()
+
+
+func _update_hover_visuals() -> void:
+	var active := (_hovered or _selected) and not is_defeated()
+	var color := _get_hover_border_color()
+	if _management_flag and is_instance_valid(_management_flag):
+		for child: Node in _management_flag.get_children():
+			if child is MeshInstance3D and String(child.name).begins_with(FLAG_BORDER_NODE_NAME):
+				var strip := child as MeshInstance3D
+				strip.visible = active
+				strip.material_override = _make_hover_border_material(color)
+	_update_unit_selection_markers()
+
+
+func _update_unit_hover_borders() -> void:
+	for soldier_node: Node in _get_formation_soldiers():
+		if not (soldier_node is Node3D):
+			continue
+		var soldier := soldier_node as Node3D
+		var border := soldier.get_node_or_null(UNIT_HOVER_BORDER_NAME) as MeshInstance3D
+		if border:
+			border.visible = false
+	_update_unit_selection_markers()
+
+
+func _update_unit_selection_markers() -> void:
+	var active := (_hovered or _selected) and not is_defeated()
+	for soldier_node: Node in _get_formation_soldiers():
+		if not (soldier_node is Node3D):
+			continue
+		var soldier := soldier_node as Node3D
+		var border := soldier.get_node_or_null(UNIT_HOVER_BORDER_NAME) as MeshInstance3D
+		if border:
+			border.visible = false
+		var marker := soldier.get_node_or_null(UNIT_SELECTION_MARKER_NAME) as MeshInstance3D
+		if active and _is_soldier_active(soldier):
+			if not marker:
+				marker = _create_unit_selection_marker()
+				soldier.add_child(marker)
+				marker.owner = null
+			marker.visible = true
+			marker.material_override = _make_unit_selection_marker_material(_get_unit_selection_marker_color())
+		elif marker:
+			marker.visible = false
+
+
+func _rebuild_unit_selection_markers() -> void:
+	for soldier_node: Node in _get_formation_soldiers():
+		var marker := soldier_node.get_node_or_null(UNIT_SELECTION_MARKER_NAME) as MeshInstance3D
+		if marker:
+			if marker.get_parent():
+				marker.get_parent().remove_child(marker)
+			marker.free()
+	_update_unit_selection_markers()
+
+
+func _create_unit_hover_border() -> MeshInstance3D:
+	var border := MeshInstance3D.new()
+	border.name = UNIT_HOVER_BORDER_NAME
+	border.mesh = _build_unit_border_mesh()
+	border.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	border.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return border
+
+
+func _build_unit_border_mesh() -> ArrayMesh:
+	var min_point := Vector3(-0.48, 0.05, -0.48)
+	var max_point := Vector3(0.48, 1.85, 0.48)
+	var corners := [
+		Vector3(min_point.x, min_point.y, min_point.z),
+		Vector3(max_point.x, min_point.y, min_point.z),
+		Vector3(max_point.x, min_point.y, max_point.z),
+		Vector3(min_point.x, min_point.y, max_point.z),
+		Vector3(min_point.x, max_point.y, min_point.z),
+		Vector3(max_point.x, max_point.y, min_point.z),
+		Vector3(max_point.x, max_point.y, max_point.z),
+		Vector3(min_point.x, max_point.y, max_point.z),
+	]
+	var edges := [
+		Vector2i(0, 1), Vector2i(1, 2), Vector2i(2, 3), Vector2i(3, 0),
+		Vector2i(4, 5), Vector2i(5, 6), Vector2i(6, 7), Vector2i(7, 4),
+		Vector2i(0, 4), Vector2i(1, 5), Vector2i(2, 6), Vector2i(3, 7),
+	]
+	var vertices := PackedVector3Array()
+	for edge: Vector2i in edges:
+		vertices.append(corners[edge.x])
+		vertices.append(corners[edge.y])
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
+	return mesh
+
+
+func _create_unit_selection_marker() -> MeshInstance3D:
+	var marker := MeshInstance3D.new()
+	marker.name = UNIT_SELECTION_MARKER_NAME
+	marker.mesh = _build_unit_selection_marker_mesh()
+	marker.position = Vector3(0.0, 0.012, 0.0)
+	marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	marker.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return marker
+
+
+func _build_unit_selection_marker_mesh() -> ArrayMesh:
+	var radius := maxf(unit_selection_marker_radius, 0.05)
+	var segments := 40
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+
+	vertices.append(Vector3.ZERO)
+	normals.append(Vector3.UP)
+	colors.append(Color.WHITE)
+	for index: int in range(segments):
+		var angle := TAU * float(index) / float(segments)
+		var direction := Vector3(cos(angle), 0.0, sin(angle))
+		vertices.append(direction * radius)
+		normals.append(Vector3.UP)
+		colors.append(Color.WHITE)
+
+	for index: int in range(segments):
+		var next_index := (index + 1) % segments
+		indices.append(0)
+		indices.append(1 + index)
+		indices.append(1 + next_index)
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _make_unit_selection_marker_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = false
+	material.render_priority = 0
+	material.vertex_color_use_as_albedo = true
+	material.albedo_color = Color(color.r, color.g, color.b, color.a)
+	material.emission_enabled = true
+	material.emission = Color(color.r, color.g, color.b, 1.0)
+	material.emission_energy_multiplier = 0.02
+	return material
+
+
+func _update_management_flag_facing() -> void:
+	if not management_flag_face_camera or not is_instance_valid(_management_flag):
+		return
+	var viewport := get_viewport()
+	if not viewport:
+		return
+	var camera := viewport.get_camera_3d()
+	if not camera:
+		return
+	var to_camera := camera.global_position - _management_flag.global_position
+	to_camera.y = 0.0
+	if to_camera.length_squared() <= 0.0001:
+		return
+	var target_yaw := atan2(-to_camera.x, -to_camera.z)
+	var next_rotation := _management_flag.global_rotation
+	next_rotation.x = 0.0
+	next_rotation.y = target_yaw
+	next_rotation.z = 0.0
+	_management_flag.global_rotation = next_rotation
+
+
+func _update_management_flag_position() -> void:
+	if not is_instance_valid(_management_flag):
+		return
+	var center := _get_unit_centroid_world_position()
+	_management_flag.global_position = center + global_transform.basis * management_flag_offset
+
+
+func _get_unit_centroid_world_position() -> Vector3:
+	var soldiers := _get_active_soldiers()
+	if soldiers.is_empty():
+		soldiers = _get_formation_soldiers()
+
+	var total := Vector3.ZERO
+	var count := 0
+	for soldier_node: Node in soldiers:
+		if not (soldier_node is Node3D):
+			continue
+		total += (soldier_node as Node3D).global_position
+		count += 1
+
+	if count <= 0:
+		return global_position
+
+	return _snap_world_point(total / float(count))
+
+
+func _get_hover_border_color() -> Color:
+	if _selected:
+		return Color(selected_ring_color.r, selected_ring_color.g, selected_ring_color.b, 0.96)
+	return Color(1.0, 0.82, 0.28, 0.92)
+
+
+func _get_unit_selection_marker_color() -> Color:
+	if _selected:
+		return Color(selected_ring_color.r, selected_ring_color.g, selected_ring_color.b, 0.86)
+	return Color(1.0, 0.82, 0.28, 0.46)
+
+
+func _make_hover_border_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = true
+	material.render_priority = 25
 	material.albedo_color = color
 	material.emission_enabled = true
 	material.emission = Color(color.r, color.g, color.b, 1.0)
-	material.emission_energy_multiplier = 0.25 if _selected else 0.12
-	_ring_instance.material_override = material
+	material.emission_energy_multiplier = 0.35
+	return material
+
+
+func _make_flag_material(color: Color) -> StandardMaterial3D:
+	var material := _make_material(color)
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return material
 
 
 func _get_effective_ring_radius() -> float:
@@ -1529,7 +2195,10 @@ func _get_surface_height(world_position: Vector3) -> Variant:
 
 
 func _update_route_visual() -> void:
-	if not _route_visual or not _has_destination:
+	if not _route_visual:
+		return
+	if not _has_destination or not _can_show_route_visual():
+		_clear_route_visual()
 		return
 	_apply_route_visual_settings()
 	var points := _get_remaining_route_points()
@@ -1540,6 +2209,10 @@ func _update_route_visual() -> void:
 func _clear_route_visual() -> void:
 	if _route_visual and _route_visual.has_method("clear_route"):
 		_route_visual.call("clear_route")
+
+
+func _can_show_route_visual() -> bool:
+	return controllable and team_id != TEAM_ENEMY and _state != STATE_FIGHTING and not is_defeated()
 
 
 func _apply_route_visual_settings() -> void:
@@ -1603,6 +2276,7 @@ func _update_formation_soldier_slots(delta: float) -> void:
 
 	if _state == STATE_MOVING:
 		_formation_motion_time += delta * maxf(movement_speed_mps, 0.1)
+		_apply_moving_formation_separation(delta)
 		return
 
 	if _state == STATE_IDLE or _state == STATE_BLOCKED:
@@ -1651,6 +2325,60 @@ func _issue_idle_formation_targets() -> void:
 				soldier.global_position += to_desired.normalized() * minf(speed * get_physics_process_delta_time(), to_desired.length())
 
 
+func _apply_moving_formation_separation(delta: float) -> void:
+	if delta <= 0.0 or formation_collision_distance <= 0.0 or formation_collision_push_speed <= 0.0:
+		return
+	var soldiers: Array[Node3D] = []
+	for soldier_node: Node in _get_active_soldiers():
+		if soldier_node is Node3D and not soldier_node.has_meta(&"troop_carrier_active"):
+			soldiers.append(soldier_node as Node3D)
+	if soldiers.size() < 2:
+		return
+
+	var min_distance := maxf(formation_collision_distance, 0.05)
+	var min_distance_squared := min_distance * min_distance
+	var pushes := {}
+	for index: int in range(soldiers.size()):
+		var a := soldiers[index]
+		var a_id := a.get_instance_id()
+		for other_index: int in range(index + 1, soldiers.size()):
+			var b := soldiers[other_index]
+			var b_id := b.get_instance_id()
+			var separation := a.global_position - b.global_position
+			separation.y = 0.0
+			var distance_squared := separation.length_squared()
+			if distance_squared >= min_distance_squared:
+				continue
+
+			var direction := Vector3.ZERO
+			var distance := 0.0
+			if distance_squared <= 0.0001:
+				direction = _get_deterministic_pair_direction(a, b)
+			else:
+				distance = sqrt(distance_squared)
+				direction = separation / distance
+			var overlap := min_distance - distance
+			var push := direction * overlap * 0.5
+			pushes[a_id] = pushes.get(a_id, Vector3.ZERO) + push
+			pushes[b_id] = pushes.get(b_id, Vector3.ZERO) - push
+
+	var max_step := formation_collision_push_speed * delta
+	for soldier: Node3D in soldiers:
+		var correction: Vector3 = pushes.get(soldier.get_instance_id(), Vector3.ZERO)
+		correction.y = 0.0
+		if correction.length_squared() <= 0.000001:
+			continue
+		if correction.length() > max_step:
+			correction = correction.normalized() * max_step
+		soldier.global_position = _snap_world_point(soldier.global_position + correction)
+
+
+func _get_deterministic_pair_direction(a: Node3D, b: Node3D) -> Vector3:
+	var seed := absi(hash("%s:%s" % [a.name, b.name]))
+	var angle := TAU * float(seed % 1024) / 1024.0
+	return Vector3(cos(angle), 0.0, sin(angle)).normalized()
+
+
 func _clear_formation_motion_commands() -> void:
 	if not _soldier_container:
 		return
@@ -1668,20 +2396,19 @@ func _update_food_and_modes(delta: float) -> void:
 		return
 
 	_update_food_supply(delta, active_count)
-	match get_troop_mode():
-		MODE_REST:
-			_restore_soldier_endurance(rest_endurance_recovery_per_second * delta)
-		MODE_TRAINING:
-			_drain_soldier_endurance(training_endurance_loss_per_second * delta)
-			_train_soldiers(delta)
-		MODE_DEFENSIVE:
-			_restore_soldier_endurance(defensive_endurance_recovery_per_second * delta)
-		MODE_ATTACK:
-			if _is_valid_enemy(_active_enemy):
-				_drain_soldier_endurance(attack_mode_endurance_loss_per_second * delta)
+	var fighting := _state == STATE_FIGHTING and _is_valid_enemy(_active_enemy)
+	var running := _state == STATE_MOVING and get_movement_mode() == MOVEMENT_RUNNING
+	if get_troop_mode() == MODE_TRAINING:
+		_train_soldiers(delta)
+	if fighting:
+		if get_troop_mode() == MODE_ATTACK:
+			_drain_soldier_endurance(attack_mode_endurance_loss_per_second * delta)
+	elif not running:
+		_restore_soldier_endurance(_get_noncombat_endurance_recovery_rate() * delta)
 
 	if _food_shortage_ratio > 0.0:
-		_drain_soldier_endurance(food_shortage_endurance_loss_per_second * _food_shortage_ratio * delta)
+		if fighting or running:
+			_drain_soldier_endurance(food_shortage_endurance_loss_per_second * _food_shortage_ratio * delta)
 		_change_all_morale(-food_shortage_morale_loss_per_second * _food_shortage_ratio * delta)
 
 	var average_endurance_ratio := _get_average_endurance_ratio()
@@ -1696,6 +2423,7 @@ func _update_food_and_modes(delta: float) -> void:
 func _update_combat_ai(delta: float) -> void:
 	if is_defeated():
 		_active_enemy = null
+		_manual_attack_target = null
 		_was_in_combat = false
 		_combat_action_remaining = 0.0
 		_clear_independent_combat(true)
@@ -1704,19 +2432,27 @@ func _update_combat_ai(delta: float) -> void:
 		return
 
 	if _manual_move_override_active and _state == STATE_MOVING:
+		_manual_attack_target = null
 		_active_enemy = null
 		_was_in_combat = false
 		_combat_action_remaining = 0.0
 		return
 
-	_combat_scan_remaining -= delta
-	if _combat_scan_remaining <= 0.0:
-		_combat_scan_remaining = maxf(combat_scan_interval, 0.05)
-		_refresh_active_enemy()
+	var manual_attack_active := _is_valid_enemy(_manual_attack_target)
+	if manual_attack_active:
+		_active_enemy = _manual_attack_target
+	else:
+		_manual_attack_target = null
+		_combat_scan_remaining -= delta
+		if _combat_scan_remaining <= 0.0:
+			_combat_scan_remaining = maxf(combat_scan_interval, 0.05)
+			_refresh_active_enemy()
 
 	var enemy := _active_enemy
 	if not _is_valid_enemy(enemy):
 		_active_enemy = null
+		if enemy == _manual_attack_target:
+			_manual_attack_target = null
 		if _was_in_combat:
 			_clear_independent_combat(false)
 		_was_in_combat = false
@@ -1726,6 +2462,7 @@ func _update_combat_ai(delta: float) -> void:
 
 	_apply_enemy_pressure(delta)
 	_try_desertions(delta)
+	_try_survivor_rout()
 
 	var enemy_id := enemy.get_instance_id()
 	if _last_target_instance_id != enemy_id:
@@ -1737,11 +2474,12 @@ func _update_combat_ai(delta: float) -> void:
 
 	var distance := global_position.distance_to((enemy as Node3D).global_position)
 	var engagement_range := _get_mode_engagement_range()
-	if get_troop_mode() == MODE_ATTACK and distance > maxf(combat_range_m, 0.1):
+	var should_chase := get_troop_mode() == MODE_ATTACK or (_is_valid_enemy(_manual_attack_target) and _manual_attack_target == enemy)
+	if should_chase and distance > engagement_range:
 		_chase_repath_remaining -= delta
 		if _chase_repath_remaining <= 0.0:
 			_chase_repath_remaining = maxf(chase_repath_interval, 0.05)
-			set_move_destination((enemy as Node3D).global_position, false)
+			_repath_to_attack_target(enemy)
 
 	var can_fight := distance <= engagement_range and _engagement_windup_remaining <= 0.0
 	if can_fight:
@@ -1781,12 +2519,26 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 		if not defender:
 			continue
 
-		var desired_position := _get_soldier_engagement_position(attacker_spatial, defender, index, attackers.size())
-		desired_position += _get_soft_separation_offset(attacker_spatial, attackers, defenders)
-		_move_combat_soldier_toward(attacker_spatial, desired_position, delta)
-
 		var distance_to_target := _horizontal_distance(attacker_spatial.global_position, defender.global_position)
 		var in_spear_range := distance_to_target <= maxf(combat_spear_range_m, 0.2)
+		var locked := _is_combat_soldier_locked_to(attacker_spatial, defender)
+		if not locked and in_spear_range:
+			_lock_combat_soldier(attacker_spatial, defender)
+			locked = true
+
+		if locked:
+			_update_locked_combat_shuffle(attacker_spatial, defender, delta)
+			in_spear_range = true
+		else:
+			var desired_position := _get_soldier_engagement_position(attacker_spatial, defender, index, attackers.size())
+			desired_position += _get_soft_separation_offset(attacker_spatial, attackers, defenders)
+			_move_combat_soldier_toward(attacker_spatial, desired_position, delta)
+			distance_to_target = _horizontal_distance(attacker_spatial.global_position, defender.global_position)
+			in_spear_range = distance_to_target <= maxf(combat_spear_range_m, 0.2)
+			if in_spear_range:
+				_lock_combat_soldier(attacker_spatial, defender)
+				locked = true
+
 		if attacker.has_method("set_independent_combat"):
 			attacker.call("set_independent_combat", true, defender, in_spear_range)
 		elif attacker.has_method("set_formation_attacking"):
@@ -1796,6 +2548,32 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 			_update_soldier_attack(attacker, defender, delta)
 		else:
 			_reset_soldier_attack_delay(attacker)
+
+
+func _repath_to_attack_target(enemy: Node) -> bool:
+	if not _is_valid_enemy(enemy):
+		return false
+	return set_move_destination(_get_attack_target_destination(enemy as Node3D), false)
+
+
+func _get_attack_target_destination(enemy: Node3D) -> Vector3:
+	var enemy_position := enemy.global_position
+	var away := global_position - enemy_position
+	away.y = 0.0
+	if away.length_squared() <= 0.0001:
+		away = -global_transform.basis.z
+		away.y = 0.0
+	if away.length_squared() <= 0.0001:
+		away = Vector3.FORWARD
+	away = away.normalized()
+
+	var engagement_range := _get_mode_engagement_range()
+	var standoff := clampf(
+		maxf(combat_spear_range_m * 1.2, formation_spacing * 1.2),
+		maxf(formation_spacing, 0.5),
+		maxf(engagement_range * 0.85, formation_spacing)
+	)
+	return _snap_world_point(enemy_position + away * standoff)
 
 
 func _prune_combat_assignments(attackers: Array[Node], defenders: Array[Node]) -> void:
@@ -1813,6 +2591,9 @@ func _prune_combat_assignments(attackers: Array[Node], defenders: Array[Node]) -
 		if not attacker_ids.has(key) or not defender_ids.has(target_id):
 			_combat_soldier_targets.erase(key)
 			_combat_soldier_attack_timers.erase(key)
+			_combat_soldier_lock_positions.erase(key)
+			_combat_soldier_shuffle_offsets.erase(key)
+			_combat_soldier_shuffle_timers.erase(key)
 			if not attacker_ids.has(key):
 				_combat_soldier_offsets.erase(key)
 
@@ -1977,6 +2758,80 @@ func _move_combat_soldier_toward(soldier: Node3D, desired_global_position: Vecto
 			soldier.call("set_formation_walking", distance > 0.08, maxf(combat_slot_follow_speed, 0.1))
 
 
+func _is_combat_soldier_locked_to(soldier: Node3D, defender: Node3D) -> bool:
+	var key := soldier.get_instance_id()
+	if not _combat_soldier_lock_positions.has(key):
+		return false
+	var target_variant: Variant = _combat_soldier_targets.get(key)
+	return is_instance_valid(target_variant) and target_variant == defender
+
+
+func _lock_combat_soldier(soldier: Node3D, defender: Node3D) -> void:
+	var key := soldier.get_instance_id()
+	if not _combat_soldier_lock_positions.has(key):
+		_combat_soldier_lock_positions[key] = soldier.global_position
+		_combat_soldier_shuffle_offsets[key] = Vector3.ZERO
+		_combat_soldier_shuffle_timers[key] = 0.0
+	if soldier.has_method("clear_independent_motion"):
+		soldier.call("clear_independent_motion")
+	_face_soldier_toward(soldier, defender, 1.0)
+
+
+func _update_locked_combat_shuffle(soldier: Node3D, defender: Node3D, delta: float) -> void:
+	var key := soldier.get_instance_id()
+	if not _combat_soldier_lock_positions.has(key):
+		_lock_combat_soldier(soldier, defender)
+	var lock_position: Vector3 = _combat_soldier_lock_positions.get(key, soldier.global_position)
+	var timer := float(_combat_soldier_shuffle_timers.get(key, 0.0)) - delta
+	if timer <= 0.0:
+		timer = maxf(combat_attack_shuffle_interval, 0.05) * _rng.randf_range(0.75, 1.25)
+		_combat_soldier_shuffle_offsets[key] = _make_combat_shuffle_offset()
+	_combat_soldier_shuffle_timers[key] = timer
+
+	var offset: Vector3 = _combat_soldier_shuffle_offsets.get(key, Vector3.ZERO)
+	var desired := lock_position + offset
+	desired.y = soldier.global_position.y
+	var to_desired := desired - soldier.global_position
+	to_desired.y = 0.0
+	var distance := to_desired.length()
+	if distance > 0.001:
+		var max_step := maxf(combat_attack_shuffle_speed, 0.01) * delta
+		soldier.global_position += to_desired / distance * minf(max_step, distance)
+
+	var from_lock := soldier.global_position - lock_position
+	from_lock.y = 0.0
+	var radius := maxf(combat_attack_shuffle_radius, 0.0)
+	if radius > 0.0 and from_lock.length() > radius:
+		soldier.global_position = lock_position + from_lock.normalized() * radius
+		soldier.global_position.y = desired.y
+	elif radius <= 0.0:
+		soldier.global_position = lock_position
+
+	if soldier.has_method("set_formation_walking"):
+		soldier.call("set_formation_walking", false, maxf(combat_attack_shuffle_speed, 0.01))
+	_face_soldier_toward(soldier, defender, delta)
+
+
+func _make_combat_shuffle_offset() -> Vector3:
+	var radius := maxf(combat_attack_shuffle_radius, 0.0)
+	if radius <= 0.0:
+		return Vector3.ZERO
+	var angle := _rng.randf() * TAU
+	var distance := sqrt(_rng.randf()) * radius
+	return Vector3(cos(angle) * distance, 0.0, sin(angle) * distance)
+
+
+func _face_soldier_toward(soldier: Node3D, target: Node3D, delta: float) -> void:
+	if not is_instance_valid(target):
+		return
+	var to_target := target.global_position - soldier.global_position
+	to_target.y = 0.0
+	if to_target.length_squared() <= 0.0001:
+		return
+	var target_yaw := atan2(-to_target.x, -to_target.z)
+	soldier.rotation.y = lerp_angle(soldier.rotation.y, target_yaw, clampf(delta * 10.0, 0.0, 1.0))
+
+
 func _update_soldier_attack(attacker: Node, defender: Node3D, delta: float) -> void:
 	var key := attacker.get_instance_id()
 	var remaining := float(_combat_soldier_attack_timers.get(key, _get_initial_attack_delay(attacker)))
@@ -2086,11 +2941,54 @@ func _try_desertions(delta: float) -> void:
 			_desert_soldier(soldier)
 
 
-func _desert_soldier(soldier: Node) -> void:
+func _try_survivor_rout() -> void:
+	if not survivor_rout_enabled or _survivor_rout_triggered:
+		return
+	if not _is_valid_enemy(_active_enemy):
+		return
+	var threshold := maxi(survivor_rout_active_threshold, 1)
+	if soldier_count <= threshold:
+		return
+	var active_count := get_active_soldier_count()
+	if active_count > threshold:
+		return
+	var min_remaining := clampi(survivor_rout_min_active_soldiers, 0, threshold)
+	if active_count <= min_remaining:
+		return
+
+	var max_rout_count := active_count - min_remaining
+	var desired_count := clampi(ceili(float(active_count) * clampf(survivor_rout_fraction, 0.05, 1.0)), 1, max_rout_count)
+	var routed := 0
+	for soldier: Node in _select_survivor_rout_soldiers(desired_count):
+		_desert_soldier(soldier, maxf(survivor_rout_speed_multiplier, 1.0))
+		routed += 1
+	_survivor_rout_triggered = routed > 0
+
+
+func _select_survivor_rout_soldiers(count: int) -> Array[Node]:
+	var selected: Array[Node] = []
+	if count <= 0:
+		return selected
+	var soldiers := _get_active_soldiers()
+	for include_flag_holders: bool in [false, true]:
+		for index: int in range(soldiers.size() - 1, -1, -1):
+			if selected.size() >= count:
+				return selected
+			var soldier := soldiers[index]
+			if not (soldier is Node3D) or selected.has(soldier):
+				continue
+			if _is_flag_holder(soldier as Node3D) and not include_flag_holders:
+				continue
+			selected.append(soldier)
+	return selected
+
+
+func _desert_soldier(soldier: Node, speed_multiplier: float = 1.0) -> void:
 	if not _soldier_container or not (soldier is Node3D):
 		return
 	var deserter := soldier as Node3D
 	var previous_transform := deserter.global_transform
+	_remove_unit_selection_proxy(deserter)
 	_soldier_container.remove_child(deserter)
 	var parent_node := get_parent()
 	if parent_node:
@@ -2105,7 +3003,7 @@ func _desert_soldier(soldier: Node) -> void:
 	if _is_valid_enemy(_active_enemy):
 		run_direction = global_position - (_active_enemy as Node3D).global_position
 	if deserter.has_method("mark_deserted"):
-		deserter.call("mark_deserted", run_direction)
+		deserter.call("mark_deserted", run_direction, maxf(speed_multiplier, 1.0))
 	_rebuild_ring()
 	_rebuild_selection_proxy()
 	_emit_combat_changed()
@@ -2130,6 +3028,9 @@ func _update_combat_soldier_animation() -> void:
 
 func _clear_independent_combat(regroup: bool) -> void:
 	_combat_soldier_targets.clear()
+	_combat_soldier_lock_positions.clear()
+	_combat_soldier_shuffle_offsets.clear()
+	_combat_soldier_shuffle_timers.clear()
 	_combat_soldier_attack_timers.clear()
 	if regroup:
 		_combat_soldier_offsets.clear()
@@ -2173,24 +3074,38 @@ func _train_soldiers(delta: float) -> void:
 				training_strength_gain_per_second * delta,
 				training_damage_gain_per_second * delta,
 				training_morale_gain_per_second * delta,
-				training_max_endurance_gain_per_second * delta
+				training_max_endurance_gain_per_second * _get_endurance_rate_scale() * delta
 			)
 
 
 func _restore_soldier_endurance(amount: float) -> void:
 	if amount <= 0.0:
 		return
+	var scaled_amount := amount * _get_endurance_rate_scale()
 	for soldier: Node in _get_active_soldiers():
 		if soldier.has_method("restore_endurance"):
-			soldier.call("restore_endurance", amount)
+			soldier.call("restore_endurance", scaled_amount)
 
 
 func _drain_soldier_endurance(amount: float) -> void:
 	if amount <= 0.0:
 		return
+	var scaled_amount := amount * _get_endurance_rate_scale()
 	for soldier: Node in _get_active_soldiers():
 		if soldier.has_method("reduce_endurance"):
-			soldier.call("reduce_endurance", amount)
+			soldier.call("reduce_endurance", scaled_amount)
+
+
+func _get_noncombat_endurance_recovery_rate() -> float:
+	match get_troop_mode():
+		MODE_REST:
+			return rest_endurance_recovery_per_second
+		_:
+			return defensive_endurance_recovery_per_second
+
+
+func _get_endurance_rate_scale() -> float:
+	return clampf(endurance_rate_scale, 0.01, 1.0)
 
 
 func _change_all_morale(amount: float) -> void:
@@ -2209,7 +3124,7 @@ func _get_current_movement_speed_mps() -> float:
 
 
 func _get_movement_endurance_loss_rate() -> float:
-	return run_endurance_loss_per_second if get_movement_mode() == MOVEMENT_RUNNING else walk_endurance_loss_per_second
+	return run_endurance_loss_per_second if get_movement_mode() == MOVEMENT_RUNNING else 0.0
 
 
 func _get_mode_engagement_delay() -> float:
@@ -2338,6 +3253,7 @@ func _get_combat_summary() -> Dictionary:
 		"dead_soldier_count": get_dead_soldier_count(),
 		"deserted_soldier_count": get_deserted_soldier_count(),
 		"average_strength": get_average_strength(),
+		"average_max_strength": get_average_max_strength(),
 		"average_damage": get_average_damage(),
 		"average_morale": get_average_morale(),
 		"average_endurance": get_average_endurance(),
@@ -2347,7 +3263,10 @@ func _get_combat_summary() -> Dictionary:
 		"in_combat": _state == STATE_FIGHTING,
 		"combat_scatter_active": _combat_scatter_active,
 		"combat_assigned_target_count": _combat_soldier_targets.size(),
+		"combat_locked_attacker_count": _combat_soldier_lock_positions.size(),
 		"engagement_windup_seconds": _engagement_windup_remaining,
+		"manual_attack_target": _manual_attack_target.get_path() if _is_valid_enemy(_manual_attack_target) else NodePath(""),
+		"survivor_rout_triggered": _survivor_rout_triggered,
 		"defeated": is_defeated(),
 	}
 
