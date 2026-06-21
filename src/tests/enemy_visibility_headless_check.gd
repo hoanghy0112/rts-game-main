@@ -46,6 +46,8 @@ func _check_scene(scene_path: String, failures: Array[String]) -> void:
 	_expect(spawner != null, "%s should include EnemyTroopSpawner" % scene_path, failures)
 	var player := instance.find_child("Troop_01", true, false) as Node3D
 	_expect(player != null, "%s should include Troop_01" % scene_path, failures)
+	if player and player.has_method("has_management_flag"):
+		_expect(bool(player.call("has_management_flag")), "%s player troop should show a management flag" % scene_path, failures)
 	var camera := instance.find_child("Camera3D", true, false) as Camera3D
 	_expect(camera != null, "%s should include Camera3D" % scene_path, failures)
 
@@ -62,6 +64,14 @@ func _check_scene(scene_path: String, failures: Array[String]) -> void:
 		_expect(enemy.visible, "%s/%s enemy troop root should be visible" % [scene_path, enemy.name], failures)
 		_expect(StringName(enemy.get("team_id")) == &"enemy", "%s/%s should use enemy team id" % [scene_path, enemy.name], failures)
 		_expect(not bool(enemy.get("controllable")), "%s/%s should not be controllable" % [scene_path, enemy.name], failures)
+		if enemy.has_method("has_management_flag"):
+			_expect(bool(enemy.call("has_management_flag")), "%s/%s enemy troop should show a management flag" % [scene_path, enemy.name], failures)
+		if enemy.has_method("set_move_destination") and player:
+			var accepted: bool = bool(enemy.call("set_move_destination", player.global_position))
+			if accepted and enemy.has_method("get_route_dash_count"):
+				_expect(int(enemy.call("get_route_dash_count")) == 0, "%s/%s should not show enemy route dashes" % [scene_path, enemy.name], failures)
+			if accepted and enemy.has_method("has_destination_marker"):
+				_expect(not bool(enemy.call("has_destination_marker")), "%s/%s should not show enemy destination flags" % [scene_path, enemy.name], failures)
 
 		var soldiers := enemy.find_child("Soldiers", false, false) as Node3D
 		_expect(soldiers != null, "%s/%s should have a Soldiers container" % [scene_path, enemy.name], failures)
