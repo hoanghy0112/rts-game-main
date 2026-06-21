@@ -11,7 +11,7 @@ class_name ForestDenseGrassParticles
 
 @export var plant_id: StringName = &"forest_smooth_grass_01"
 
-@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 1.125:
+@export_range(0.125, 2.0, 0.015625) var instance_spacing: float = 0.75:
 	set(value):
 		instance_spacing = clamp(round(value * 64.0) * 0.015625, 0.125, 2.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -19,7 +19,7 @@ class_name ForestDenseGrassParticles
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(8.0, 256.0, 1.0) var cell_width: float = 96.0:
+@export_range(8.0, 256.0, 1.0) var cell_width: float = 48.0:
 	set(value):
 		cell_width = clamp(value, 8.0, 256.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -37,9 +37,9 @@ class_name ForestDenseGrassParticles
 		min_draw_distance = 1.0
 		_create_grid()
 
-@export_storage var rows: int = 85
+@export_storage var rows: int = 64
 
-@export_storage var amount: int = 7225:
+@export_storage var amount: int = 4096:
 	set(value):
 		amount = maxi(value, 1)
 		particle_count = amount * grid_width * grid_width
@@ -75,12 +75,12 @@ var mesh_material_override: Material:
 			particle_node.material_override = mesh_material_override
 
 @export_group("Info")
-@export var min_draw_distance: float = 240.0:
+@export var min_draw_distance: float = 120.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
 		_mark_static_process_parameters_dirty()
 
-@export var particle_count: int = 180625:
+@export var particle_count: int = 102400:
 	set(value):
 		particle_count = amount * grid_width * grid_width
 

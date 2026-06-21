@@ -11,17 +11,17 @@ section_segments = 1
 
 [node name="ForestDenseGrassParticles" type="Node3D"]
 script = ExtResource("1_layer_script")
-instance_spacing = 1.125
-cell_width = 96.0
+instance_spacing = 0.75
+cell_width = 48.0
 grid_width = 5
-rows = 85
-amount = 7225
+rows = 64
+amount = 4096
 process_fixed_fps = 1
 reposition_threshold_meters = 8.0
 process_material = ExtResource("2_process_material")
 mesh = SubResource("RibbonTrailMesh_grass")
 shadow_mode = 0
 mesh_material_override = ExtResource("3_grass_material")
-min_draw_distance = 240.0
-particle_count = 180625
+min_draw_distance = 120.0
+particle_count = 102400
 metadata/_edit_lock_ = true
