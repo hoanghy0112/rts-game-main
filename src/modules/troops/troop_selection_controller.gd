@@ -161,6 +161,8 @@ func _try_issue_forest_logistics(world_position: Vector3) -> bool:
 
 
 func _select_troop(troop: Node) -> void:
+	if troop and not _is_commandable_troop(troop):
+		troop = null
 	if _selected_troop == troop:
 		if troop:
 			_show_drawer(troop)
@@ -331,15 +333,24 @@ func _get_troop_for_selectable(selectable: Node) -> Node:
 	var troop_path: NodePath = selectable.get_meta(SELECTABLE_NODE_PATH_META, NodePath(""))
 	if not troop_path.is_empty():
 		var troop := get_node_or_null(troop_path)
-		if troop and troop.has_method("set_move_destination"):
+		if _is_commandable_troop(troop):
 			return troop
 
 	var current := selectable
 	while current:
-		if current.has_method("set_move_destination"):
+		if _is_commandable_troop(current):
 			return current
 		current = current.get_parent()
 	return null
+
+
+func _is_commandable_troop(troop: Node) -> bool:
+	if not troop or not troop.has_method("set_move_destination"):
+		return false
+	var controllable: Variant = troop.get("controllable")
+	if controllable is bool:
+		return bool(controllable)
+	return true
 
 
 func _find_village_selectable_node(object: Object) -> Node:

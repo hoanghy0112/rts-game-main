@@ -4,10 +4,25 @@ class_name TroopManagementDrawer
 signal collect_food_requested(troop: Node, amount_kg: float)
 signal collect_wood_requested(troop: Node, soldier_count: int)
 
+const TROOP_MODE_OPTIONS := [
+	{"label": "Rest", "value": &"rest"},
+	{"label": "Training", "value": &"training"},
+	{"label": "Defensive", "value": &"defensive"},
+	{"label": "Attack", "value": &"attack"},
+]
+const MOVEMENT_MODE_OPTIONS := [
+	{"label": "Walking", "value": &"walking"},
+	{"label": "Running", "value": &"running"},
+]
+
 @onready var _root_control: Control = %Root
 @onready var _title_label: Label = %TitleLabel
 @onready var _subtitle_label: Label = %SubtitleLabel
 @onready var _state_label: Label = %StateLabel
+@onready var _troop_mode_option: OptionButton = %TroopModeOption
+@onready var _movement_mode_option: OptionButton = %MovementModeOption
+@onready var _combat_label: Label = %CombatLabel
+@onready var _stats_label: Label = %StatsLabel
 @onready var _destination_label: Label = %DestinationLabel
 @onready var _path_label: Label = %PathLabel
 @onready var _eta_label: Label = %EtaLabel
@@ -31,6 +46,11 @@ var _troop: Node
 
 func _ready() -> void:
 	_cache_control_nodes()
+	_setup_mode_options()
+	if _troop_mode_option and not _troop_mode_option.item_selected.is_connected(_on_troop_mode_selected):
+		_troop_mode_option.item_selected.connect(_on_troop_mode_selected)
+	if _movement_mode_option and not _movement_mode_option.item_selected.is_connected(_on_movement_mode_selected):
+		_movement_mode_option.item_selected.connect(_on_movement_mode_selected)
 	if _stop_button and not _stop_button.pressed.is_connected(_on_stop_pressed):
 		_stop_button.pressed.connect(_on_stop_pressed)
 	if _clear_button and not _clear_button.pressed.is_connected(_on_clear_pressed):
@@ -73,7 +93,19 @@ func refresh() -> void:
 	var troop_id := String(summary.get("troop_id", ""))
 	var soldier_count := int(summary.get("soldier_count", 0))
 	var active_soldiers := int(summary.get("active_soldier_count", soldier_count))
+	var dead_soldiers := int(summary.get("dead_soldier_count", 0))
+	var deserted_soldiers := int(summary.get("deserted_soldier_count", 0))
 	var state := String(summary.get("state", &"idle")).capitalize()
+	var troop_mode := StringName(summary.get("troop_mode", &"defensive"))
+	var movement_mode := StringName(summary.get("movement_mode", &"walking"))
+	var controllable := bool(summary.get("controllable", true))
+	var in_combat := bool(summary.get("in_combat", false))
+	var food_shortage := float(summary.get("food_shortage_ratio", 0.0))
+	var avg_strength := float(summary.get("average_strength", 0.0))
+	var avg_damage := float(summary.get("average_damage", 0.0))
+	var avg_morale := float(summary.get("average_morale", 0.0))
+	var avg_endurance := float(summary.get("average_endurance", 0.0))
+	var avg_max_endurance := float(summary.get("average_max_endurance", 0.0))
 	var has_destination := bool(summary.get("has_destination", false))
 	var destination: Vector3 = summary.get("destination", Vector3.ZERO)
 	var distance := float(summary.get("path_distance_m", 0.0))
@@ -104,6 +136,23 @@ func refresh() -> void:
 	_title_label.text = display_name
 	_subtitle_label.text = "%s  %d active / %d soldiers" % [troop_id, active_soldiers, soldier_count]
 	_state_label.text = "State  %s" % state
+	_select_option_value(_troop_mode_option, troop_mode)
+	_select_option_value(_movement_mode_option, movement_mode)
+	_troop_mode_option.disabled = not controllable
+	_movement_mode_option.disabled = not controllable
+	_combat_label.text = "Combat  %s   Dead %d   Deserted %d   Food shortage %.0f%%" % [
+		"engaged" if in_combat else "ready",
+		dead_soldiers,
+		deserted_soldiers,
+		food_shortage * 100.0,
+	]
+	_stats_label.text = "Avg  STR %.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f" % [
+		avg_strength,
+		avg_damage,
+		avg_morale,
+		avg_endurance,
+		avg_max_endurance,
+	]
 	if has_destination:
 		_destination_label.text = "Destination  %.0f, %.0f" % [destination.x, destination.z]
 		_path_label.text = "Route  %s" % _format_meters(distance)
@@ -192,6 +241,8 @@ func _bind_troop(troop: Node) -> void:
 	_connect_troop_signal(&"state_changed")
 	_connect_troop_signal(&"destination_changed")
 	_connect_troop_signal(&"logistics_changed")
+	_connect_troop_signal(&"mode_changed")
+	_connect_troop_signal(&"combat_changed")
 
 
 func _unbind_troop() -> void:
@@ -201,6 +252,8 @@ func _unbind_troop() -> void:
 	_disconnect_troop_signal(&"state_changed")
 	_disconnect_troop_signal(&"destination_changed")
 	_disconnect_troop_signal(&"logistics_changed")
+	_disconnect_troop_signal(&"mode_changed")
+	_disconnect_troop_signal(&"combat_changed")
 	_troop = null
 
 
@@ -264,6 +317,22 @@ func _on_pack_camp_pressed() -> void:
 	refresh()
 
 
+func _on_troop_mode_selected(index: int) -> void:
+	if not _troop or not _troop.has_method("set_troop_mode"):
+		return
+	var mode := _get_option_value(_troop_mode_option, index)
+	_troop.call("set_troop_mode", mode)
+	refresh()
+
+
+func _on_movement_mode_selected(index: int) -> void:
+	if not _troop or not _troop.has_method("set_movement_mode"):
+		return
+	var mode := _get_option_value(_movement_mode_option, index)
+	_troop.call("set_movement_mode", mode)
+	refresh()
+
+
 func _cache_control_nodes() -> bool:
 	if not _root_control:
 		_root_control = get_node_or_null("Root") as Control
@@ -273,6 +342,14 @@ func _cache_control_nodes() -> bool:
 		_subtitle_label = get_node_or_null("Root/Panel/Margin/Rows/SubtitleLabel") as Label
 	if not _state_label:
 		_state_label = get_node_or_null("Root/Panel/Margin/Rows/StateLabel") as Label
+	if not _troop_mode_option:
+		_troop_mode_option = get_node_or_null("Root/Panel/Margin/Rows/ModeRows/TroopModeOption") as OptionButton
+	if not _movement_mode_option:
+		_movement_mode_option = get_node_or_null("Root/Panel/Margin/Rows/ModeRows/MovementModeOption") as OptionButton
+	if not _combat_label:
+		_combat_label = get_node_or_null("Root/Panel/Margin/Rows/CombatLabel") as Label
+	if not _stats_label:
+		_stats_label = get_node_or_null("Root/Panel/Margin/Rows/StatsLabel") as Label
 	if not _destination_label:
 		_destination_label = get_node_or_null("Root/Panel/Margin/Rows/DestinationLabel") as Label
 	if not _path_label:
@@ -312,6 +389,10 @@ func _cache_control_nodes() -> bool:
 		and _title_label != null
 		and _subtitle_label != null
 		and _state_label != null
+		and _troop_mode_option != null
+		and _movement_mode_option != null
+		and _combat_label != null
+		and _stats_label != null
 		and _destination_label != null
 		and _path_label != null
 		and _eta_label != null
@@ -330,6 +411,35 @@ func _cache_control_nodes() -> bool:
 		and _establish_camp_button != null
 		and _pack_camp_button != null
 	)
+
+
+func _setup_mode_options() -> void:
+	_populate_option(_troop_mode_option, TROOP_MODE_OPTIONS)
+	_populate_option(_movement_mode_option, MOVEMENT_MODE_OPTIONS)
+
+
+func _populate_option(option: OptionButton, items: Array) -> void:
+	if not option or option.item_count > 0:
+		return
+	for item: Dictionary in items:
+		var index := option.item_count
+		option.add_item(String(item.get("label", "")))
+		option.set_item_metadata(index, item.get("value", &""))
+
+
+func _select_option_value(option: OptionButton, value: StringName) -> void:
+	if not option:
+		return
+	for index: int in range(option.item_count):
+		if StringName(option.get_item_metadata(index)) == value:
+			option.select(index)
+			return
+
+
+func _get_option_value(option: OptionButton, index: int) -> StringName:
+	if not option or index < 0 or index >= option.item_count:
+		return &""
+	return StringName(option.get_item_metadata(index))
 
 
 func _format_meters(value: float) -> String:

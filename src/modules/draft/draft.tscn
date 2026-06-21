@@ -29,6 +29,7 @@
 [ext_resource type="PackedScene" path="res://modules/troops/troop.tscn" id="28_troop"]
 [ext_resource type="PackedScene" path="res://modules/troops/troop_management_drawer.tscn" id="29_troop_drawer"]
 [ext_resource type="Script" path="res://modules/troops/troop_selection_controller.gd" id="30_troop_select"]
+[ext_resource type="Script" path="res://modules/troops/troop_enemy_spawner.gd" id="31_enemy_spawner"]
 
 [ext_resource type="Resource" path="res://modules/draft/draft_village_cells.tres" id="19_vcells"]
 
@@ -216,11 +217,28 @@ transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195
 troop_id = &"draft_guard"
 display_name = "Village Guard"
 soldier_count = 14
+team_id = &"player"
+controllable = true
 team_flag_color = Color(0.1, 0.28, 0.82, 1)
 troop_flag_color = Color(0.82, 0.12, 0.08, 1)
 movement_map = ExtResource("25_draft_move_map")
 movement_map_path = "res://modules/draft/draft_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
+time_system_path = NodePath("../GameTimeSystem")
+
+[node name="EnemyTroopSpawner" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -184, 0, -44)
+script = ExtResource("31_enemy_spawner")
+spawn_seed = 41017
+min_enemy_troops = 2
+max_enemy_troops = 3
+min_soldiers_per_troop = 7
+max_soldiers_per_troop = 13
+spawn_radius_m = 5.0
+movement_map = ExtResource("25_draft_move_map")
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
+time_system_path = NodePath("../GameTimeSystem")
 
 [node name="VillageInfoDrawer" parent="." instance=ExtResource("21_food_drawer")]
 village_region_path = NodePath("../VillageRegion")

@@ -35,7 +35,7 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -328.0
-offset_top = -584.0
+offset_top = -676.0
 offset_right = -16.0
 offset_bottom = -16.0
 grow_horizontal = 0
@@ -78,6 +78,49 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
 text = "State  Idle"
+
+[node name="ModeRows" type="GridContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+columns = 2
+
+[node name="TroopModeLabel" type="Label" parent="Root/Panel/Margin/Rows/ModeRows"]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Troop"
+
+[node name="TroopModeOption" type="OptionButton" parent="Root/Panel/Margin/Rows/ModeRows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(188, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MovementModeLabel" type="Label" parent="Root/Panel/Margin/Rows/ModeRows"]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Move"
+
+[node name="MovementModeOption" type="OptionButton" parent="Root/Panel/Margin/Rows/ModeRows"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(188, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="CombatLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Combat  ready"
+autowrap_mode = 3
+
+[node name="StatsLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Avg  STR 0   DMG 0   MOR 0   END 0/0"
+autowrap_mode = 3
 
 [node name="DestinationLabel" type="Label" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true

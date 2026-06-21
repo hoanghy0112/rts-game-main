@@ -32,6 +32,7 @@
 [ext_resource type="PackedScene" uid="uid://bjuw3vjv5imps" path="res://modules/troops/troop.tscn" id="32_troop"]
 [ext_resource type="PackedScene" uid="uid://clbbr01uvxpan" path="res://modules/troops/troop_management_drawer.tscn" id="33_troop_drawer"]
 [ext_resource type="Script" uid="uid://c7bvixca1w0d4" path="res://modules/troops/troop_selection_controller.gd" id="34_troop_select"]
+[ext_resource type="Script" uid="uid://dwcoge18x0e8h" path="res://modules/troops/troop_enemy_spawner.gd" id="35_enemy_spawner"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_ouoeg"]
 size = Vector3(200, 200, 200)
@@ -288,10 +289,25 @@ transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195
 troop_id = &"midlands_guard"
 display_name = "Midlands Guard"
 soldier_count = 20
+team_id = &"player"
+controllable = true
 troop_flag_color = Color(0.82, 0.12, 0.08, 1)
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
+time_system_path = NodePath("../GameTimeSystem")
+
+[node name="EnemyTroopSpawner" type="Node3D" parent="." unique_id=1857000131]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1558, 0, 450)
+script = ExtResource("35_enemy_spawner")
+spawn_seed = 91031
+min_soldiers_per_troop = 9
+max_soldiers_per_troop = 16
+spawn_radius_m = 3.0
+movement_map = ExtResource("16_oh3oi")
+movement_map_path = "res://maps/midlands/midlands_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
+time_system_path = NodePath("../GameTimeSystem")
 
 [node name="VillageInfoDrawer" parent="." unique_id=146091131 instance=ExtResource("28_food_drawer")]
 
