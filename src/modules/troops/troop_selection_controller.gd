@@ -8,13 +8,20 @@ const SELECTABLE_CAMP_TYPE := &"camp"
 const TEAM_PLAYER := &"player"
 const VILLAGE_SELECTABLE_TYPE_META := &"village_selectable_type"
 const VILLAGE_SELECTABLE_REGION_PATH_META := &"village_region_path"
+const FORMATION_PREVIEW_NODE_NAME := "FormationDragPreview"
 
 @export var troop_drawer_path: NodePath = NodePath("../TroopManagementDrawer")
+@export var background_jobs_debug_panel_path: NodePath = NodePath("../TroopBackgroundJobsDebugPanel")
 @export var camera_path: NodePath = NodePath("")
 @export var forest_region_paths: Array[NodePath] = []
 @export var village_region_paths: Array[NodePath] = []
 @export_range(1.0, 20000.0, 1.0, "or_greater") var max_pick_distance: float = 5000.0
 @export_range(1.0, 64.0, 0.5, "or_greater") var command_click_drag_threshold: float = 6.0
+@export_range(0.5, 128.0, 0.1, "or_greater") var formation_drag_min_width_m: float = 4.35
+@export_range(0.02, 4.0, 0.01, "or_greater") var formation_preview_width_m: float = 0.24
+@export_range(0.0, 4.0, 0.01, "or_greater") var formation_preview_height_m: float = 0.18
+@export var formation_preview_color: Color = Color(0.95, 0.78, 0.18, 0.82)
+@export_range(1.0, 96.0, 1.0, "or_greater") var unit_screen_pick_radius_px: float = 28.0
 @export_flags_3d_physics var troop_collision_mask: int = 1 << 5
 @export_flags_3d_physics var destination_collision_mask: int = 0xFFFFFFFF
 @export_flags_3d_physics var village_selection_collision_mask: int = 1
@@ -26,6 +33,10 @@ var _pending_hover_position := Vector2(INF, INF)
 var _pending_command_position := Vector2(INF, INF)
 var _pending_food_select_position := Vector2(INF, INF)
 var _right_press_position := Vector2(INF, INF)
+var _formation_drag_active := false
+var _formation_drag_start_world: Variant = null
+var _formation_drag_current_world: Variant = null
+var _formation_preview: MeshInstance3D
 var _food_collection_troop: Node
 var _food_collection_amount_kg := 0.0
 
@@ -64,6 +75,7 @@ func _physics_process(_delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	_clear_formation_drag_preview()
 	_set_hovered_troop(null)
 	_select_troop(null)
 	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
@@ -86,12 +98,33 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 
 	if event.pressed:
 		_right_press_position = event.position
+		_formation_drag_active = false
+		_formation_drag_start_world = null
+		_formation_drag_current_world = null
+		if _can_selected_troop_accept_formation_drag():
+			_formation_drag_start_world = _get_world_destination(event.position)
+			_cancel_camera_right_drag_rotation()
+			get_viewport().set_input_as_handled()
 		return
 
 	if not is_finite(_right_press_position.x):
 		return
 	var drag_distance := event.position.distance_to(_right_press_position)
 	_right_press_position = Vector2(INF, INF)
+	var should_issue_formation := (
+		_can_selected_troop_accept_formation_drag()
+		and drag_distance > command_click_drag_threshold
+	)
+	if should_issue_formation:
+		var release_world: Variant = _get_world_destination(event.position)
+		if _formation_drag_current_world != null:
+			release_world = _formation_drag_current_world
+		var accepted := _issue_formation_drag_command(_formation_drag_start_world, release_world)
+		_reset_formation_drag_state()
+		if accepted:
+			get_viewport().set_input_as_handled()
+		return
+	_reset_formation_drag_state()
 	if drag_distance > command_click_drag_threshold:
 		return
 	if not _selected_troop:
@@ -105,8 +138,225 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _is_pointer_over_ui():
 		_pending_hover_position = Vector2(INF, INF)
 		_set_hovered_troop(null)
+		_reset_formation_drag_state()
 		return
 	_pending_hover_position = event.position
+	if not is_finite(_right_press_position.x) or not _can_selected_troop_accept_formation_drag():
+		return
+	var drag_distance := event.position.distance_to(_right_press_position)
+	if drag_distance < command_click_drag_threshold:
+		return
+	_formation_drag_active = true
+	if _formation_drag_start_world == null:
+		_formation_drag_start_world = _get_world_destination(_right_press_position)
+	_formation_drag_current_world = _get_world_destination(event.position)
+	_update_formation_drag_preview()
+	_cancel_camera_right_drag_rotation()
+	get_viewport().set_input_as_handled()
+
+
+func _can_selected_troop_accept_formation_drag() -> bool:
+	return _is_commandable_troop(_selected_troop) and _selected_troop.has_method("set_formation_destination")
+
+
+func _issue_formation_drag_command(start_world: Variant, end_world: Variant) -> bool:
+	if not _can_selected_troop_accept_formation_drag():
+		return false
+	if not (start_world is Vector3) or not (end_world is Vector3):
+		return false
+	var start := start_world as Vector3
+	var end := end_world as Vector3
+	var line := end - start
+	line.y = 0.0
+	var width := line.length()
+	if width <= 0.001:
+		return false
+	var right_axis := line / width
+	var center := start.lerp(end, 0.5)
+	var accepted := bool(_selected_troop.call(
+		"set_formation_destination",
+		center,
+		right_axis,
+		maxf(width, maxf(formation_drag_min_width_m, 0.1))
+	))
+	if accepted:
+		var drawer := _get_troop_drawer()
+		if drawer and drawer.has_method("refresh"):
+			drawer.call("refresh")
+	return accepted
+
+
+func _reset_formation_drag_state() -> void:
+	_formation_drag_active = false
+	_formation_drag_start_world = null
+	_formation_drag_current_world = null
+	_clear_formation_drag_preview()
+
+
+func _update_formation_drag_preview() -> void:
+	if not _formation_drag_active:
+		_clear_formation_drag_preview()
+		return
+	if not (_formation_drag_start_world is Vector3) or not (_formation_drag_current_world is Vector3):
+		_clear_formation_drag_preview()
+		return
+	var start := _formation_drag_start_world as Vector3
+	var end := _formation_drag_current_world as Vector3
+	var line := end - start
+	line.y = 0.0
+	if line.length_squared() <= 0.0001:
+		_clear_formation_drag_preview()
+		return
+	var center := start.lerp(end, 0.5)
+	center.y = maxf(start.y, end.y) + maxf(formation_preview_height_m, 0.0)
+	var mesh := _build_formation_preview_mesh(start, end, center)
+	if not _formation_preview or not is_instance_valid(_formation_preview):
+		_formation_preview = MeshInstance3D.new()
+		_formation_preview.name = FORMATION_PREVIEW_NODE_NAME
+		_formation_preview.top_level = true
+		_formation_preview.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_formation_preview.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_formation_preview.material_override = _make_formation_preview_material()
+		add_child(_formation_preview)
+		_formation_preview.owner = null
+	_formation_preview.global_position = center
+	_formation_preview.global_rotation = Vector3.ZERO
+	_formation_preview.mesh = mesh
+	_formation_preview.visible = true
+
+
+func _clear_formation_drag_preview() -> void:
+	if _formation_preview and is_instance_valid(_formation_preview):
+		if _formation_preview.get_parent():
+			_formation_preview.get_parent().remove_child(_formation_preview)
+		_formation_preview.free()
+	_formation_preview = null
+
+
+func _build_formation_preview_mesh(start: Vector3, end: Vector3, origin: Vector3) -> ArrayMesh:
+	var right := end - start
+	right.y = 0.0
+	right = right.normalized()
+	var forward := Vector3(right.z, 0.0, -right.x).normalized()
+	var width := maxf(formation_preview_width_m, 0.02)
+	var half_width := width * 0.5
+	var arrow_length := clampf(start.distance_to(end) * 0.28, 2.0, 9.0)
+	var arrow_half_width := maxf(width * 2.6, 0.42)
+	var arrow_start := start.lerp(end, 0.5)
+	var arrow_end := arrow_start + forward * arrow_length
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+
+	_append_preview_quad(
+		vertices,
+		normals,
+		colors,
+		indices,
+		start + forward * half_width - origin,
+		end + forward * half_width - origin,
+		end - forward * half_width - origin,
+		start - forward * half_width - origin
+	)
+	_append_preview_quad(
+		vertices,
+		normals,
+		colors,
+		indices,
+		arrow_start + right * half_width - origin,
+		arrow_end + right * half_width - origin,
+		arrow_end - right * half_width - origin,
+		arrow_start - right * half_width - origin
+	)
+	_append_preview_triangle(
+		vertices,
+		normals,
+		colors,
+		indices,
+		arrow_end + forward * arrow_half_width - origin,
+		arrow_end - forward * arrow_half_width + right * arrow_half_width - origin,
+		arrow_end - forward * arrow_half_width - right * arrow_half_width - origin
+	)
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _append_preview_quad(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	colors: PackedColorArray,
+	indices: PackedInt32Array,
+	a: Vector3,
+	b: Vector3,
+	c: Vector3,
+	d: Vector3
+) -> void:
+	var start_index := vertices.size()
+	for point: Vector3 in [a, b, c, d]:
+		vertices.append(point)
+		normals.append(Vector3.UP)
+		colors.append(formation_preview_color)
+	indices.append_array(PackedInt32Array([
+		start_index,
+		start_index + 1,
+		start_index + 2,
+		start_index,
+		start_index + 2,
+		start_index + 3,
+	]))
+
+
+func _append_preview_triangle(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	colors: PackedColorArray,
+	indices: PackedInt32Array,
+	a: Vector3,
+	b: Vector3,
+	c: Vector3
+) -> void:
+	var start_index := vertices.size()
+	for point: Vector3 in [a, b, c]:
+		vertices.append(point)
+		normals.append(Vector3.UP)
+		colors.append(formation_preview_color)
+	indices.append_array(PackedInt32Array([start_index, start_index + 1, start_index + 2]))
+
+
+func _make_formation_preview_material() -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = true
+	material.render_priority = 80
+	material.vertex_color_use_as_albedo = true
+	material.albedo_color = formation_preview_color
+	material.emission_enabled = true
+	material.emission = Color(formation_preview_color.r, formation_preview_color.g, formation_preview_color.b, 1.0)
+	material.emission_energy_multiplier = 0.45
+	return material
+
+
+func _cancel_camera_right_drag_rotation() -> void:
+	var camera := _get_camera()
+	if not camera:
+		return
+	var current: Node = camera
+	while current:
+		if current.has_method("cancel_right_drag_rotation"):
+			current.call("cancel_right_drag_rotation")
+			return
+		current = current.get_parent()
 
 
 func _pick_troop(screen_position: Vector2) -> void:
@@ -190,6 +440,7 @@ func _select_troop(troop: Node) -> void:
 	if _selected_troop == troop:
 		if troop:
 			_show_drawer(troop)
+			_update_background_jobs_debug_panel(troop)
 		return
 
 	if is_instance_valid(_selected_troop):
@@ -201,10 +452,12 @@ func _select_troop(troop: Node) -> void:
 		if _selected_troop.has_method("set_selected"):
 			_selected_troop.call("set_selected", true)
 		_show_drawer(_selected_troop)
+		_update_background_jobs_debug_panel(_selected_troop)
 	else:
 		var drawer := _get_troop_drawer()
 		if drawer and drawer.has_method("hide_drawer"):
 			drawer.call("hide_drawer")
+		_update_background_jobs_debug_panel(null)
 
 
 func _update_hovered_troop_at(screen_position: Vector2) -> void:
@@ -251,7 +504,7 @@ func _get_troop_at(screen_position: Vector2) -> Node:
 	for _attempt: int in range(12):
 		var result := space_state.intersect_ray(query)
 		if result.is_empty():
-			return null
+			return _get_nearest_troop_screen_target(screen_position, camera)
 
 		var collider := result.get("collider") as Object
 		var selectable := _find_selectable_node(collider)
@@ -263,7 +516,54 @@ func _get_troop_at(screen_position: Vector2) -> Node:
 			query.exclude.append(rid)
 		else:
 			return null
-	return null
+	return _get_nearest_troop_screen_target(screen_position, camera)
+
+
+func _get_nearest_troop_screen_target(screen_position: Vector2, camera: Camera3D) -> Node:
+	if not camera or unit_screen_pick_radius_px <= 0.0:
+		return null
+	var tree := get_tree()
+	if not tree:
+		return null
+
+	var best_troop: Node
+	var best_distance_squared := unit_screen_pick_radius_px * unit_screen_pick_radius_px
+	for troop: Node in tree.get_nodes_in_group(&"troops"):
+		if not _is_selectable_troop(troop):
+			continue
+		for world_position: Vector3 in _get_troop_screen_pick_points(troop):
+			if not _is_world_position_projectable(camera, world_position):
+				continue
+			var projected := camera.unproject_position(world_position)
+			var distance_squared := projected.distance_squared_to(screen_position)
+			if distance_squared <= best_distance_squared:
+				best_troop = troop
+				best_distance_squared = distance_squared
+	return best_troop
+
+
+func _get_troop_screen_pick_points(troop: Node) -> Array[Vector3]:
+	var points: Array[Vector3] = []
+	if troop.has_method("get_management_flag_world_position"):
+		var flag_position: Variant = troop.call("get_management_flag_world_position")
+		if flag_position is Vector3:
+			points.append(flag_position as Vector3)
+
+	var soldiers := troop.get_node_or_null("Soldiers")
+	if soldiers:
+		for soldier: Node in soldiers.get_children():
+			if not (soldier is Node3D):
+				continue
+			if soldier.get_node_or_null("TroopUnitClickProxy") == null:
+				continue
+			var soldier_position := (soldier as Node3D).global_position
+			points.append(soldier_position + Vector3(0.0, 1.1, 0.0))
+	return points
+
+
+func _is_world_position_projectable(camera: Camera3D, world_position: Vector3) -> bool:
+	var forward := -camera.global_transform.basis.z.normalized()
+	return (world_position - camera.global_position).dot(forward) > camera.near
 
 
 func _get_world_destination(screen_position: Vector2) -> Variant:
@@ -521,6 +821,16 @@ func _is_pointer_over_ui() -> bool:
 
 func _get_troop_drawer() -> Node:
 	return get_node_or_null(troop_drawer_path)
+
+
+func _get_background_jobs_debug_panel() -> Node:
+	return get_node_or_null(background_jobs_debug_panel_path)
+
+
+func _update_background_jobs_debug_panel(troop: Node) -> void:
+	var panel := _get_background_jobs_debug_panel()
+	if panel and panel.has_method("set_selected_troop"):
+		panel.call("set_selected_troop", troop)
 
 
 func _bind_drawer_signals() -> void:

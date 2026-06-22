@@ -167,4 +167,4 @@ surface_material_override/0 = SubResource("StandardMaterial3D_red")
 transform = Transform3D(1, 0, 0, 0, 0.573576, 0.819152, 0, -0.819152, 0.573576, -0.08, -0.02, -0.2)
 
 [node name="LowPolySpear" parent="VisualRoot/Armature/RightArm/RightHandSocket/LongSpear" instance=ExtResource("3_spear")]
-transform = Transform3D(1.25, 0, 0, 0, 3, 0, 0, 0, 1.25, 0, 0, 0)
+transform = Transform3D(1.25, 0, 0, 0, 1, 0, 0, 0, 1.25, 0, 0.534, 0)

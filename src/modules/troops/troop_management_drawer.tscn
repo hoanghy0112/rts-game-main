@@ -35,7 +35,7 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -328.0
-offset_top = -676.0
+offset_top = -748.0
 offset_right = -16.0
 offset_bottom = -16.0
 grow_horizontal = 0
@@ -122,23 +122,17 @@ theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
 text = "Avg  STR 0   DMG 0   MOR 0   END 0/0"
 autowrap_mode = 3
 
-[node name="DestinationLabel" type="Label" parent="Root/Panel/Margin/Rows"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
-text = "Destination  None"
-
-[node name="PathLabel" type="Label" parent="Root/Panel/Margin/Rows"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
-text = "Route  -"
-
-[node name="EtaLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+[node name="MissionLabel" type="Label" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.82, 0.38, 1)
-text = "ETA  -"
+text = "Food mission: returning"
+autowrap_mode = 3
+
+[node name="ContinueMissionButton" type="Button" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Continue Mission"
 
 [node name="FailureLabel" type="Label" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true
@@ -177,6 +171,51 @@ layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.82, 0.38, 1)
 text = "Camp  Packed"
 autowrap_mode = 3
+
+[node name="CampTransferLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Nearby camp  0kg food   0kg wood"
+autowrap_mode = 3
+
+[node name="CampTransferRow" type="GridContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+columns = 2
+
+[node name="CampTransferSpinBox" type="SpinBox" parent="Root/Panel/Margin/Rows/CampTransferRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 1000.0
+step = 20.0
+value = 20.0
+
+[node name="TakeFoodButton" type="Button" parent="Root/Panel/Margin/Rows/CampTransferRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Take Food"
+
+[node name="GiveFoodButton" type="Button" parent="Root/Panel/Margin/Rows/CampTransferRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Give Food"
+
+[node name="TakeWoodButton" type="Button" parent="Root/Panel/Margin/Rows/CampTransferRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Take Wood"
+
+[node name="GiveWoodButton" type="Button" parent="Root/Panel/Margin/Rows/CampTransferRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Give Wood"
 
 [node name="FoodAmountRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
 layout_mode = 2
@@ -251,6 +290,11 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Pack Camp"
+
+[node name="PersuadeDesertersButton" type="Button" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Persuade Deserters"
 
 [node name="Buttons" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
 layout_mode = 2

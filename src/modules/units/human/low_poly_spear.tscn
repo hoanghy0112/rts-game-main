@@ -12,7 +12,7 @@ roughness = 0.45
 [sub_resource type="CylinderMesh" id="CylinderMesh_shaft"]
 top_radius = 0.018
 bottom_radius = 0.018
-height = 1.35
+height = 1.68
 radial_segments = 6
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_tip"]
@@ -27,16 +27,16 @@ size = Vector3(0.12, 0.03, 0.03)
 [node name="LowPolySpear" type="Node3D"]
 
 [node name="Shaft" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.46, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.534, 0)
 mesh = SubResource("CylinderMesh_shaft")
 surface_material_override/0 = SubResource("StandardMaterial3D_wood")
 
 [node name="Tip" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.325, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.416, 0)
 mesh = SubResource("CylinderMesh_tip")
 surface_material_override/0 = SubResource("StandardMaterial3D_metal")
 
 [node name="Binding" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.642788, -0.766044, 0, 0.766044, 0.642788, 0, 0.21, 0)
+transform = Transform3D(1, 0, 0, 0, 0.642788, -0.766044, 0, 0.766044, 0.642788, 0, 0.302, 0)
 mesh = SubResource("BoxMesh_binding")
 surface_material_override/0 = SubResource("StandardMaterial3D_wood")

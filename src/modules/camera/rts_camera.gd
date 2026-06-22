@@ -82,6 +82,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event as InputEventMouseMotion)
 
 
+func cancel_right_drag_rotation() -> void:
+	_reset_right_mouse_rotation_state()
+
+
 func _handle_keyboard_movement(delta: float) -> void:
 	var input_vector := Input.get_vector(
 		ACTION_CAMERA_LEFT,

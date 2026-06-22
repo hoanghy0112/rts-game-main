@@ -24,9 +24,8 @@ const TEAM_PLAYER := &"player"
 @onready var _movement_mode_option: OptionButton = %MovementModeOption
 @onready var _combat_label: Label = %CombatLabel
 @onready var _stats_label: Label = %StatsLabel
-@onready var _destination_label: Label = %DestinationLabel
-@onready var _path_label: Label = %PathLabel
-@onready var _eta_label: Label = %EtaLabel
+@onready var _mission_label: Label = %MissionLabel
+@onready var _continue_mission_button: Button = %ContinueMissionButton
 @onready var _failure_label: Label = %FailureLabel
 @onready var _stop_button: Button = %StopButton
 @onready var _clear_button: Button = %ClearButton
@@ -41,6 +40,13 @@ const TEAM_PLAYER := &"player"
 @onready var _craft_trolley_button: Button = %CraftTrolleyButton
 @onready var _establish_camp_button: Button = %EstablishCampButton
 @onready var _pack_camp_button: Button = %PackCampButton
+@onready var _camp_transfer_label: Label = %CampTransferLabel
+@onready var _camp_transfer_spin_box: SpinBox = %CampTransferSpinBox
+@onready var _take_food_button: Button = %TakeFoodButton
+@onready var _give_food_button: Button = %GiveFoodButton
+@onready var _take_wood_button: Button = %TakeWoodButton
+@onready var _give_wood_button: Button = %GiveWoodButton
+@onready var _persuade_deserters_button: Button = %PersuadeDesertersButton
 
 var _troop: Node
 
@@ -56,6 +62,8 @@ func _ready() -> void:
 		_stop_button.pressed.connect(_on_stop_pressed)
 	if _clear_button and not _clear_button.pressed.is_connected(_on_clear_pressed):
 		_clear_button.pressed.connect(_on_clear_pressed)
+	if _continue_mission_button and not _continue_mission_button.pressed.is_connected(_on_continue_mission_pressed):
+		_continue_mission_button.pressed.connect(_on_continue_mission_pressed)
 	if _collect_food_button and not _collect_food_button.pressed.is_connected(_on_collect_food_pressed):
 		_collect_food_button.pressed.connect(_on_collect_food_pressed)
 	if _collect_wood_button and not _collect_wood_button.pressed.is_connected(_on_collect_wood_pressed):
@@ -66,6 +74,16 @@ func _ready() -> void:
 		_establish_camp_button.pressed.connect(_on_establish_camp_pressed)
 	if _pack_camp_button and not _pack_camp_button.pressed.is_connected(_on_pack_camp_pressed):
 		_pack_camp_button.pressed.connect(_on_pack_camp_pressed)
+	if _take_food_button and not _take_food_button.pressed.is_connected(_on_take_food_pressed):
+		_take_food_button.pressed.connect(_on_take_food_pressed)
+	if _give_food_button and not _give_food_button.pressed.is_connected(_on_give_food_pressed):
+		_give_food_button.pressed.connect(_on_give_food_pressed)
+	if _take_wood_button and not _take_wood_button.pressed.is_connected(_on_take_wood_pressed):
+		_take_wood_button.pressed.connect(_on_take_wood_pressed)
+	if _give_wood_button and not _give_wood_button.pressed.is_connected(_on_give_wood_pressed):
+		_give_wood_button.pressed.connect(_on_give_wood_pressed)
+	if _persuade_deserters_button and not _persuade_deserters_button.pressed.is_connected(_on_persuade_deserters_pressed):
+		_persuade_deserters_button.pressed.connect(_on_persuade_deserters_pressed)
 	hide_drawer()
 
 
@@ -90,6 +108,7 @@ func refresh() -> void:
 		return
 
 	var summary: Dictionary = _troop.call("get_troop_summary") as Dictionary
+	var entity_type := StringName(summary.get("entity_type", &"troop"))
 	var display_name := String(summary.get("display_name", "Troop"))
 	var troop_id := String(summary.get("troop_id", ""))
 	var soldier_count := int(summary.get("soldier_count", 0))
@@ -110,10 +129,10 @@ func refresh() -> void:
 	var avg_morale := float(summary.get("average_morale", 0.0))
 	var avg_endurance := float(summary.get("average_endurance", 0.0))
 	var avg_max_endurance := float(summary.get("average_max_endurance", 0.0))
+	var avg_run_speed := float(summary.get("average_run_speed", 0.0))
+	var min_run_speed := float(summary.get("minimum_run_speed", 0.0))
+	var max_run_speed := float(summary.get("maximum_run_speed", 0.0))
 	var has_destination := bool(summary.get("has_destination", false))
-	var destination: Vector3 = summary.get("destination", Vector3.ZERO)
-	var distance := float(summary.get("path_distance_m", 0.0))
-	var eta := float(summary.get("estimated_seconds", 0.0))
 	var failure_reason := String(summary.get("failure_reason", &""))
 	var carried_food := float(summary.get("carried_food_kg", 0.0))
 	var carried_wood := float(summary.get("carried_wood_kg", 0.0))
@@ -132,6 +151,14 @@ func refresh() -> void:
 	var camp_soldiers_per_hut := int(summary.get("camp_soldiers_per_living_hut", 20))
 	var camp_pack_range := float(summary.get("camp_pack_range_m", 0.0))
 	var camp_pack_in_range := bool(summary.get("camp_pack_in_range", false))
+	var mission_active := bool(summary.get("mission_active", false))
+	var mission_label := String(summary.get("mission_label", ""))
+	var can_continue_mission := bool(summary.get("can_continue_mission", false))
+	var nearby_camp_in_range := bool(summary.get("nearby_camp_in_range", false))
+	var nearby_camp_food := float(summary.get("nearby_camp_food_kg", 0.0))
+	var nearby_camp_wood := float(summary.get("nearby_camp_wood_kg", 0.0))
+	var can_persuade_deserters := bool(summary.get("can_persuade_deserters", false))
+	var nearby_deserter_count := int(summary.get("nearby_deserter_count", 0))
 	var trolley_cost := float(summary.get("cargo_trolley_wood_cost_kg", 0.0))
 	var trolley_crafting := bool(summary.get("cargo_trolley_crafting", false))
 	var trolley_craft_remaining := float(summary.get("cargo_trolley_craft_remaining_seconds", 0.0))
@@ -139,6 +166,16 @@ func refresh() -> void:
 
 	_title_label.text = display_name
 	_state_label.text = "State  %s" % state
+	if entity_type == &"camp":
+		_apply_camp_visibility()
+		_subtitle_label.text = "%s  Team %s" % [troop_id, String(team_id).capitalize()]
+		_camp_label.text = "Camp  %s food   %s wood   range %.0fm" % [
+			_format_kg(camp_food),
+			_format_kg(camp_wood),
+			float(summary.get("camp_range_m", camp_pack_range)),
+		]
+		_assets_label.text = "Stored  %s food   %s wood" % [_format_kg(camp_food), _format_kg(camp_wood)]
+		return
 	if read_only:
 		_apply_read_only_visibility(true)
 		_subtitle_label.text = "%s  Team %s" % [troop_id, String(team_id).capitalize()]
@@ -170,22 +207,21 @@ func refresh() -> void:
 		deserted_soldiers,
 		food_shortage * 100.0,
 	]
-	_stats_label.text = "Avg  HP %.0f/%.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f" % [
+	_stats_label.text = "Avg  HP %.0f/%.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f   RUN %.1f (%.1f-%.1f)" % [
 		avg_strength,
 		avg_max_strength,
 		avg_damage,
 		avg_morale,
 		avg_endurance,
 		avg_max_endurance,
+		avg_run_speed,
+		min_run_speed,
+		max_run_speed,
 	]
-	if has_destination:
-		_destination_label.text = "Destination  %.0f, %.0f" % [destination.x, destination.z]
-		_path_label.text = "Route  %s" % _format_meters(distance)
-		_eta_label.text = "ETA  %s" % _format_seconds(eta)
-	else:
-		_destination_label.text = "Destination  None"
-		_path_label.text = "Route  -"
-		_eta_label.text = "ETA  -"
+	_mission_label.visible = mission_active
+	_mission_label.text = mission_label
+	_continue_mission_button.visible = mission_active
+	_continue_mission_button.disabled = not can_continue_mission
 
 	_failure_label.visible = not failure_reason.is_empty()
 	_failure_label.text = "Last order  %s" % failure_reason.replace("_", " ")
@@ -210,6 +246,30 @@ func refresh() -> void:
 		]
 	else:
 		_camp_label.text = "Camp  Packed"
+
+	_camp_transfer_label.visible = nearby_camp_in_range
+	_camp_transfer_label.text = "Nearby camp  %s food   %s wood" % [_format_kg(nearby_camp_food), _format_kg(nearby_camp_wood)]
+	var camp_transfer_row: Control = null
+	if _camp_transfer_spin_box:
+		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
+	_set_control_visible(camp_transfer_row, nearby_camp_in_range)
+	if nearby_camp_in_range and _camp_transfer_spin_box:
+		var max_transfer := maxf(maxf(nearby_camp_food, nearby_camp_wood), maxf(carried_food, carried_wood))
+		max_transfer = maxf(max_transfer, 20.0)
+		_camp_transfer_spin_box.max_value = max_transfer
+		_camp_transfer_spin_box.value = clampf(float(_camp_transfer_spin_box.value), 1.0, max_transfer)
+	if _take_food_button:
+		_take_food_button.disabled = not nearby_camp_in_range or free_capacity <= 0.0 or nearby_camp_food <= 0.0
+	if _give_food_button:
+		_give_food_button.disabled = not nearby_camp_in_range or carried_food <= 0.0
+	if _take_wood_button:
+		_take_wood_button.disabled = not nearby_camp_in_range or free_capacity <= 0.0 or nearby_camp_wood <= 0.0
+	if _give_wood_button:
+		_give_wood_button.disabled = not nearby_camp_in_range or carried_wood <= 0.0
+
+	_persuade_deserters_button.visible = can_persuade_deserters
+	_persuade_deserters_button.disabled = not can_persuade_deserters
+	_persuade_deserters_button.text = "Persuade Deserters (%d)" % nearby_deserter_count
 
 	var max_food_amount := maxf(free_capacity, 20.0)
 	_food_amount_spin_box.max_value = max_food_amount
@@ -327,10 +387,14 @@ func _apply_read_only_visibility(read_only: bool) -> void:
 	var camp_buttons: Control = null
 	if _establish_camp_button:
 		camp_buttons = _establish_camp_button.get_parent() as Control
+	var camp_transfer_row: Control = null
+	if _camp_transfer_spin_box:
+		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
 	_set_control_visible(mode_rows, show_controls)
-	_set_control_visible(_destination_label, show_controls)
-	_set_control_visible(_path_label, show_controls)
-	_set_control_visible(_eta_label, show_controls)
+	_set_control_visible(_combat_label, true)
+	_set_control_visible(_stats_label, true)
+	_set_control_visible(_mission_label, show_controls)
+	_set_control_visible(_continue_mission_button, show_controls)
 	_set_control_visible(_failure_label, show_controls)
 	_set_control_visible(buttons_row, show_controls)
 	_set_control_visible(_load_label, show_controls)
@@ -341,6 +405,48 @@ func _apply_read_only_visibility(read_only: bool) -> void:
 	_set_control_visible(wood_row, show_controls)
 	_set_control_visible(_craft_trolley_button, show_controls)
 	_set_control_visible(camp_buttons, show_controls)
+	_set_control_visible(_camp_transfer_label, show_controls)
+	_set_control_visible(camp_transfer_row, show_controls)
+	_set_control_visible(_persuade_deserters_button, show_controls)
+
+
+func _apply_camp_visibility() -> void:
+	var mode_rows: Control = null
+	if _troop_mode_option:
+		mode_rows = _troop_mode_option.get_parent() as Control
+	var buttons_row: Control = null
+	if _stop_button:
+		buttons_row = _stop_button.get_parent() as Control
+	var food_row: Control = null
+	if _food_amount_spin_box:
+		food_row = _food_amount_spin_box.get_parent() as Control
+	var wood_row: Control = null
+	if _wood_soldiers_spin_box:
+		wood_row = _wood_soldiers_spin_box.get_parent() as Control
+	var camp_buttons: Control = null
+	if _establish_camp_button:
+		camp_buttons = _establish_camp_button.get_parent() as Control
+	var camp_transfer_row: Control = null
+	if _camp_transfer_spin_box:
+		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
+	_set_control_visible(mode_rows, false)
+	_set_control_visible(_combat_label, false)
+	_set_control_visible(_stats_label, false)
+	_set_control_visible(_mission_label, false)
+	_set_control_visible(_continue_mission_button, false)
+	_set_control_visible(_failure_label, false)
+	_set_control_visible(buttons_row, false)
+	_set_control_visible(_load_label, false)
+	_set_control_visible(_assets_label, true)
+	_set_control_visible(_carrier_label, false)
+	_set_control_visible(_camp_label, true)
+	_set_control_visible(food_row, false)
+	_set_control_visible(wood_row, false)
+	_set_control_visible(_craft_trolley_button, false)
+	_set_control_visible(camp_buttons, false)
+	_set_control_visible(_camp_transfer_label, false)
+	_set_control_visible(camp_transfer_row, false)
+	_set_control_visible(_persuade_deserters_button, false)
 
 
 func _set_control_visible(control: Control, visible: bool) -> void:
@@ -357,6 +463,12 @@ func _on_stop_pressed() -> void:
 func _on_clear_pressed() -> void:
 	if _is_current_troop_commandable() and _troop.has_method("clear_destination"):
 		_troop.call("clear_destination")
+	refresh()
+
+
+func _on_continue_mission_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("continue_mission"):
+		_troop.call("continue_mission")
 	refresh()
 
 
@@ -389,6 +501,42 @@ func _on_establish_camp_pressed() -> void:
 func _on_pack_camp_pressed() -> void:
 	if _is_current_troop_commandable() and _troop.has_method("pack_camp"):
 		_troop.call("pack_camp")
+	refresh()
+
+
+func _get_camp_transfer_amount_kg() -> float:
+	if not _camp_transfer_spin_box:
+		return 20.0
+	return maxf(float(_camp_transfer_spin_box.value), 1.0)
+
+
+func _on_take_food_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("take_food_from_nearby_camp"):
+		_troop.call("take_food_from_nearby_camp", _get_camp_transfer_amount_kg())
+	refresh()
+
+
+func _on_give_food_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("deposit_food_to_nearby_camp"):
+		_troop.call("deposit_food_to_nearby_camp", _get_camp_transfer_amount_kg())
+	refresh()
+
+
+func _on_take_wood_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("take_wood_from_nearby_camp"):
+		_troop.call("take_wood_from_nearby_camp", _get_camp_transfer_amount_kg())
+	refresh()
+
+
+func _on_give_wood_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("deposit_wood_to_nearby_camp"):
+		_troop.call("deposit_wood_to_nearby_camp", _get_camp_transfer_amount_kg())
+	refresh()
+
+
+func _on_persuade_deserters_pressed() -> void:
+	if _is_current_troop_commandable() and _troop.has_method("persuade_nearby_deserters"):
+		_troop.call("persuade_nearby_deserters")
 	refresh()
 
 
@@ -425,12 +573,10 @@ func _cache_control_nodes() -> bool:
 		_combat_label = get_node_or_null("Root/Panel/Margin/Rows/CombatLabel") as Label
 	if not _stats_label:
 		_stats_label = get_node_or_null("Root/Panel/Margin/Rows/StatsLabel") as Label
-	if not _destination_label:
-		_destination_label = get_node_or_null("Root/Panel/Margin/Rows/DestinationLabel") as Label
-	if not _path_label:
-		_path_label = get_node_or_null("Root/Panel/Margin/Rows/PathLabel") as Label
-	if not _eta_label:
-		_eta_label = get_node_or_null("Root/Panel/Margin/Rows/EtaLabel") as Label
+	if not _mission_label:
+		_mission_label = get_node_or_null("Root/Panel/Margin/Rows/MissionLabel") as Label
+	if not _continue_mission_button:
+		_continue_mission_button = get_node_or_null("Root/Panel/Margin/Rows/ContinueMissionButton") as Button
 	if not _failure_label:
 		_failure_label = get_node_or_null("Root/Panel/Margin/Rows/FailureLabel") as Label
 	if not _stop_button:
@@ -459,6 +605,20 @@ func _cache_control_nodes() -> bool:
 		_establish_camp_button = get_node_or_null("Root/Panel/Margin/Rows/CampButtons/EstablishCampButton") as Button
 	if not _pack_camp_button:
 		_pack_camp_button = get_node_or_null("Root/Panel/Margin/Rows/CampButtons/PackCampButton") as Button
+	if not _camp_transfer_label:
+		_camp_transfer_label = get_node_or_null("Root/Panel/Margin/Rows/CampTransferLabel") as Label
+	if not _camp_transfer_spin_box:
+		_camp_transfer_spin_box = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/CampTransferSpinBox") as SpinBox
+	if not _take_food_button:
+		_take_food_button = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/TakeFoodButton") as Button
+	if not _give_food_button:
+		_give_food_button = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/GiveFoodButton") as Button
+	if not _take_wood_button:
+		_take_wood_button = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/TakeWoodButton") as Button
+	if not _give_wood_button:
+		_give_wood_button = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/GiveWoodButton") as Button
+	if not _persuade_deserters_button:
+		_persuade_deserters_button = get_node_or_null("Root/Panel/Margin/Rows/PersuadeDesertersButton") as Button
 	return (
 		_root_control != null
 		and _title_label != null
@@ -468,9 +628,8 @@ func _cache_control_nodes() -> bool:
 		and _movement_mode_option != null
 		and _combat_label != null
 		and _stats_label != null
-		and _destination_label != null
-		and _path_label != null
-		and _eta_label != null
+		and _mission_label != null
+		and _continue_mission_button != null
 		and _failure_label != null
 		and _stop_button != null
 		and _clear_button != null
@@ -485,6 +644,13 @@ func _cache_control_nodes() -> bool:
 		and _craft_trolley_button != null
 		and _establish_camp_button != null
 		and _pack_camp_button != null
+		and _camp_transfer_label != null
+		and _camp_transfer_spin_box != null
+		and _take_food_button != null
+		and _give_food_button != null
+		and _take_wood_button != null
+		and _give_wood_button != null
+		and _persuade_deserters_button != null
 	)
 
 

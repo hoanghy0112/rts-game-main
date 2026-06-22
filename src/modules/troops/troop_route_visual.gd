@@ -256,6 +256,7 @@ func _ensure_materials() -> void:
 
 func _make_flag_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.albedo_color = color
-	material.roughness = 0.82
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return material
