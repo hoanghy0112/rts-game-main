@@ -33,8 +33,8 @@ layout_mode = 0
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
-offset_top = -286.0
-offset_right = 356.0
+offset_top = -456.0
+offset_right = 494.0
 offset_bottom = -16.0
 grow_horizontal = 1
 grow_vertical = 0
@@ -66,6 +66,13 @@ layout_mode = 2
 mouse_filter = 2
 color = Color(0.77, 0.84, 0.82, 0.22)
 
+[node name="FrameLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.86, 1)
+text = "FPS 0"
+autowrap_mode = 3
+
 [node name="AggregateLabel" type="Label" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -79,6 +86,11 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.66, 0.78, 0.86, 1)
 text = "Selected\nNone"
 autowrap_mode = 3
+
+[node name="SoldierPerfCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Soldier profiling"
 
 [node name="SelectedOnlyCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true

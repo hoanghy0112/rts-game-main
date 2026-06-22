@@ -112,9 +112,7 @@ func refresh() -> void:
 	var display_name := String(summary.get("display_name", "Troop"))
 	var troop_id := String(summary.get("troop_id", ""))
 	var soldier_count := int(summary.get("soldier_count", 0))
-	var active_soldiers := int(summary.get("active_soldier_count", soldier_count))
-	var dead_soldiers := int(summary.get("dead_soldier_count", 0))
-	var deserted_soldiers := int(summary.get("deserted_soldier_count", 0))
+	var current_soldiers := int(summary.get("active_soldier_count", soldier_count))
 	var state := String(summary.get("state", &"idle")).capitalize()
 	var team_id := StringName(summary.get("team_id", TEAM_PLAYER))
 	var troop_mode := StringName(summary.get("troop_mode", &"defensive"))
@@ -157,8 +155,6 @@ func refresh() -> void:
 	var nearby_camp_in_range := bool(summary.get("nearby_camp_in_range", false))
 	var nearby_camp_food := float(summary.get("nearby_camp_food_kg", 0.0))
 	var nearby_camp_wood := float(summary.get("nearby_camp_wood_kg", 0.0))
-	var can_persuade_deserters := bool(summary.get("can_persuade_deserters", false))
-	var nearby_deserter_count := int(summary.get("nearby_deserter_count", 0))
 	var trolley_cost := float(summary.get("cargo_trolley_wood_cost_kg", 0.0))
 	var trolley_crafting := bool(summary.get("cargo_trolley_crafting", false))
 	var trolley_craft_remaining := float(summary.get("cargo_trolley_craft_remaining_seconds", 0.0))
@@ -179,32 +175,23 @@ func refresh() -> void:
 	if read_only:
 		_apply_read_only_visibility(true)
 		_subtitle_label.text = "%s  Team %s" % [troop_id, String(team_id).capitalize()]
-		_combat_label.text = "Combat  %s   Active %d / %d   Dead %d" % [
+		_combat_label.text = "Combat  %s   Troops %d" % [
 			"engaged" if in_combat else "ready",
-			active_soldiers,
-			soldier_count,
-			dead_soldiers,
+			current_soldiers,
 		]
-		_stats_label.text = "Troops  %d active   %d total   %d dead   %d deserted" % [
-			active_soldiers,
-			soldier_count,
-			dead_soldiers,
-			deserted_soldiers,
-		]
+		_stats_label.text = "Troops  %d soldiers" % current_soldiers
 		_troop_mode_option.disabled = true
 		_movement_mode_option.disabled = true
 		return
 
 	_apply_read_only_visibility(false)
-	_subtitle_label.text = "%s  %d active / %d soldiers" % [troop_id, active_soldiers, soldier_count]
+	_subtitle_label.text = "%s  %d soldiers" % [troop_id, current_soldiers]
 	_select_option_value(_troop_mode_option, troop_mode)
 	_select_option_value(_movement_mode_option, movement_mode)
 	_troop_mode_option.disabled = not controllable
 	_movement_mode_option.disabled = not controllable
-	_combat_label.text = "Combat  %s   Dead %d   Deserted %d   Food shortage %.0f%%" % [
+	_combat_label.text = "Combat  %s   Food shortage %.0f%%" % [
 		"engaged" if in_combat else "ready",
-		dead_soldiers,
-		deserted_soldiers,
 		food_shortage * 100.0,
 	]
 	_stats_label.text = "Avg  HP %.0f/%.0f   DMG %.1f   MOR %.0f   END %.0f/%.0f   RUN %.1f (%.1f-%.1f)" % [
@@ -267,9 +254,8 @@ func refresh() -> void:
 	if _give_wood_button:
 		_give_wood_button.disabled = not nearby_camp_in_range or carried_wood <= 0.0
 
-	_persuade_deserters_button.visible = can_persuade_deserters
-	_persuade_deserters_button.disabled = not can_persuade_deserters
-	_persuade_deserters_button.text = "Persuade Deserters (%d)" % nearby_deserter_count
+	_persuade_deserters_button.visible = false
+	_persuade_deserters_button.disabled = true
 
 	var max_food_amount := maxf(free_capacity, 20.0)
 	_food_amount_spin_box.max_value = max_food_amount

@@ -2,7 +2,7 @@ extends Control
 
 const DRAFT_SCENE_PATH := "res://modules/draft/draft.tscn"
 const SLOW_LOAD_THRESHOLD_MS := 1000.0
-const TARGET_FPS := 60
+const TARGET_FPS := 100
 
 @onready var _status_label: Label = $StatusLabel
 

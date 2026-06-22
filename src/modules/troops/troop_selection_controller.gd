@@ -18,9 +18,10 @@ const FORMATION_PREVIEW_NODE_NAME := "FormationDragPreview"
 @export_range(1.0, 20000.0, 1.0, "or_greater") var max_pick_distance: float = 5000.0
 @export_range(1.0, 64.0, 0.5, "or_greater") var command_click_drag_threshold: float = 6.0
 @export_range(0.5, 128.0, 0.1, "or_greater") var formation_drag_min_width_m: float = 4.35
-@export_range(0.02, 4.0, 0.01, "or_greater") var formation_preview_width_m: float = 0.24
+@export_range(0.05, 4.0, 0.01, "or_greater") var formation_preview_circle_radius_m: float = 0.72
+@export_range(8, 64, 1, "or_greater") var formation_preview_circle_segments: int = 24
 @export_range(0.0, 4.0, 0.01, "or_greater") var formation_preview_height_m: float = 0.18
-@export var formation_preview_color: Color = Color(0.95, 0.78, 0.18, 0.82)
+@export var formation_preview_color: Color = Color(0.42, 0.88, 1.0, 0.68)
 @export_range(1.0, 96.0, 1.0, "or_greater") var unit_screen_pick_radius_px: float = 28.0
 @export_flags_3d_physics var troop_collision_mask: int = 1 << 5
 @export_flags_3d_physics var destination_collision_mask: int = 0xFFFFFFFF
@@ -238,46 +239,32 @@ func _build_formation_preview_mesh(start: Vector3, end: Vector3, origin: Vector3
 	right.y = 0.0
 	right = right.normalized()
 	var forward := Vector3(right.z, 0.0, -right.x).normalized()
-	var width := maxf(formation_preview_width_m, 0.02)
-	var half_width := width * 0.5
-	var arrow_length := clampf(start.distance_to(end) * 0.28, 2.0, 9.0)
-	var arrow_half_width := maxf(width * 2.6, 0.42)
-	var arrow_start := start.lerp(end, 0.5)
-	var arrow_end := arrow_start + forward * arrow_length
+	var soldier_count := _get_selected_troop_preview_soldier_count()
+	var spacing := _get_selected_troop_preview_spacing()
+	var columns := _get_preview_columns_for_width(start.distance_to(end), soldier_count, spacing)
+	var rows := maxi(ceili(float(soldier_count) / float(maxi(columns, 1))), 1)
+	var width := float(maxi(columns - 1, 0)) * spacing
+	var depth := float(maxi(rows - 1, 0)) * spacing
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 
-	_append_preview_quad(
-		vertices,
-		normals,
-		colors,
-		indices,
-		start + forward * half_width - origin,
-		end + forward * half_width - origin,
-		end - forward * half_width - origin,
-		start - forward * half_width - origin
-	)
-	_append_preview_quad(
-		vertices,
-		normals,
-		colors,
-		indices,
-		arrow_start + right * half_width - origin,
-		arrow_end + right * half_width - origin,
-		arrow_end - right * half_width - origin,
-		arrow_start - right * half_width - origin
-	)
-	_append_preview_triangle(
-		vertices,
-		normals,
-		colors,
-		indices,
-		arrow_end + forward * arrow_half_width - origin,
-		arrow_end - forward * arrow_half_width + right * arrow_half_width - origin,
-		arrow_end - forward * arrow_half_width - right * arrow_half_width - origin
-	)
+	for index: int in range(soldier_count):
+		var column := index % maxi(columns, 1)
+		var row := int(index / maxi(columns, 1))
+		var x := float(column) * spacing - width * 0.5
+		var z := float(row) * spacing - depth * 0.5
+		var circle_center := origin + right * x + forward * z
+		_append_preview_circle(
+			vertices,
+			normals,
+			colors,
+			indices,
+			circle_center - origin,
+			right,
+			forward
+		)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -290,46 +277,52 @@ func _build_formation_preview_mesh(start: Vector3, end: Vector3, origin: Vector3
 	return mesh
 
 
-func _append_preview_quad(
+func _append_preview_circle(
 	vertices: PackedVector3Array,
 	normals: PackedVector3Array,
 	colors: PackedColorArray,
 	indices: PackedInt32Array,
-	a: Vector3,
-	b: Vector3,
-	c: Vector3,
-	d: Vector3
+	center: Vector3,
+	right: Vector3,
+	forward: Vector3
 ) -> void:
 	var start_index := vertices.size()
-	for point: Vector3 in [a, b, c, d]:
+	var radius := maxf(formation_preview_circle_radius_m, 0.05)
+	var segments := maxi(formation_preview_circle_segments, 8)
+	vertices.append(center)
+	normals.append(Vector3.UP)
+	colors.append(formation_preview_color)
+	for segment: int in range(segments):
+		var angle := TAU * float(segment) / float(segments)
+		var point := center + right * cos(angle) * radius + forward * sin(angle) * radius
 		vertices.append(point)
 		normals.append(Vector3.UP)
 		colors.append(formation_preview_color)
-	indices.append_array(PackedInt32Array([
-		start_index,
-		start_index + 1,
-		start_index + 2,
-		start_index,
-		start_index + 2,
-		start_index + 3,
-	]))
+	for segment: int in range(segments):
+		var next_segment := (segment + 1) % segments
+		indices.append(start_index)
+		indices.append(start_index + 1 + segment)
+		indices.append(start_index + 1 + next_segment)
 
 
-func _append_preview_triangle(
-	vertices: PackedVector3Array,
-	normals: PackedVector3Array,
-	colors: PackedColorArray,
-	indices: PackedInt32Array,
-	a: Vector3,
-	b: Vector3,
-	c: Vector3
-) -> void:
-	var start_index := vertices.size()
-	for point: Vector3 in [a, b, c]:
-		vertices.append(point)
-		normals.append(Vector3.UP)
-		colors.append(formation_preview_color)
-	indices.append_array(PackedInt32Array([start_index, start_index + 1, start_index + 2]))
+func _get_selected_troop_preview_soldier_count() -> int:
+	if _selected_troop:
+		if _selected_troop.has_method("get_active_soldier_count"):
+			return maxi(int(_selected_troop.call("get_active_soldier_count")), 1)
+		if _selected_troop.has_method("get_soldier_count"):
+			return maxi(int(_selected_troop.call("get_soldier_count")), 1)
+	return 1
+
+
+func _get_selected_troop_preview_spacing() -> float:
+	if _selected_troop and _object_has_property(_selected_troop, &"formation_spacing"):
+		return maxf(float(_selected_troop.get("formation_spacing")), 0.1)
+	return maxf(formation_drag_min_width_m, 0.1)
+
+
+func _get_preview_columns_for_width(width_m: float, soldier_count: int, spacing: float) -> int:
+	var width_columns := int(round(maxf(width_m, 0.0) / maxf(spacing, 0.1))) + 1
+	return clampi(width_columns, 1, maxi(soldier_count, 1))
 
 
 func _make_formation_preview_material() -> StandardMaterial3D:
@@ -1013,6 +1006,15 @@ func _get_node_world_position(node: Node) -> Vector3:
 	if node is Node3D:
 		return (node as Node3D).global_position
 	return Vector3.ZERO
+
+
+func _object_has_property(object: Object, property_name: StringName) -> bool:
+	if not object:
+		return false
+	for property: Dictionary in object.get_property_list():
+		if StringName(str(property.get("name", ""))) == property_name:
+			return true
+	return false
 
 
 func _clear_food_collection_targeting() -> void:

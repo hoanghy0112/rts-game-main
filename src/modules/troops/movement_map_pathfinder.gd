@@ -72,14 +72,12 @@ static func find_path(
 
 	var g_scores := PackedFloat32Array()
 	g_scores.resize(cell_count)
+	g_scores.fill(INF)
 	var came_from := PackedInt32Array()
 	came_from.resize(cell_count)
+	came_from.fill(-1)
 	var closed := PackedByteArray()
 	closed.resize(cell_count)
-	for index: int in range(cell_count):
-		g_scores[index] = INF
-		came_from[index] = -1
-		closed[index] = 0
 
 	var open_ids: Array[int] = []
 	var open_priorities: Array[float] = []

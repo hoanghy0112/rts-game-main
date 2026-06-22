@@ -84,7 +84,7 @@ func _balanced_render_defaults_are_configured() -> bool:
 	var environment_source := FileAccess.get_file_as_string("res://modules/environment/environment_rig.tscn")
 	return (
 		project_source.contains('run/main_scene="res://modules/loading/boot.tscn"')
-		and project_source.contains("run/max_fps=60")
+		and project_source.contains("run/max_fps=100")
 		and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)) == 0
 		and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/screen_space_aa", 0)) == 0
 		and bool(ProjectSettings.get_setting("rendering/anti_aliasing/quality/use_taa", false))

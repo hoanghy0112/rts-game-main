@@ -90,6 +90,9 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_troop_scene_and_exports(failures)
 	await _check_killed_soldiers_remain_as_corpses(failures)
 	await _check_troop_route_visuals(failures)
+	await _check_destination_arrival_settles_soldiers(failures)
+	await _check_manual_move_uses_flag_point_as_anchor(failures)
+	await _check_simple_move_preserves_formation_slots(failures)
 	await _check_moving_retarget_skips_startup_reform(failures)
 	await _check_moving_compacts_missing_formation_slots(failures)
 	await _check_formation_drag_command(failures)
@@ -100,6 +103,11 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_soldier_activity_pose_states(failures)
 	await _check_troop_combat_resolution(failures)
 	await _check_large_combat_uses_bounded_work(failures)
+	await _check_combat_socket_targets_stay_local(failures)
+	await _check_combat_surround_sockets_and_facing(failures)
+	await _check_combat_target_capacity(failures)
+	await _check_normal_combat_assigns_all_attackers_with_capacity(failures)
+	await _check_combat_state_forgets_departed_soldiers(failures)
 	await _check_flag_hover_and_defeated_indicators(failures)
 	await _check_enemy_selection_and_read_only_drawer(failures)
 	await _check_attack_target_command_and_survivor_rout(failures)
@@ -201,8 +209,23 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(_approx(float(troop.get("combat_frontline_width_per_soldier")), 4.4, 0.001), "combat frontline spacing should default to 2x the current fighting spacing", failures)
 	_expect(float(troop.get("combat_logic_interval")) > 0.0, "troops should expose a lower-frequency combat logic interval", failures)
 	_expect(float(troop.get("combat_target_reassignment_interval")) > 0.0, "troops should expose throttled combat target reassignment", failures)
+	_expect(float(troop.get("combat_rebalance_interval")) > 0.0, "troops should expose throttled combat target rebalancing", failures)
+	_expect(int(troop.get("combat_target_assignment_budget_per_tick")) > 0, "troops should expose a per-tick combat target assignment budget", failures)
+	_expect(int(troop.get("combat_separation_updates_per_tick")) > 0, "troops should expose a per-tick combat separation update budget", failures)
+	_expect(int(troop.get("combat_pair_checks_budget_per_tick")) > 0, "troops should expose a per-tick combat pair-check budget", failures)
+	_expect(float(troop.get("combat_steering_refresh_interval")) > 0.0, "troops should expose cached combat steering refresh timing", failures)
+	_expect(float(troop.get("formation_slot_refresh_interval")) > 0.0, "troops should expose moving formation target refresh timing", failures)
+	_expect(float(troop.get("formation_slot_target_epsilon_m")) > 0.0, "troops should expose moving formation target epsilon", failures)
+	_expect(float(troop.get("formation_turn_target_refresh_degrees")) >= 0.0, "troops should expose moving formation turn refresh threshold", failures)
+	_expect(int(troop.get("formation_separation_updates_per_tick")) > 0, "troops should expose a moving formation separation update budget", failures)
+	_expect(int(troop.get("formation_pair_checks_budget_per_tick")) > 0, "troops should expose a moving formation pair-check budget", failures)
 	_expect(int(troop.get("combat_max_separation_neighbors")) >= 8, "combat separation should cap nearby neighbor checks", failures)
 	_expect(int(troop.get("combat_target_search_candidates")) >= 12, "combat target search should cap candidate scans", failures)
+	_expect(int(troop.get("combat_assignment_candidates")) >= 12, "combat assignment should cap nearby target candidates", failures)
+	_expect(int(troop.get("combat_max_attackers_per_target")) == 4, "combat should default to four attackers per defender", failures)
+	_expect(float(troop.get("combat_socket_radius")) > 0.0, "combat should expose defender attack socket radius", failures)
+	_expect(float(troop.get("combat_socket_arrival_radius")) > 0.0, "combat should expose socket arrival tolerance", failures)
+	_expect(bool(troop.get("soldier_render_batching_enabled")), "soldier render batching should be enabled by default", failures)
 	_expect(float(troop.get("unit_selection_proxy_refresh_interval")) > 0.0, "unit selection proxies should expose a throttled refresh interval", failures)
 	_expect(float(troop.get("unit_selection_proxy_radius")) >= 0.8, "soldier selection proxies should use a wider click target", failures)
 	_expect(float(troop.get("unit_selection_proxy_height")) >= 2.5, "soldier selection proxies should use a taller click target", failures)
@@ -232,9 +255,10 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 		_expect(first_soldier.has_method("get_right_hand_socket"), "troop soldier should inherit the human unit API", failures)
 		_expect(first_soldier.has_method("set_formation_walking"), "troop soldier should expose formation walking animation control", failures)
 		_expect((first_soldier as Node3D).top_level, "formation soldiers should own world movement instead of inheriting troop movement", failures)
-		_expect(first_soldier.has_method("follow_formation_path"), "troop soldier should receive formation path commands", failures)
+		_expect(first_soldier.has_method("follow_formation_path"), "troop soldier should retain the fallback formation path API", failures)
 		_expect(first_soldier.has_method("set_independent_move_target"), "troop soldier should receive independent world move targets", failures)
 		_expect(first_soldier.has_method("set_independent_combat"), "troop soldier should expose independent combat control", failures)
+		_expect(first_soldier.has_method("set_combat_focus_target"), "troop soldier should expose combat focus facing while walking to sockets", failures)
 		_expect(first_soldier.has_method("trigger_spear_thrust"), "troop soldier should expose procedural spear thrust animation", failures)
 		_expect(first_soldier.has_method("set_activity_mode"), "troop soldier should expose procedural activity mode control", failures)
 		_expect(first_soldier.has_method("get_activity_variant"), "troop soldier should expose its current activity variant", failures)
@@ -247,6 +271,22 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 			_expect(absf(_get_spear_shaft_center_grip_offset_m(carried_spear)) <= 0.03, "troop soldier should hold the spear near the shaft midpoint", failures)
 		var soldier_summary: Dictionary = first_soldier.call("get_combat_summary") as Dictionary
 		_expect(float(soldier_summary.get("run_speed", 0.0)) > 0.0, "soldier summaries should expose running speed", failures)
+		var first_mesh := _find_first_mesh_instance(first_soldier)
+		var render_summary: Dictionary = troop.call("get_troop_summary") as Dictionary
+		var batch_renderer := troop.get_node_or_null("TroopSoldierBatchRenderer")
+		_expect(batch_renderer != null, "troops should create a soldier batch renderer", failures)
+		if batch_renderer:
+			_expect(not bool(batch_renderer.get("multimesh_buffer_sync_enabled")), "soldier batch renderer should avoid the packed buffer transform path by default", failures)
+		_expect(int(render_summary.get("soldier_render_batch_count", 0)) > 0, "soldier batch renderer should create mesh-part batches", failures)
+		_expect(int(render_summary.get("soldier_render_batched_instance_count", 0)) >= int(render_summary.get("soldier_render_batch_count", 0)), "soldier batch renderer should publish visible batched instances", failures)
+		_expect(int(render_summary.get("soldier_render_hidden_source_mesh_count", 0)) > 0, "soldier batch renderer should hide source mesh instances while batching", failures)
+		if first_mesh:
+			_expect(not first_mesh.visible, "source soldier meshes should be hidden while render batching is enabled", failures)
+			troop.set("soldier_render_batching_enabled", false)
+			await process_frame
+			_expect(first_mesh.visible, "source soldier meshes should be restored when render batching is disabled", failures)
+			troop.set("soldier_render_batching_enabled", true)
+			await process_frame
 		unit_proxy = first_soldier.get_node_or_null("TroopUnitClickProxy") as StaticBody3D
 		_expect(unit_proxy != null, "troop soldiers should expose unit click proxies for troop selection", failures)
 		if unit_proxy:
@@ -311,38 +351,17 @@ func _check_killed_soldiers_remain_as_corpses(failures: Array[String]) -> void:
 	await process_frame
 
 	var soldier := troop.get_node_or_null("Soldiers/Soldier_000")
+	var corpses_before := _get_global_corpse_count()
 	_expect(soldier != null, "soldier corpse check should find a soldier", failures)
 	if soldier and soldier.has_method("apply_strength_damage"):
 		soldier.call("apply_strength_damage", 999.0, &"test")
 		await process_frame
-		_expect(is_instance_valid(soldier), "killed soldiers should remain instance-valid as corpses", failures)
-		_expect((soldier as Node3D).visible, "killed soldiers should remain visible as corpses", failures)
-		var visual_root := soldier.get_node_or_null("VisualRoot") as Node3D
-		if visual_root:
-			_expect(
-				absf(absf(visual_root.rotation.z) - PI * 0.5) < 0.08,
-				"killed soldier corpses should lie on the ground instead of standing",
-				failures
-			)
-		if soldier is CollisionObject3D:
-			var collision := soldier as CollisionObject3D
-			_expect(collision.collision_layer == 0, "corpse soldiers should not keep a collision layer", failures)
-			_expect(collision.collision_mask == 0, "corpse soldiers should not keep a collision mask", failures)
-			_expect(not collision.input_ray_pickable, "corpse soldiers should not remain ray-pickable", failures)
 		var summary: Dictionary = troop.call("get_troop_summary") as Dictionary
-		_expect(int(summary.get("active_soldier_count", 0)) == 2, "killed corpse soldiers should leave active troop count", failures)
-		_expect(int(summary.get("dead_soldier_count", 0)) == 1, "killed corpse soldiers should be counted as dead", failures)
-		if soldier.has_method("has_visible_held_spear"):
-			_expect(not bool(soldier.call("has_visible_held_spear")), "corpse soldiers should hide the held spear", failures)
-		if soldier.has_method("has_dropped_corpse_spear"):
-			_expect(bool(soldier.call("has_dropped_corpse_spear")), "corpse soldiers should show a dropped spear", failures)
-		if soldier.has_method("get_dropped_corpse_spear"):
-			var dropped_spear := soldier.call("get_dropped_corpse_spear") as Node3D
-			if dropped_spear and soldier is Node3D:
-				var delta := dropped_spear.global_position - (soldier as Node3D).global_position
-				delta.y = 0.0
-				_expect(delta.length() <= 1.5, "dropped corpse spear should stay near the corpse", failures)
-				_expect(absf(dropped_spear.global_transform.basis.y.normalized().dot(Vector3.UP)) < 0.98, "dropped corpse spear should not remain upright", failures)
+		_expect(not is_instance_valid(soldier) or soldier.get_parent() == null, "killed soldiers should leave the current troop instead of staying as corpses", failures)
+		_expect(int(summary.get("active_soldier_count", 0)) == 2, "killed soldiers should reduce the current troop count", failures)
+		_expect(int(summary.get("dead_soldier_count", 0)) == 0, "troops should not keep a displayed dead-soldier bucket", failures)
+		_expect(int(summary.get("corpse_count", 0)) > corpses_before, "killed soldiers should be registered with the render-only corpse manager", failures)
+		_expect(int(summary.get("corpse_batch_count", 0)) > 0, "corpse manager should batch corpse mesh rendering", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -352,6 +371,9 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	var troop := TroopScene.instantiate()
 	troop.set("movement_map", _make_map(8, 8))
 	troop.set("position", Vector3(0.5, 0.0, 0.5))
+	troop.set("formation_separation_updates_per_tick", 2)
+	troop.set("formation_pair_checks_budget_per_tick", 1)
+	troop.set("formation_moving_separation_enabled", true)
 	root.add_child(troop)
 	await process_frame
 
@@ -364,8 +386,7 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	var moving_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
 	if moving_soldier and moving_soldier.has_method("is_formation_walking"):
 		_expect(bool(moving_soldier.call("is_formation_walking")), "troop soldier should play walking animation while troop moves", failures)
-	if moving_soldier and moving_soldier.has_method("has_independent_motion"):
-		_expect(bool(moving_soldier.call("has_independent_motion")), "troop soldier should own a formation path command while troop moves", failures)
+	_expect(_all_soldier_route_paths_empty(troop), "moving troops should not issue per-soldier route paths", failures)
 	if moving_soldier is Node3D:
 		var before_anchor_shift := (moving_soldier as Node3D).global_position
 		troop.global_position += Vector3(2.0, 0.0, 0.0)
@@ -379,15 +400,80 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	var overlap_b := troop.get_node_or_null("Soldiers/Soldier_001") as Node3D
 	if overlap_a and overlap_b:
 		overlap_b.global_position = overlap_a.global_position + Vector3(0.04, 0.0, 0.0)
+		var separation_summary_before: Dictionary = troop.call("get_troop_summary") as Dictionary
+		var separation_checks_before := int(separation_summary_before.get("moving_formation_pair_checks", 0))
 		var spacing_before := _minimum_soldier_spacing(troop)
 		troop.call("_physics_process", 0.2)
 		var spacing_after := _minimum_soldier_spacing(troop)
+		var separation_summary_after: Dictionary = troop.call("get_troop_summary") as Dictionary
+		var separation_checks_delta := int(separation_summary_after.get("moving_formation_pair_checks", 0)) - separation_checks_before
 		_expect(spacing_after > spacing_before, "moving formation separation should push overlapping soldiers apart", failures)
+		_expect(separation_checks_delta <= int(troop.get("formation_pair_checks_budget_per_tick")), "moving formation separation should respect the pair-check budget", failures)
 	troop.call("clear_destination")
 	_expect(not bool(troop.call("has_destination")), "clear destination should remove active destination", failures)
 	_expect(int(troop.call("get_route_dash_count")) == 0, "clear destination should clear route dashes", failures)
 	if moving_soldier and moving_soldier.has_method("is_formation_walking"):
 		_expect(not bool(moving_soldier.call("is_formation_walking")), "troop soldier should stop walking animation when troop movement clears", failures)
+
+	root.remove_child(troop)
+	troop.free()
+
+
+func _check_destination_arrival_settles_soldiers(failures: Array[String]) -> void:
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 8)
+	troop.set("formation_columns", 4)
+	troop.set("formation_slot_follow_speed", 12.0)
+	troop.set("movement_map", _make_map(32, 32))
+	troop.set("position", Vector3(2.5, 0.0, 2.5))
+	root.add_child(troop)
+	await process_frame
+
+	_expect(bool(troop.call("set_move_destination", Vector3(18.5, 0.0, 2.5))), "arrival settle check should accept a movement order", failures)
+	for _step: int in range(120):
+		_step_troop_with_soldiers(troop, 0.1)
+		if not bool(troop.call("has_destination")):
+			break
+
+	_expect(not bool(troop.call("has_destination")), "arrival settle check should reach the destination", failures)
+	var positions_at_arrival := _soldier_local_positions(troop)
+	_step_troop_with_soldiers(troop, 0.1)
+	var max_settle_step := _max_soldier_displacement(positions_at_arrival, _soldier_local_positions(troop))
+	_expect(max_settle_step <= 0.05, "arrival completion should not leave soldiers correcting into formation afterward", failures)
+	_expect(not _any_soldier_has_independent_motion(troop), "arrival completion should wait until soldier path commands are done", failures)
+	_expect(_count_soldiers_away_from_slots(troop, 0.55) == 0, "arrival settle should eventually place soldiers near their final formation slots", failures)
+
+	root.remove_child(troop)
+	troop.free()
+
+
+func _check_manual_move_uses_flag_point_as_anchor(failures: Array[String]) -> void:
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 8)
+	troop.set("formation_columns", 4)
+	troop.set("movement_map", _make_map(48, 48))
+	troop.set("position", Vector3(4.5, 0.0, 4.5))
+	root.add_child(troop)
+	await process_frame
+
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if soldier is Node3D:
+			(soldier as Node3D).global_position += Vector3(6.0, 0.0, 0.0)
+	troop.call("_update_management_flag_position")
+	var flag_position: Vector3 = troop.call("get_management_flag_world_position")
+	var root_before := (troop as Node3D).global_position
+	_expect(root_before.distance_to(flag_position) > 4.0, "anchor sync setup should leave the root behind the visible flag point", failures)
+
+	_expect(bool(troop.call("set_move_destination", Vector3(30.5, 0.0, 4.5))), "manual anchor sync move should accept a destination", failures)
+	var root_after := (troop as Node3D).global_position
+	var root_to_flag := root_after - flag_position
+	root_to_flag.y = 0.0
+	_expect(root_to_flag.length() <= 0.08, "manual movement should start pathing from the management flag point", failures)
+
+	var centroid_after := _average_soldier_world_position(troop)
+	var centroid_delta := centroid_after - flag_position
+	centroid_delta.y = 0.0
+	_expect(centroid_delta.length() <= 0.08, "syncing the movement anchor should not drag soldiers backward", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -409,21 +495,72 @@ func _check_moving_retarget_skips_startup_reform(failures: Array[String]) -> voi
 
 	var first_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
 	_expect(first_soldier != null, "moving-retarget check should find a soldier", failures)
-	var original_slot: Vector3 = (first_soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO) if first_soldier is Node3D else Vector3.ZERO
+	var slots_before_retarget := {}
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if soldier is Node3D:
+			slots_before_retarget[soldier.get_instance_id()] = (soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO)
 	_expect(bool(troop.call("set_move_destination", Vector3(12.5, 0.0, 44.5))), "moving retarget should accept an opposite-direction destination", failures)
 	if first_soldier:
-		var path_index := int(first_soldier.get("_independent_path_index"))
-		_expect(path_index >= 1, "moving retarget should skip the current-center formation path anchor", failures)
 		var path_points: Array = first_soldier.get("_independent_path_points")
-		_expect(path_index < path_points.size(), "moving retarget path index should stay inside the new path", failures)
-		var path_slot: Vector3 = first_soldier.get("_independent_slot_offset")
-		_expect(_approx(path_slot.x, -original_slot.x, 0.05), "opposite-direction retarget should preserve lanes by flipping the path slot x offset", failures)
-		_expect(_approx(path_slot.z, -original_slot.z, 0.05), "opposite-direction retarget should preserve lanes by flipping the path slot depth", failures)
+		_expect(path_points.is_empty(), "moving retarget should not issue a per-soldier route path", failures)
 		if first_soldier is Node3D:
-			var updated_slot: Vector3 = (first_soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO)
-			_expect(updated_slot.distance_to(path_slot) <= 0.01, "opposite-direction retarget should keep the flipped lane as the live formation slot", failures)
+			_expect((first_soldier as Node3D).has_meta(&"troop_formation_slot"), "opposite-direction retarget should keep a live formation slot", failures)
+	var changed_retarget_slots := 0
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if not (soldier is Node3D):
+			continue
+		var old_slot: Vector3 = slots_before_retarget.get(soldier.get_instance_id(), Vector3.ZERO)
+		var new_slot: Vector3 = (soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO)
+		if old_slot.distance_to(new_slot) > 0.05:
+			changed_retarget_slots += 1
+	_expect(changed_retarget_slots == 0, "ordinary moving retarget should preserve soldier formation slots", failures)
 	_step_troop_with_soldiers(troop, 0.1)
-	_expect(_any_soldier_has_independent_motion(troop), "moving retarget should keep soldiers moving toward the new path", failures)
+	_expect(_all_soldier_route_paths_empty(troop), "moving retarget should continue using the formation anchor instead of soldier route paths", failures)
+
+	root.remove_child(troop)
+	troop.free()
+
+
+func _check_simple_move_preserves_formation_slots(failures: Array[String]) -> void:
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 6)
+	troop.set("formation_columns", 3)
+	troop.set("movement_map", _make_map(48, 48))
+	troop.set("position", Vector3(12.5, 0.0, 12.5))
+	root.add_child(troop)
+	await process_frame
+
+	var before_slots := {}
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if soldier is Node3D:
+			before_slots[soldier.get_instance_id()] = (soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO)
+
+	_expect(bool(troop.call("set_move_destination", Vector3(12.5, 0.0, 36.5))), "ordinary move should accept a destination", failures)
+	if troop is Node3D:
+		var yaw_delta := wrapf((troop as Node3D).rotation.y - PI, -PI, PI)
+		_expect(absf(yaw_delta) > 2.5, "ordinary move should not snap troop yaw to the route on command", failures)
+
+	var changed_slots := 0
+	var command_slots := {}
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if not (soldier is Node3D):
+			continue
+		var soldier_spatial := soldier as Node3D
+		var assigned_slot: Vector3 = soldier_spatial.get_meta(&"troop_formation_slot", Vector3.ZERO)
+		command_slots[soldier.get_instance_id()] = assigned_slot
+		var before_slot: Vector3 = before_slots.get(soldier.get_instance_id(), assigned_slot)
+		if before_slot.distance_to(assigned_slot) > 0.05:
+			changed_slots += 1
+	_expect(changed_slots == 0, "ordinary move should preserve soldier formation slots", failures)
+	_expect(_all_soldier_route_paths_empty(troop), "ordinary move should use the formation anchor instead of per-soldier route paths", failures)
+
+	_step_troop_with_soldiers(troop, 0.25)
+	for soldier: Node in _get_active_soldier_nodes(troop):
+		if not (soldier is Node3D):
+			continue
+		var stable_slot: Vector3 = (soldier as Node3D).get_meta(&"troop_formation_slot", Vector3.ZERO)
+		var command_slot: Vector3 = command_slots.get(soldier.get_instance_id(), stable_slot)
+		_expect(stable_slot.distance_to(command_slot) <= 0.001, "ordinary move slots should stay stable while moving", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -499,7 +636,9 @@ func _check_formation_drag_command(failures: Array[String]) -> void:
 	var positions_before_settle := _soldier_local_positions(troop)
 	_step_troop_with_soldiers(troop, 0.1)
 	var settle_displacement := _max_soldier_displacement(positions_before_settle, _soldier_local_positions(troop))
-	_expect(settle_displacement <= 0.27, "post-arrival formation settling should not exceed normal walking speed", failures)
+	_expect(settle_displacement <= 0.05, "formation drag completion should not leave a post-arrival correction step", failures)
+	_expect(not _any_soldier_has_independent_motion(troop), "formation drag completion should wait for soldiers to reach their final slots", failures)
+	_expect(_count_soldiers_away_from_slots(troop, 0.55) == 0, "formation drag completion should leave soldiers in the final command-time formation", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -659,15 +798,15 @@ func _check_endurance_running_and_noncombat_recovery(failures: Array[String]) ->
 	_expect(_approx(float(troop.call("_get_current_movement_speed_mps")), 2.0, 0.001), "walking troop speed should use the slowest active soldier run speed", failures)
 	_expect(bool(troop.call("set_move_destination", Vector3(5.0, 0.0, 1.0))), "walking speed model should accept a destination", failures)
 	if speed_soldiers.size() >= 2:
-		_expect(_approx(float(speed_soldiers[0].get("_independent_speed")), 2.0, 0.001), "walking soldiers should share the slowest formation speed", failures)
-		_expect(_approx(float(speed_soldiers[1].get("_independent_speed")), 2.0, 0.001), "walking fast soldiers should stay with the formation speed", failures)
+		_expect(_approx(float(troop.call("_get_formation_path_follow_speed")), 2.0, 0.001), "walking formation anchor should use the shared formation speed", failures)
+		_expect(_all_soldier_route_paths_empty(troop), "walking soldiers should not own per-soldier command routes", failures)
 	troop.call("clear_destination")
 	troop.call("set_movement_mode", &"running")
 	_expect(_approx(float(troop.call("_get_current_movement_speed_mps")), 6.0, 0.001), "running troop anchor speed should use 3x the slowest active soldier run speed", failures)
 	_expect(bool(troop.call("set_move_destination", Vector3(7.0, 0.0, 1.0))), "running speed model should accept a destination", failures)
 	if speed_soldiers.size() >= 2:
-		_expect(_approx(float(speed_soldiers[0].get("_independent_speed")), 6.0, 0.001), "slow running soldiers should use 3x their own run speed", failures)
-		_expect(_approx(float(speed_soldiers[1].get("_independent_speed")), 12.0, 0.001), "fast running soldiers should use 3x their own run speed", failures)
+		_expect(_approx(float(troop.call("_get_formation_path_follow_speed")), 6.0, 0.001), "running formation anchor should use the shared running formation speed", failures)
+		_expect(_all_soldier_route_paths_empty(troop), "running soldiers should not own per-soldier command routes", failures)
 	troop.call("clear_destination")
 
 	for soldier: Node in _get_soldier_nodes(troop):
@@ -717,59 +856,67 @@ func _check_soldier_activity_pose_states(failures: Array[String]) -> void:
 	_step_troop_with_soldiers(troop, 0.25)
 	_expect(StringName(soldier.call("get_activity_mode")) == &"training", "training troops should put soldiers in training activity mode", failures)
 	var training_variant := StringName(soldier.call("get_activity_variant"))
-	_expect(training_variant == &"training_spear", "training activity should only use the synchronized spear drill", failures)
+	_expect(training_variant == &"none", "training mode should not choose a stationary animation variant", failures)
 	if second_soldier:
-		_expect(StringName(second_soldier.call("get_activity_variant")) == &"training_spear", "every soldier in a training troop should use the same spear drill", failures)
+		_expect(StringName(second_soldier.call("get_activity_variant")) == &"none", "every soldier in a training troop should stay on a static pose", failures)
 
 	var visual_root := soldier.get_node_or_null("VisualRoot") as Node3D
 	var hand_socket: Node3D = soldier.call("get_right_hand_socket") as Node3D
-	var second_hand_socket: Node3D = (second_soldier.call("get_right_hand_socket") as Node3D) if second_soldier else null
 	if soldier.has_method("force_activity_variant_for_test"):
 		soldier.call("force_activity_variant_for_test", &"training_spear", 2.0)
-		if second_soldier and second_soldier.has_method("force_activity_variant_for_test"):
-			second_soldier.call("force_activity_variant_for_test", &"training_spear", 2.0)
-		_step_troop_with_soldiers(troop, 1.05)
+		_expect(StringName(soldier.call("get_activity_variant")) == &"none", "forced training variants should be ignored", failures)
+		_step_troop_with_soldiers(troop, 0.6)
 		if hand_socket:
-			_expect(hand_socket.rotation.x > 0.02, "spear training thrust should drive the spear forward, not backward", failures)
-		if hand_socket and second_hand_socket:
-			_expect(hand_socket.rotation.distance_to(second_hand_socket.rotation) < 0.03, "training spear drill should stay synchronized across the troop", failures)
-		if soldier.has_method("set_independent_combat") and soldier.has_method("trigger_spear_thrust"):
-			soldier.call("set_independent_combat", true, null, true)
-			soldier.call("trigger_spear_thrust", null, 1.0)
-			soldier.call("_physics_process", 0.45)
-			if hand_socket:
-				_expect(hand_socket.rotation.x > 0.02, "combat spear thrust should drive the spear forward, not backward", failures)
-			soldier.call("set_independent_combat", false, null, false)
+			var training_hand_rotation := hand_socket.rotation
+			var training_root_y := visual_root.position.y if visual_root else 0.0
+			_step_troop_with_soldiers(troop, 0.6)
+			_expect(
+				hand_socket.rotation.distance_to(training_hand_rotation) < 0.002 and absf((visual_root.position.y if visual_root else 0.0) - training_root_y) < 0.001,
+				"forced training variants should still keep a static stationary pose",
+				failures
+			)
+
+	if soldier.has_method("set_independent_combat") and soldier.has_method("trigger_spear_thrust"):
+		soldier.call("set_independent_combat", true, null, true)
+		soldier.call("trigger_spear_thrust", null, 1.0)
+		soldier.call("_physics_process", 0.45)
+		if hand_socket:
+			_expect(hand_socket.rotation.x > 0.02, "combat spear thrust should still drive the spear forward", failures)
+		soldier.call("set_independent_combat", false, null, false)
 
 	troop.call("set_troop_mode", &"rest")
 	_step_troop_with_soldiers(troop, 0.25)
 	_expect(StringName(soldier.call("get_activity_mode")) == &"rest", "rest mode should put soldiers in rest activity mode", failures)
 	var rest_variant := StringName(soldier.call("get_activity_variant"))
-	_expect([&"rest_stand", &"rest_sit", &"rest_lay"].has(rest_variant), "rest activity should choose stand, sit, or lay variants", failures)
-	if soldier.has_method("force_activity_variant_for_test"):
+	_expect(rest_variant == &"none", "rest mode should not choose a stationary animation variant", failures)
+	if soldier.has_method("force_activity_variant_for_test") and hand_socket:
 		soldier.call("force_activity_variant_for_test", &"rest_lay", 2.0)
-		_step_troop_with_soldiers(troop, 0.35)
-		if visual_root:
-			_expect(absf(absf(visual_root.rotation.z) - PI * 0.5) < 0.35, "laying rest pose should put the soldier on the ground", failures)
-		if hand_socket:
-			_expect(hand_socket.rotation.x > 0.35, "rest pose should lower the spear instead of holding it ready", failures)
-		soldier.call("force_activity_variant_for_test", &"rest_sit", 2.0)
-		_step_troop_with_soldiers(troop, 0.35)
-		var left_leg := soldier.get_node_or_null("VisualRoot/Armature/LeftLeg") as Node3D
-		if left_leg:
-			_expect(left_leg.rotation.x > 0.25, "sitting rest pose should bend the legs", failures)
+		_expect(StringName(soldier.call("get_activity_variant")) == &"none", "forced rest variants should be ignored", failures)
+		_step_troop_with_soldiers(troop, 0.6)
+		var rest_hand_rotation := hand_socket.rotation
+		var rest_root_y := visual_root.position.y if visual_root else 0.0
+		_step_troop_with_soldiers(troop, 0.6)
+		_expect(
+			hand_socket.rotation.distance_to(rest_hand_rotation) < 0.002 and absf((visual_root.position.y if visual_root else 0.0) - rest_root_y) < 0.001,
+			"forced rest variants should still keep a static stationary pose",
+			failures
+		)
 
 	troop.call("set_troop_mode", &"defensive")
 	_step_troop_with_soldiers(troop, 0.25)
 	_expect(StringName(soldier.call("get_activity_mode")) == &"idle", "non-fighting defensive mode should use idle activity", failures)
 	var idle_variant := StringName(soldier.call("get_activity_variant"))
-	_expect([&"idle_look", &"idle_spear"].has(idle_variant), "idle activity should choose look or spear variants", failures)
+	_expect(idle_variant == &"none", "idle activity should not choose an animated variant", failures)
 	if soldier.has_method("force_activity_variant_for_test") and hand_socket:
 		soldier.call("force_activity_variant_for_test", &"idle_look", 2.0)
+		_expect(StringName(soldier.call("get_activity_variant")) == &"none", "forced idle variants should be ignored", failures)
+		_step_troop_with_soldiers(troop, 0.6)
+		var idle_hand_rotation := hand_socket.rotation
+		var idle_root_y := visual_root.position.y if visual_root else 0.0
 		_step_troop_with_soldiers(troop, 0.6)
 		_expect(
-			hand_socket.rotation.length() > 0.02,
-			"idle look animation should keep the spear and body subtly moving",
+			hand_socket.rotation.distance_to(idle_hand_rotation) < 0.002 and absf((visual_root.position.y if visual_root else 0.0) - idle_root_y) < 0.001,
+			"idle soldiers should keep a static pose without body or spear drift",
 			failures
 		)
 
@@ -790,12 +937,15 @@ func _check_soldier_activity_pose_states(failures: Array[String]) -> void:
 		var enemy_hand_socket: Node3D = enemy_soldier.call("get_right_hand_socket") as Node3D
 		if enemy_soldier.has_method("force_activity_variant_for_test"):
 			enemy_soldier.call("force_activity_variant_for_test", &"idle_spear", 2.0)
+			_expect(StringName(enemy_soldier.call("get_activity_variant")) == &"none", "forced enemy idle variants should be ignored", failures)
 		_step_troop_with_soldiers(enemy, 0.6)
 		_expect(StringName(enemy_soldier.call("get_activity_mode")) == &"idle", "non-fighting enemy attack-mode troops should use idle activity", failures)
 		if enemy_hand_socket:
+			var enemy_idle_rotation := enemy_hand_socket.rotation
+			_step_troop_with_soldiers(enemy, 0.6)
 			_expect(
-				enemy_hand_socket.rotation.length() > 0.02,
-				"enemy idle soldiers should apply the same subtle spear animation",
+				enemy_hand_socket.rotation.distance_to(enemy_idle_rotation) < 0.002,
+				"enemy idle soldiers should keep the same static pose",
 				failures
 			)
 
@@ -866,11 +1016,10 @@ func _check_troop_combat_resolution(failures: Array[String]) -> void:
 	_expect(float(enemy_summary.get("average_strength", enemy_strength_before)) < enemy_strength_before, "combat should reduce enemy soldier strength", failures)
 	_expect(float(player_summary.get("average_damage", 0.0)) > player_damage_before, "fighting should increase attacker damage", failures)
 	_expect(float(player_summary.get("average_max_endurance", 0.0)) > player_endurance_cap_before, "fighting should increase attacker max endurance", failures)
-	_expect(bool(player_summary.get("combat_scatter_active", false)), "fighting soldiers should break formation into scattered positions", failures)
+	_expect(bool(player_summary.get("combat_scatter_active", false)), "fighting should enter combat scatter control", failures)
 	_expect(int(player_summary.get("combat_assigned_target_count", 0)) > 0, "combat should assign individual soldier targets", failures)
 	_expect(int(player_summary.get("combat_locked_attacker_count", 0)) > 0, "combat soldiers should lock positions after reaching spear range", failures)
 	_expect(_count_damaged_soldiers(enemy) > 1, "messy combat should damage more than one enemy soldier", failures)
-	_expect(_count_soldiers_away_from_slots(player, 0.18) > 1, "combat should move multiple soldiers away from formation slots", failures)
 	_expect(_minimum_soldier_spacing(player) > 0.42, "combat spacing should keep allied soldiers from overlapping", failures)
 	var target_ids_before := _combat_target_ids(player)
 	var lock_positions_before := _combat_lock_positions(player)
@@ -901,14 +1050,17 @@ func _check_troop_combat_resolution(failures: Array[String]) -> void:
 	_step_troop_with_soldiers(player, 0.2)
 	player_summary = player.call("get_troop_summary") as Dictionary
 	_expect(not bool(player_summary.get("combat_scatter_active", true)), "soldiers should clear combat scatter after combat ends", failures)
-	_expect(_any_soldier_has_independent_motion(player), "ended combat should automatically issue regroup movement", failures)
+	if away_after_fight > 0:
+		_expect(not _any_soldier_has_independent_motion(player), "ended combat should hold scattered soldiers instead of automatically regrouping", failures)
 	for _index: int in range(8):
 		_step_troop_with_soldiers(player, 0.2)
-	_expect(_count_soldiers_away_from_slots(player, 0.35) < away_after_fight, "ended combat should automatically pull soldiers back toward formation slots", failures)
+	if away_after_fight > 0:
+		_expect(_count_soldiers_away_from_slots(player, 0.35) >= away_after_fight, "ended combat should not pull soldiers back toward formation slots without a new command", failures)
 	_expect(bool(player.call("set_move_destination", Vector3(16.0, 0.0, 8.0))), "manual move after combat should be accepted", failures)
 	player_summary = player.call("get_troop_summary") as Dictionary
 	_expect(not bool(player_summary.get("combat_scatter_active", true)), "manual movement should clear scattered combat positions and regroup", failures)
-	_expect(_any_soldier_has_independent_motion(player), "manual movement after combat should make soldiers walk back by independent commands", failures)
+	if _count_soldiers_away_from_slots(player, 0.35) > 0:
+		_expect(_any_soldier_has_independent_motion(player), "manual movement after combat should make displaced soldiers walk back by independent commands", failures)
 
 	if is_instance_valid(enemy) and enemy.get_parent():
 		root.remove_child(enemy)
@@ -918,10 +1070,16 @@ func _check_troop_combat_resolution(failures: Array[String]) -> void:
 
 
 func _check_large_combat_uses_bounded_work(failures: Array[String]) -> void:
+	var soldier_total := 150
+	var assignment_budget := 16
+	var steering_budget := 12
+	var pair_budget := 160
+	var target_candidates := 12
+	var separation_neighbors := 8
 	var player := TroopScene.instantiate()
 	player.set("troop_id", &"bounded_combat_player")
 	player.set("team_id", &"player")
-	player.set("soldier_count", 32)
+	player.set("soldier_count", soldier_total)
 	player.set("troop_mode", "attack")
 	player.set("combat_seed", 101)
 	player.set("base_soldier_strength", 100.0)
@@ -933,9 +1091,13 @@ func _check_large_combat_uses_bounded_work(failures: Array[String]) -> void:
 	player.set("combat_spear_range_m", 2.8)
 	player.set("combat_logic_interval", 0.08)
 	player.set("combat_target_reassignment_interval", 0.5)
-	player.set("combat_max_separation_neighbors", 8)
-	player.set("combat_target_search_candidates", 12)
-	player.set("formation_collision_neighbor_limit", 8)
+	player.set("combat_target_assignment_budget_per_tick", assignment_budget)
+	player.set("combat_separation_updates_per_tick", steering_budget)
+	player.set("combat_pair_checks_budget_per_tick", pair_budget)
+	player.set("combat_steering_refresh_interval", 0.5)
+	player.set("combat_max_separation_neighbors", separation_neighbors)
+	player.set("combat_target_search_candidates", target_candidates)
+	player.set("formation_collision_neighbor_limit", separation_neighbors)
 	player.set("attack_engagement_delay", 0.0)
 	player.position = Vector3(0.0, 0.0, 0.0)
 	root.add_child(player)
@@ -944,7 +1106,7 @@ func _check_large_combat_uses_bounded_work(failures: Array[String]) -> void:
 	enemy.set("troop_id", &"bounded_combat_enemy")
 	enemy.set("team_id", &"enemy")
 	enemy.set("controllable", false)
-	enemy.set("soldier_count", 32)
+	enemy.set("soldier_count", soldier_total)
 	enemy.set("troop_mode", "defensive")
 	enemy.set("combat_seed", 102)
 	enemy.set("base_soldier_strength", 100.0)
@@ -956,9 +1118,13 @@ func _check_large_combat_uses_bounded_work(failures: Array[String]) -> void:
 	enemy.set("combat_spear_range_m", 2.8)
 	enemy.set("combat_logic_interval", 0.08)
 	enemy.set("combat_target_reassignment_interval", 0.5)
-	enemy.set("combat_max_separation_neighbors", 8)
-	enemy.set("combat_target_search_candidates", 12)
-	enemy.set("formation_collision_neighbor_limit", 8)
+	enemy.set("combat_target_assignment_budget_per_tick", assignment_budget)
+	enemy.set("combat_separation_updates_per_tick", steering_budget)
+	enemy.set("combat_pair_checks_budget_per_tick", pair_budget)
+	enemy.set("combat_steering_refresh_interval", 0.5)
+	enemy.set("combat_max_separation_neighbors", separation_neighbors)
+	enemy.set("combat_target_search_candidates", target_candidates)
+	enemy.set("formation_collision_neighbor_limit", separation_neighbors)
 	enemy.set("defensive_engagement_delay", 0.0)
 	enemy.position = Vector3(5.0, 0.0, 0.0)
 	root.add_child(enemy)
@@ -967,21 +1133,333 @@ func _check_large_combat_uses_bounded_work(failures: Array[String]) -> void:
 	var before_summary: Dictionary = player.call("get_troop_summary") as Dictionary
 	var scans_before := int(before_summary.get("combat_perf_target_candidate_scans", 0))
 	var separation_before := int(before_summary.get("combat_perf_separation_pair_checks", 0))
+	var assigned_before := int(before_summary.get("combat_assigned_target_count", 0))
+	var steering_before := int(before_summary.get("combat_perf_steering_updates", 0))
 	player.call("_physics_process", 0.2)
 	var after_summary: Dictionary = player.call("get_troop_summary") as Dictionary
 	var target_scans := int(after_summary.get("combat_perf_target_candidate_scans", 0)) - scans_before
 	var separation_checks := int(after_summary.get("combat_perf_separation_pair_checks", 0)) - separation_before
-	var old_target_scan_floor := int(player.get("soldier_count")) * int(enemy.get("soldier_count"))
-	var bounded_target_limit := int(player.get("soldier_count")) * int(player.get("combat_target_search_candidates"))
-	var bounded_separation_limit := int(player.get("soldier_count")) * (int(player.get("combat_max_separation_neighbors")) * 2 + 4)
-	_expect(target_scans <= bounded_target_limit, "large combat target assignment should scan bounded spatial candidates", failures)
-	_expect(target_scans < old_target_scan_floor, "large combat target assignment should avoid all-vs-all defender scans", failures)
-	_expect(separation_checks <= bounded_separation_limit, "large combat separation should only check nearby capped neighbors", failures)
+	var assigned_delta := int(after_summary.get("combat_assigned_target_count", 0)) - assigned_before
+	var steering_delta := int(after_summary.get("combat_perf_steering_updates", 0)) - steering_before
+	var old_budgetless_scan_floor := soldier_total * target_candidates
+	var bounded_target_limit := assignment_budget * target_candidates
+	var bounded_separation_limit := mini(pair_budget, steering_budget * (separation_neighbors * 2 + 2))
+	_expect(assigned_delta <= assignment_budget, "large combat tick should only assign targets within the per-tick budget", failures)
+	_expect(steering_delta <= steering_budget, "large combat tick should only refresh steering within the per-tick budget", failures)
+	_expect(target_scans <= bounded_target_limit, "large combat target assignment should scan only the budgeted spatial candidates", failures)
+	_expect(target_scans < old_budgetless_scan_floor, "large combat target assignment should avoid scanning every attacker in one tick", failures)
+	_expect(separation_checks <= bounded_separation_limit, "large combat separation should only check budgeted nearby capped neighbors", failures)
 
 	root.remove_child(enemy)
 	enemy.free()
 	root.remove_child(player)
 	player.free()
+
+
+func _check_combat_socket_targets_stay_local(failures: Array[String]) -> void:
+	var soldier_total := 96
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"socket_local_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", soldier_total)
+	player.set("formation_columns", 12)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 401)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("combat_range_m", 100.0)
+	player.set("combat_spear_range_m", 2.8)
+	player.set("combat_frontline_width_per_soldier", 4.4)
+	player.set("combat_target_assignment_budget_per_tick", 128)
+	player.set("combat_separation_updates_per_tick", 128)
+	player.set("combat_pair_checks_budget_per_tick", 512)
+	player.set("combat_target_search_candidates", 24)
+	player.set("combat_assignment_candidates", 24)
+	player.set("combat_rebalance_interval", 0.05)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"socket_local_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 32)
+	enemy.set("formation_columns", 8)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 402)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(5.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(int(summary.get("combat_socket_assignment_count", 0)) > 0, "socket locality setup should assign combat sockets", failures)
+	var max_socket_distance := _max_combat_socket_distance_to_target(player)
+	_expect(
+		max_socket_distance <= float(player.get("combat_spear_range_m")) + 0.02,
+		"large combat socket targets should stay local to their defender instead of using whole-troop lateral offsets; max %.2fm" % max_socket_distance,
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_combat_surround_sockets_and_facing(failures: Array[String]) -> void:
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"surround_combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", 4)
+	player.set("formation_columns", 4)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 501)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("combat_range_m", 80.0)
+	player.set("combat_spear_range_m", 3.2)
+	player.set("combat_socket_radius", 1.7)
+	player.set("combat_socket_arrival_radius", 0.32)
+	player.set("combat_slot_follow_speed", 30.0)
+	player.set("combat_max_attackers_per_target", 4)
+	player.set("combat_target_assignment_budget_per_tick", 8)
+	player.set("combat_separation_updates_per_tick", 8)
+	player.set("combat_pair_checks_budget_per_tick", 64)
+	player.set("combat_assignment_candidates", 8)
+	player.set("combat_target_search_candidates", 8)
+	player.set("combat_rebalance_interval", 0.05)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"surround_combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 1)
+	enemy.set("formation_columns", 1)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 502)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(3.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	var attackers := _get_active_soldier_nodes(player)
+	var defenders := _get_active_soldier_nodes(enemy)
+	_expect(attackers.size() >= 4 and defenders.size() >= 1, "surround socket setup should have enough combat soldiers", failures)
+	var defender := defenders[0] as Node3D
+	var load_by_defender := {defender.get_instance_id(): 0}
+	for index: int in range(mini(4, attackers.size())):
+		var attacker := attackers[index] as Node3D
+		player.call("_assign_combat_target_to_soldier", attacker, defender, load_by_defender)
+		var socket_position: Vector3 = player.call("_get_soldier_engagement_position", attacker, defender, index, 4)
+		player.call("_move_combat_soldier_toward", attacker, defender, socket_position, 0.2)
+	_expect(_combat_sockets_include_opposed_slots(player), "four attackers on one defender should reserve opposed surround sockets", failures)
+	_expect(_combat_sockets_include_side_slots(player), "four attackers on one defender should reserve side surround sockets", failures)
+	for _index: int in range(8):
+		for soldier: Node in attackers:
+			if soldier.has_method("step_formation_logic"):
+				soldier.call("step_formation_logic", 0.12)
+	_expect(_combat_soldiers_face_assigned_targets(player, deg_to_rad(35.0)), "combat soldiers should face assigned defenders while entering and holding sockets", failures)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_combat_target_capacity(failures: Array[String]) -> void:
+	var soldier_total := 16
+	var max_attackers := 4
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"capacity_combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", soldier_total)
+	player.set("formation_columns", 8)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 201)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("combat_max_attackers_per_target", max_attackers)
+	player.set("combat_target_assignment_budget_per_tick", 64)
+	player.set("combat_assignment_candidates", 16)
+	player.set("combat_target_search_candidates", 16)
+	player.set("combat_rebalance_interval", 0.05)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"capacity_combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 5)
+	enemy.set("formation_columns", 5)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 202)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(4.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(int(summary.get("combat_assigned_target_count", 0)) == soldier_total, "capacity combat should assign every attacker when enough defender capacity exists", failures)
+	_expect(int(summary.get("combat_socket_assignment_count", 0)) == soldier_total, "capacity combat should reserve one attack socket per assigned attacker", failures)
+	_expect(
+		int(summary.get("combat_max_target_load", 0)) <= max_attackers,
+		"capacity combat should not put more than four attackers on one defender while alternatives exist",
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_normal_combat_assigns_all_attackers_with_capacity(failures: Array[String]) -> void:
+	var soldier_total := 120
+	var defender_total := 40
+	var max_attackers := 4
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"normal_full_combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", soldier_total)
+	player.set("formation_columns", 12)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 601)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("combat_active_attacker_limit", 64)
+	player.set("combat_full_participation_soldier_threshold", 220)
+	player.set("combat_max_attackers_per_target", max_attackers)
+	player.set("combat_target_assignment_budget_per_tick", 256)
+	player.set("combat_assignment_candidates", 64)
+	player.set("combat_target_search_candidates", 64)
+	player.set("combat_rebalance_interval", 0.05)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"normal_full_combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", defender_total)
+	enemy.set("formation_columns", 10)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 602)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("combat_max_attackers_per_target", max_attackers)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(4.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(
+		int(summary.get("combat_assigned_target_count", 0)) == soldier_total,
+		"normal-sized combat should assign every attacker when defender socket capacity exists instead of stopping at the stress cap",
+		failures
+	)
+	_expect(
+		int(summary.get("combat_max_target_load", 0)) <= max_attackers,
+		"normal-sized combat should still respect max attackers per defender",
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_combat_state_forgets_departed_soldiers(failures: Array[String]) -> void:
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"departed_combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", 8)
+	player.set("formation_columns", 4)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 701)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("combat_target_assignment_budget_per_tick", 32)
+	player.set("combat_assignment_candidates", 16)
+	player.set("combat_target_search_candidates", 16)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"departed_combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 8)
+	enemy.set("formation_columns", 4)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 702)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(4.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var targets: Dictionary = player.get("_combat_soldier_targets")
+	_expect(not targets.is_empty(), "departed combat setup should assign at least one soldier target", failures)
+	_expect(_dictionary_has_no_node_values(player.get("_combat_touched_soldiers")), "combat touched bookkeeping should store soldier ids instead of Node references", failures)
+	_expect(_dictionary_has_no_node_values(player.get("_combat_render_dirty_soldiers")), "combat render-dirty bookkeeping should store soldier ids instead of Node references", failures)
+	if not targets.is_empty():
+		var soldier_id := int(targets.keys()[0])
+		var soldier := _get_soldier_by_instance_id(player, soldier_id) as Node3D
+		_expect(soldier != null, "departed combat setup should find the assigned soldier node", failures)
+		if soldier:
+			player.call("_remove_departed_soldier", soldier)
+			_expect(not (player.get("_combat_soldier_targets") as Dictionary).has(soldier_id), "departed soldiers should be removed from combat target assignments", failures)
+			_expect(not (player.get("_combat_touched_soldiers") as Dictionary).has(soldier_id), "departed soldiers should be removed from combat touched bookkeeping", failures)
+			_expect(not (player.get("_combat_render_dirty_soldiers") as Dictionary).has(soldier_id), "departed soldiers should be removed from combat render-dirty bookkeeping", failures)
+			_expect(not (player.get("_combat_soldier_socket_positions") as Dictionary).has(soldier_id), "departed soldiers should be removed from combat socket positions", failures)
+			_expect(not (player.get("_combat_soldier_socket_indices") as Dictionary).has(soldier_id), "departed soldiers should be removed from combat socket indices", failures)
+			player.call("_update_combat_soldier_animation")
+	await process_frame
+
+	if is_instance_valid(enemy) and enemy.get_parent():
+		root.remove_child(enemy)
+		enemy.free()
+	if is_instance_valid(player) and player.get_parent():
+		root.remove_child(player)
+		player.free()
 
 
 func _check_flag_hover_and_defeated_indicators(failures: Array[String]) -> void:
@@ -998,11 +1476,7 @@ func _check_flag_hover_and_defeated_indicators(failures: Array[String]) -> void:
 	friendly.call("set_hovered", true)
 	_expect(bool(friendly.call("is_hovered")), "hovered friendly troops should remember hover state", failures)
 	_expect(not bool(friendly.call("has_unit_hover_borders")), "hovered friendly troops should not use unit box borders", failures)
-	_expect(bool(friendly.call("has_unit_selection_markers")), "hovered friendly troops should show unit ground markers", failures)
-	var hover_marker := friendly.find_child("TroopUnitSelectionMarker", true, false) as MeshInstance3D
-	if hover_marker:
-		var hover_material := hover_marker.material_override as StandardMaterial3D
-		_expect(hover_material != null and hover_material.albedo_color.a <= 0.55, "hovered unit ground markers should be slightly opaque", failures)
+	_expect(not bool(friendly.call("has_unit_selection_markers")), "hovered friendly troops should not show unit ground markers until selected", failures)
 	friendly.call("set_hovered", false)
 	_expect(not bool(friendly.call("has_unit_selection_markers")), "unhovered friendly troops should hide unit ground markers", failures)
 	friendly.call("set_selected", true)
@@ -1054,7 +1528,7 @@ func _check_flag_hover_and_defeated_indicators(failures: Array[String]) -> void:
 	_expect(enemy.find_child("TroopSelectionHighlight", true, false) == null, "enemy troops should not create the old selection background", failures)
 	enemy.call("set_hovered", true)
 	_expect(not bool(enemy.call("has_unit_hover_borders")), "hovered enemy troops should not use unit box borders", failures)
-	_expect(bool(enemy.call("has_unit_selection_markers")), "hovered enemy troops should show unit ground markers", failures)
+	_expect(not bool(enemy.call("has_unit_selection_markers")), "hovered enemy troops should not show unit ground markers until selected", failures)
 	enemy.call("set_hovered", false)
 	enemy.call("set_selected", true)
 	_expect(not bool(enemy.call("has_selection_highlight")), "selected enemy troops should not show the old ground highlight", failures)
@@ -1075,8 +1549,8 @@ func _check_flag_hover_and_defeated_indicators(failures: Array[String]) -> void:
 	_expect(not bool(enemy.call("has_attack_zone_indicator")), "defeated enemy troops should hide their attack zone", failures)
 	_expect(enemy.find_child("TroopUnitClickProxy", true, false) == null, "defeated enemy troops should remove unit click proxies", failures)
 	_expect(not bool(enemy.call("has_selection_highlight")), "defeated selected troops should not show the old ground highlight", failures)
-	_expect(_visible_soldier_count(enemy) == 2, "defeated enemy troops should keep visible soldier corpse nodes", failures)
-	_expect(int(enemy_summary.get("dead_soldier_count", 0)) == 2, "defeated enemy corpses should be counted as dead soldiers", failures)
+	_expect(_visible_soldier_count(enemy) == 0, "defeated enemy troops should not keep visible corpse soldiers", failures)
+	_expect(int(enemy_summary.get("dead_soldier_count", 0)) == 0, "defeated enemy troops should not expose dead soldier counts", failures)
 
 	root.remove_child(enemy)
 	enemy.free()
@@ -1116,7 +1590,8 @@ func _check_enemy_selection_and_read_only_drawer(failures: Array[String]) -> voi
 	var collect_button := drawer.find_child("CollectWoodButton", true, false) as Button
 	_expect(enemy_title != null and enemy_title.text == "Enemy Inspect", "enemy drawer should show the enemy display name", failures)
 	_expect(enemy_subtitle != null and enemy_subtitle.text.contains("Team Enemy"), "enemy drawer should show team information", failures)
-	_expect(enemy_stats != null and enemy_stats.text.contains("active") and enemy_stats.text.contains("dead"), "enemy drawer should show read-only troop counts", failures)
+	_expect(enemy_stats != null and enemy_stats.text.contains("Troops") and enemy_stats.text.contains("soldiers"), "enemy drawer should show current troop count", failures)
+	_expect(enemy_stats != null and not enemy_stats.text.contains("active") and not enemy_stats.text.contains("dead"), "enemy drawer should not show active/total/dead buckets", failures)
 	if mode_option:
 		_expect(not (mode_option.get_parent() as Control).visible, "enemy drawer should hide troop controls", failures)
 	if collect_button:
@@ -1168,7 +1643,6 @@ func _check_attack_target_command_and_survivor_rout(failures: Array[String]) -> 
 	enemy.set("combat_range_m", 8.0)
 	root.add_child(enemy)
 	await process_frame
-	var deserters_before := get_nodes_in_group(&"deserter_troops")
 
 	controller.call("_select_troop", attacker)
 	_expect(bool(controller.call("_try_issue_attack_target", enemy)), "right-click enemy command should issue a moving attack target", failures)
@@ -1195,21 +1669,8 @@ func _check_attack_target_command_and_survivor_rout(failures: Array[String]) -> 
 	summary = attacker.call("get_troop_summary") as Dictionary
 	_expect(bool(summary.get("survivor_rout_triggered", false)), "troops reduced to 4-5 active soldiers should rout some survivors", failures)
 	_expect(int(summary.get("active_soldier_count", 0)) == 3, "survivor rout should leave a small active core instead of routing the whole troop", failures)
-	_expect(int(summary.get("deserted_soldier_count", 0)) >= 2, "survivor rout should send some units away from the losing troop", failures)
-	var deserter_troop_found := false
-	var new_deserter_troops: Array[Node] = []
-	for deserter_troop: Node in get_nodes_in_group(&"deserter_troops"):
-		if deserters_before.has(deserter_troop):
-			continue
-		new_deserter_troops.append(deserter_troop)
-		if deserter_troop is Node3D:
-			var distance := (deserter_troop as Node3D).global_position.distance_to(attacker.global_position)
-			if distance >= 200.0 and distance <= 2000.0:
-				deserter_troop_found = true
-	_expect(deserter_troop_found, "survivor rout should spawn selectable deserter troops 200-2000m away", failures)
-	_expect(new_deserter_troops.size() == 1, "survivor rout should consolidate routed soldiers into one deserter troop", failures)
-	if not new_deserter_troops.is_empty() and new_deserter_troops[0] is Node3D:
-		_expect(_all_soldiers_near_troop_root(new_deserter_troops[0], 32.0), "deserter soldiers should appear around their far-away deserter troop root", failures)
+	_expect(int(summary.get("deserted_soldier_count", 0)) == 0, "survivor rout should not keep a deserter count", failures)
+	_expect(get_nodes_in_group(&"deserter_troops").is_empty(), "survivor rout should not spawn managed deserter troops", failures)
 
 	var remaining_active := _get_active_soldier_nodes(attacker)
 	var final_survivor: Node = null
@@ -1233,10 +1694,6 @@ func _check_attack_target_command_and_survivor_rout(failures: Array[String]) -> 
 	if final_survivor:
 		_expect(final_survivor.get_parent() != attacker.get_node_or_null("Soldiers"), "final flag holder should transfer out instead of staying killable in the defeated troop", failures)
 
-	for deserter: Node in get_nodes_in_group(&"deserter_troops"):
-		if is_instance_valid(deserter) and deserter.get_parent():
-			deserter.get_parent().remove_child(deserter)
-			deserter.free()
 	for node: Node in [enemy, attacker, controller]:
 		if is_instance_valid(node) and node.get_parent():
 			node.get_parent().remove_child(node)
@@ -1264,30 +1721,19 @@ func _check_troop_desertion(failures: Array[String]) -> void:
 	large.set("detection_range_m", 80.0)
 	large.position = Vector3(5.0, 0.0, 0.0)
 	root.add_child(large)
-	var deserters_before := get_nodes_in_group(&"deserter_troops")
 	await process_frame
 
 	for _index: int in range(10):
 		small.call("_physics_process", 0.5)
 	var summary: Dictionary = small.call("get_troop_summary") as Dictionary
-	_expect(int(summary.get("deserted_soldier_count", 0)) > 0, "low morale soldiers should be able to desert from the troop", failures)
-	_expect(int(summary.get("active_soldier_count", 0)) < 3, "deserted soldiers should leave the active formation", failures)
-	var new_deserter_troops: Array[Node] = []
-	for deserter_troop: Node in get_nodes_in_group(&"deserter_troops"):
-		if not deserters_before.has(deserter_troop):
-			new_deserter_troops.append(deserter_troop)
-	_expect(new_deserter_troops.size() == 1, "repeated desertions should reuse one deserter troop per source troop", failures)
-	if not new_deserter_troops.is_empty():
-		_expect(_all_soldiers_near_troop_root(new_deserter_troops[0], 32.0), "deserting soldiers should be placed at the deserter troop root immediately", failures)
+	_expect(int(summary.get("deserted_soldier_count", 0)) == 0, "low morale departures should not keep a deserter count", failures)
+	_expect(int(summary.get("active_soldier_count", 0)) < 3, "low morale departures should leave the current formation", failures)
+	_expect(get_nodes_in_group(&"deserter_troops").is_empty(), "low morale departures should not create managed deserter troops", failures)
 
 	root.remove_child(large)
 	large.free()
 	root.remove_child(small)
 	small.free()
-	for deserter: Node in new_deserter_troops:
-		if is_instance_valid(deserter) and deserter.get_parent():
-			deserter.get_parent().remove_child(deserter)
-			deserter.free()
 
 
 func _check_enemy_spawner(failures: Array[String]) -> void:
@@ -1612,8 +2058,10 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	_expect(panel is CanvasLayer, "background jobs debug panel should instantiate a CanvasLayer", failures)
 	_expect(panel.has_method("set_selected_troop"), "background jobs debug panel should accept selected troops", failures)
 	_expect(panel.has_method("refresh"), "background jobs debug panel should expose refresh", failures)
+	_expect(panel.find_child("FrameLabel", true, false) != null, "background jobs debug panel should show frame metrics", failures)
 	_expect(panel.find_child("AggregateLabel", true, false) != null, "background jobs debug panel should show aggregate metrics", failures)
 	_expect(panel.find_child("SelectedLabel", true, false) != null, "background jobs debug panel should show selected troop metrics", failures)
+	_expect(panel.find_child("SoldierPerfCheckBox", true, false) != null, "background jobs debug panel should expose soldier profiling toggle", failures)
 
 	var controller := TroopSelectionControllerScript.new()
 	controller.background_jobs_debug_panel_path = panel.get_path()
@@ -1626,6 +2074,11 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	_expect(panel.call("get_selected_troop") == troop, "troop selection controller should update the background jobs debug panel selection", failures)
 	var summary: Dictionary = troop.call("get_stat_job_debug_summary") as Dictionary
 	_expect(summary.has("last_worker_ms") and summary.has("pending_apply_results"), "troop should expose stat job debug summary fields", failures)
+	_expect(summary.has("perf_last_physics_ms") and summary.has("combat_perf_separation_pair_checks"), "troop should expose runtime profiling summary fields", failures)
+	_expect(summary.has("formation_target_write_count") and summary.has("moving_formation_pair_checks"), "troop should expose moving formation profiling fields", failures)
+	_expect(summary.has("spatial_grid_rebuilds") and summary.has("combat_socket_clamp_count"), "troop should expose spatial/socket profiling fields", failures)
+	_expect(summary.has("logic_sleeping_soldier_count"), "troop should expose sleeping soldier count", failures)
+	_expect(troop.has_method("reset_perf_debug_counters"), "troop should reset runtime profiling counters", failures)
 
 	for node: Node in [troop, controller, panel]:
 		if is_instance_valid(node) and node.get_parent():
@@ -1707,8 +2160,22 @@ func _step_troop_with_soldiers(troop: Node, delta: float) -> void:
 	if is_instance_valid(troop):
 		troop.call("_physics_process", delta)
 	for soldier: Node in _get_soldier_nodes(troop):
+		if soldier.has_method("step_formation_logic"):
+			continue
 		if is_instance_valid(soldier) and soldier.has_method("_physics_process"):
 			soldier.call("_physics_process", delta)
+
+
+func _find_first_mesh_instance(root_node: Node) -> MeshInstance3D:
+	if not root_node:
+		return null
+	if root_node is MeshInstance3D:
+		return root_node as MeshInstance3D
+	var matches := root_node.find_children("*", "MeshInstance3D", true, false)
+	for match: Node in matches:
+		if match is MeshInstance3D:
+			return match as MeshInstance3D
+	return null
 
 
 func _approx(actual: float, expected: float, tolerance: float) -> bool:
@@ -1896,6 +2363,13 @@ func _count_soldiers_away_from_slots(troop: Node, threshold: float) -> int:
 	return count
 
 
+func _get_global_corpse_count() -> int:
+	var manager := root.get_node_or_null("TroopCorpseManager")
+	if manager and manager.has_method("get_corpse_count"):
+		return int(manager.call("get_corpse_count"))
+	return 0
+
+
 func _minimum_soldier_spacing(troop: Node) -> float:
 	var soldiers := _get_soldier_nodes(troop)
 	var minimum := INF
@@ -1954,6 +2428,14 @@ func _any_soldier_has_independent_motion(troop: Node) -> bool:
 	return false
 
 
+func _all_soldier_route_paths_empty(troop: Node) -> bool:
+	for soldier: Node in _get_soldier_nodes(troop):
+		var path_points: Array = soldier.get("_independent_path_points")
+		if not path_points.is_empty():
+			return false
+	return true
+
+
 func _combat_target_ids(troop: Node) -> Dictionary:
 	var target_ids := {}
 	for soldier: Node in _get_soldier_nodes(troop):
@@ -1971,6 +2453,117 @@ func _combat_lock_positions(troop: Node) -> Dictionary:
 		if troop.has_method("has_combat_lock_for_soldier") and bool(troop.call("has_combat_lock_for_soldier", soldier)):
 			positions[soldier.get_instance_id()] = troop.call("get_combat_lock_position_for_soldier", soldier)
 	return positions
+
+
+func _max_combat_socket_distance_to_target(troop: Node) -> float:
+	var positions: Dictionary = troop.get("_combat_soldier_socket_positions")
+	var targets: Dictionary = troop.get("_combat_soldier_targets")
+	var maximum := 0.0
+	for key: Variant in positions.keys():
+		var position_variant: Variant = positions.get(key)
+		var target_variant: Variant = targets.get(key)
+		if not (position_variant is Vector3):
+			continue
+		if not (target_variant is Node3D) or not is_instance_valid(target_variant):
+			continue
+		var socket_position := position_variant as Vector3
+		var target_position := (target_variant as Node3D).global_position
+		socket_position.y = target_position.y
+		maximum = maxf(maximum, socket_position.distance_to(target_position))
+	return maximum
+
+
+func _combat_sockets_include_opposed_slots(troop: Node) -> bool:
+	var vectors := _loaded_combat_socket_vectors(troop)
+	if vectors.size() < 4:
+		return false
+	for a: Vector3 in vectors:
+		for b: Vector3 in vectors:
+			if a == b:
+				continue
+			if a.dot(b) <= -0.72:
+				return true
+	return false
+
+
+func _combat_sockets_include_side_slots(troop: Node) -> bool:
+	var vectors := _loaded_combat_socket_vectors(troop)
+	if vectors.size() < 4:
+		return false
+	var targets: Dictionary = troop.get("_combat_soldier_targets")
+	var defenders: Array[Node3D] = []
+	for target_variant: Variant in targets.values():
+		if target_variant is Node3D and is_instance_valid(target_variant) and not defenders.has(target_variant):
+			defenders.append(target_variant as Node3D)
+	if defenders.is_empty():
+		return false
+	var defender := defenders[0]
+	var approach := (troop as Node3D).global_position - defender.global_position
+	approach.y = 0.0
+	if approach.length_squared() <= 0.0001:
+		approach = Vector3.LEFT
+	approach = approach.normalized()
+	var side := Vector3(-approach.z, 0.0, approach.x)
+	var left_count := 0
+	var right_count := 0
+	for direction: Vector3 in vectors:
+		var side_dot := direction.dot(side)
+		if side_dot > 0.5:
+			left_count += 1
+		elif side_dot < -0.5:
+			right_count += 1
+	return left_count > 0 and right_count > 0
+
+
+func _loaded_combat_socket_vectors(troop: Node) -> Array:
+	var positions: Dictionary = troop.get("_combat_soldier_socket_positions")
+	var targets: Dictionary = troop.get("_combat_soldier_targets")
+	var vectors_by_target := {}
+	for key: Variant in positions.keys():
+		var position_variant: Variant = positions.get(key)
+		var target_variant: Variant = targets.get(key)
+		if not (position_variant is Vector3):
+			continue
+		if not (target_variant is Node3D) or not is_instance_valid(target_variant):
+			continue
+		var target := target_variant as Node3D
+		var from_target := (position_variant as Vector3) - target.global_position
+		from_target.y = 0.0
+		if from_target.length_squared() <= 0.0001:
+			continue
+		var target_id := target.get_instance_id()
+		var target_vectors: Array = vectors_by_target.get(target_id, [])
+		target_vectors.append(from_target.normalized())
+		vectors_by_target[target_id] = target_vectors
+	var best: Array = []
+	for vectors_variant: Variant in vectors_by_target.values():
+		var vectors := vectors_variant as Array
+		if vectors.size() > best.size():
+			best = vectors
+	return best
+
+
+func _combat_soldiers_face_assigned_targets(troop: Node, max_angle: float) -> bool:
+	var targets: Dictionary = troop.get("_combat_soldier_targets")
+	var checked := 0
+	for key: Variant in targets.keys():
+		var soldier := _get_soldier_by_instance_id(troop, int(key)) as Node3D
+		var target := targets.get(key) as Node3D
+		if not is_instance_valid(soldier) or not is_instance_valid(target):
+			continue
+		var to_target := target.global_position - soldier.global_position
+		to_target.y = 0.0
+		if to_target.length_squared() <= 0.0001:
+			continue
+		var forward := -soldier.global_transform.basis.z
+		forward.y = 0.0
+		if forward.length_squared() <= 0.0001:
+			return false
+		var angle := forward.normalized().angle_to(to_target.normalized())
+		if angle > max_angle:
+			return false
+		checked += 1
+	return checked > 0
 
 
 func _combat_targets_match(troop: Node, expected: Dictionary) -> bool:
@@ -2004,6 +2597,13 @@ func _get_soldier_by_instance_id(troop: Node, instance_id: int) -> Node:
 		if soldier.get_instance_id() == instance_id:
 			return soldier
 	return null
+
+
+func _dictionary_has_no_node_values(dictionary: Dictionary) -> bool:
+	for value: Variant in dictionary.values():
+		if value is Node:
+			return false
+	return true
 
 
 func _visible_soldier_count(troop: Node) -> int:
