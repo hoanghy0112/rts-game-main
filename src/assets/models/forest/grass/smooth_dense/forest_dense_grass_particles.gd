@@ -47,14 +47,14 @@ class_name ForestDenseGrassParticles
 		for particle_node: GPUParticles3D in particle_nodes:
 			particle_node.amount = amount
 
-@export_range(1, 256, 1) var process_fixed_fps: int = 1:
+@export_range(1, 256, 1) var process_fixed_fps: int = 30:
 	set(value):
 		process_fixed_fps = maxi(value, 1)
 		for particle_node: GPUParticles3D in particle_nodes:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
 
-@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 8.0
+@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 1.0
 
 @export var process_material: ShaderMaterial
 @export var mesh: Mesh
