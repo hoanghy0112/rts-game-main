@@ -11,7 +11,6 @@ const GameTimeSystemScene: PackedScene = preload("res://modules/time/game_time_s
 const GameDateDisplayScene: PackedScene = preload("res://modules/time/game_date_display.tscn")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
 const SELECTABLE_TYPE_META := &"village_selectable_type"
-const SELECTABLE_VILLAGE_TYPE := &"village"
 
 
 func _init() -> void:
@@ -109,8 +108,9 @@ func _check_food_records_and_daily_math(failures: Array[String]) -> void:
 	_expect(_approx(float(after_summary.get("total_reserve_kg", 0.0)), expected_after_reserve, 0.001), "advance_food_days should add production then deduct consumption", failures)
 	_expect(int(after_summary.get("food_days_elapsed", 0)) == 1, "food day counter should advance", failures)
 	_expect(_approx(float(after_summary.get("shortage_kg", -1.0)), 0.0, 0.001), "well-stocked village should not report shortage after one day", failures)
-	_expect(_has_selectable_metadata(region), "generated village should expose flag selection while houses stay non-clickable", failures)
-	_expect(_has_village_selection_ring(region), "generated village should draw a selectable ring around houses", failures)
+	_expect(_has_selectable_metadata(region), "generated village should expose troop-style flag selection while houses stay non-clickable", failures)
+	_expect(_has_no_village_selection_ring(region), "generated village should not draw a selection ring around houses", failures)
+	_expect(_village_flag_faces_camera_without_resizing(region, scene_root), "village flag should face the camera without resizing while camera zoom changes", failures)
 	_expect(_has_centered_storage_hut(region), "generated village should place a scaled hut storage at the house-region center", failures)
 	_expect(_houses_clear_centered_storage(region), "generated houses should not overlap the central village storage", failures)
 
@@ -290,6 +290,40 @@ func _has_selectable_metadata(region: VillageRegion) -> bool:
 		return false
 	if not _has_collision_proxy_with_type(flag, &"flag"):
 		return false
+	if not (flag is Node3D):
+		return false
+
+	var expected_center := _runtime_house_center(container)
+	var flag_spatial := flag as Node3D
+	var actual_center := Vector2(flag_spatial.global_position.x, flag_spatial.global_position.z)
+	if actual_center.distance_to(expected_center) > 0.05:
+		return false
+
+	var pole := flag.get_node_or_null("Pole") as MeshInstance3D
+	if not pole or not (pole.mesh is CylinderMesh):
+		return false
+	var pole_mesh := pole.mesh as CylinderMesh
+	if pole_mesh.height < 11.0 or pole_mesh.top_radius < 0.17:
+		return false
+
+	var banner := flag.get_node_or_null("Banner") as MeshInstance3D
+	if not banner or not (banner.mesh is BoxMesh):
+		return false
+	var banner_mesh := banner.mesh as BoxMesh
+	if banner_mesh.size.x < 5.0 or banner_mesh.size.y < 2.9:
+		return false
+
+	var stripe := flag.get_node_or_null("AccentStripe") as MeshInstance3D
+	if not stripe or not (stripe.mesh is BoxMesh):
+		return false
+
+	var banner_material := banner.material_override as StandardMaterial3D
+	if (
+		not banner_material
+		or banner_material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED
+		or banner_material.cull_mode != BaseMaterial3D.CULL_DISABLED
+	):
+		return false
 
 	var houses := _collect_named_children(container, "House_")
 	if houses.is_empty():
@@ -302,47 +336,58 @@ func _has_selectable_metadata(region: VillageRegion) -> bool:
 			return false
 		if _has_named_descendant(house, "VillageHouseClickProxy"):
 			return false
+		if _has_named_descendant(house, "VillageFlagClickProxy"):
+			return false
 	return true
 
 
-func _has_village_selection_ring(region: VillageRegion) -> bool:
+func _has_no_village_selection_ring(region: VillageRegion) -> bool:
+	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
+	if not container:
+		return false
+	if container.get_node_or_null("VillageSelectionRing") != null:
+		return false
+	for child: Node in _collect_descendants(container):
+		if String(child.name).begins_with("VillageRingClickProxy_") or String(child.name) == "VillageCenterClickProxy":
+			return false
+	return true
+
+
+func _village_flag_faces_camera_without_resizing(region: VillageRegion, scene_root: Node3D) -> bool:
 	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
 	if not container:
 		return false
 
-	var ring := container.get_node_or_null("VillageSelectionRing")
-	if not ring or StringName(ring.get_meta(SELECTABLE_TYPE_META, &"")) != SELECTABLE_VILLAGE_TYPE:
+	var icon := container.get_node_or_null("VillageFlag") as Node3D
+	if not icon:
 		return false
 
-	var ring_mesh := ring.get_node_or_null("RingMesh") as MeshInstance3D
-	if not ring_mesh or not ring_mesh.mesh:
-		return false
-	var material := ring_mesh.material_override as StandardMaterial3D
-	if not material or not material.no_depth_test or material.render_priority < 20:
-		return false
+	var camera := Camera3D.new()
+	scene_root.add_child(camera)
+	camera.owner = null
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 64.0
+	camera.global_position = icon.global_position + Vector3(32.0, 80.0, 40.0)
+	camera.look_at(icon.global_position, Vector3.UP)
+	camera.current = true
 
-	var ground_highlight := ring.get_node_or_null("GroundHighlightMesh") as MeshInstance3D
-	if not ground_highlight or not ground_highlight.mesh:
-		return false
-	var highlight_material := ground_highlight.material_override as StandardMaterial3D
-	if not highlight_material or not highlight_material.no_depth_test or not highlight_material.vertex_color_use_as_albedo:
-		return false
+	region._update_village_selection_icon_camera_lock()
+	var first_scale := icon.scale.x
+	var first_rotation_y := icon.rotation.y
 
-	var center_proxy := ring.get_node_or_null("VillageCenterClickProxy") as StaticBody3D
-	if not center_proxy or center_proxy.has_meta(SELECTABLE_TYPE_META):
-		return false
-	if not _has_collision_shape(center_proxy):
-		return false
+	camera.size = 128.0
+	region._update_village_selection_icon_camera_lock()
+	var second_scale := icon.scale.x
+	var second_rotation_y := icon.rotation.y
 
-	var proxy_count := 0
-	for child: Node in ring.get_children():
-		if String(child.name).begins_with("VillageRingClickProxy_"):
-			if child.has_meta(SELECTABLE_TYPE_META):
-				return false
-			if child is Node3D and (child as Node3D).position.y < 0.5:
-				return false
-			proxy_count += 1
-	return proxy_count > 0
+	scene_root.remove_child(camera)
+	camera.free()
+
+	return (
+		_approx(first_scale, 1.0, 0.001)
+		and _approx(second_scale, first_scale, 0.001)
+		and _approx(second_rotation_y, first_rotation_y, 0.001)
+	)
 
 
 func _has_centered_storage_hut(region: VillageRegion) -> bool:
@@ -425,6 +470,14 @@ func _has_named_descendant(root_node: Node, node_name: String) -> bool:
 		if _has_named_descendant(child, node_name):
 			return true
 	return false
+
+
+func _collect_descendants(root_node: Node) -> Array[Node]:
+	var collected: Array[Node] = []
+	for child: Node in root_node.get_children():
+		collected.append(child)
+		collected.append_array(_collect_descendants(child))
+	return collected
 
 
 func _collect_named_children(root_node: Node, prefix: String) -> Array[Node3D]:

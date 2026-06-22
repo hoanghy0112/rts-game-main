@@ -35,6 +35,11 @@ const PAINT_PRIORITY_ROAD := 40
 const DEFAULT_PEASANT_TARGET_COUNT := 8
 const DEFAULT_PEASANT_SPAWN_RATE_PER_MINUTE := 12.0
 const DEFAULT_PEASANT_DEATH_RATE_PER_MINUTE := 0.0
+const VILLAGE_SELECTION_FLAG_SCALE := 4.5
+const VILLAGE_SELECTION_FLAG_POLE_HEIGHT := 2.45 * VILLAGE_SELECTION_FLAG_SCALE
+const VILLAGE_SELECTION_FLAG_POLE_RADIUS := 0.04 * VILLAGE_SELECTION_FLAG_SCALE
+const VILLAGE_SELECTION_FLAG_BANNER_SIZE := Vector2(1.12, 0.66) * VILLAGE_SELECTION_FLAG_SCALE
+const VILLAGE_SELECTION_ICON_LOCAL_HEIGHT := VILLAGE_SELECTION_FLAG_POLE_HEIGHT
 
 signal cells_changed
 signal resources_changed
@@ -205,6 +210,7 @@ var _runtime_field_terrain_shape_applied := false
 var _village_ring_node: Node3D
 var _village_ring_material: StandardMaterial3D
 var _village_ground_highlight_material: StandardMaterial3D
+var _village_selection_icon_node: Node3D
 var _runtime_peasants: Array[Node3D] = []
 var _house_food_records: Array[Dictionary] = []
 var _house_food_record_lookup: Dictionary = {}
@@ -263,6 +269,7 @@ func _process(delta: float) -> void:
 		return
 
 	_update_runtime_peasant_population(delta)
+	_update_village_selection_icon_camera_lock()
 
 
 func _exit_tree() -> void:
@@ -695,8 +702,7 @@ func rebuild_runtime_preview() -> void:
 		_runtime_field_terrain_shape_applied = false
 	_generate_houses(terrain, house_placements)
 	_generate_fields(terrain, field_generation)
-	_generate_village_ring(terrain, house_placements)
-	_generate_village_flag(terrain)
+	_generate_village_flag(terrain, house_placements)
 	_generate_village_storage(terrain, house_placements)
 	_generate_peasants(terrain, house_placements, road_polylines, field_generation)
 	_refresh_food_summary(true)
@@ -798,8 +804,7 @@ func rebuild_runtime_preview_async() -> void:
 	_mark_startup_phase("village_fields_ready", {
 		"plots": (field_generation.get("plots", []) as Array).size(),
 	})
-	_generate_village_ring(terrain, house_placements)
-	_generate_village_flag(terrain)
+	_generate_village_flag(terrain, house_placements)
 	_generate_village_storage(terrain, house_placements)
 	await _generate_peasants_async(terrain, house_placements, road_polylines, field_generation)
 	_refresh_food_summary(true)
@@ -817,6 +822,7 @@ func clear_runtime_instances() -> void:
 	_village_ring_node = null
 	_village_ring_material = null
 	_village_ground_highlight_material = null
+	_village_selection_icon_node = null
 	_village_storage_node = null
 	_house_food_records.clear()
 	_house_food_record_lookup.clear()
@@ -1233,39 +1239,91 @@ func _make_village_ground_highlight_material(hovered: bool) -> StandardMaterial3
 	return material
 
 
-func _generate_village_flag(terrain: Node3D) -> void:
+func _update_village_selection_icon_camera_lock() -> void:
+	if not is_instance_valid(_village_selection_icon_node):
+		return
+
+	var viewport := get_viewport()
+	if viewport == null:
+		return
+
+	var camera := viewport.get_camera_3d()
+	if camera == null:
+		return
+
+	var to_camera := camera.global_position - _village_selection_icon_node.global_position
+	var flat_to_camera := Vector3(to_camera.x, 0.0, to_camera.z)
+	if flat_to_camera.length_squared() > 0.0001:
+		var flat_direction := flat_to_camera.normalized()
+		_village_selection_icon_node.rotation = Vector3(
+			0.0,
+			atan2(-flat_direction.x, -flat_direction.z),
+			0.0
+		)
+
+
+func _generate_village_flag(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
 	if not _runtime_container:
 		return
 
-	var center := _get_village_center_local_2d()
-	var flag := Node3D.new()
-	flag.name = "VillageFlag"
-	flag.set_meta(SELECTABLE_TYPE_META, SELECTABLE_FLAG_TYPE)
-	flag.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
-	_runtime_container.add_child(flag)
-	flag.owner = null
-	_set_runtime_node_position(flag, center, terrain)
+	var center := _get_village_storage_center_local_2d(house_placements)
+	var marker := Node3D.new()
+	marker.name = "VillageFlag"
+	marker.set_meta(SELECTABLE_TYPE_META, SELECTABLE_FLAG_TYPE)
+	marker.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
+	_runtime_container.add_child(marker)
+	marker.owner = null
+	_set_runtime_node_position(marker, center, terrain)
+	_village_selection_icon_node = marker
 
 	var pole := MeshInstance3D.new()
 	pole.name = "Pole"
 	var pole_mesh := CylinderMesh.new()
-	pole_mesh.top_radius = 0.06
-	pole_mesh.bottom_radius = 0.06
-	pole_mesh.height = 3.2
+	pole_mesh.top_radius = VILLAGE_SELECTION_FLAG_POLE_RADIUS
+	pole_mesh.bottom_radius = VILLAGE_SELECTION_FLAG_POLE_RADIUS
+	pole_mesh.height = VILLAGE_SELECTION_FLAG_POLE_HEIGHT
 	pole_mesh.radial_segments = 8
 	pole.mesh = pole_mesh
-	pole.position = Vector3(0.0, 1.6, 0.0)
-	pole.material_override = _make_flag_material(Color(0.52, 0.36, 0.16, 1.0))
-	flag.add_child(pole)
+	pole.position = Vector3(0.0, VILLAGE_SELECTION_FLAG_POLE_HEIGHT * 0.5, 0.0)
+	pole.material_override = _make_flag_material(Color(0.42, 0.28, 0.12, 1.0))
+	pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pole.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	marker.add_child(pole)
 
+	var banner_center := Vector3(
+		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 0.5,
+		VILLAGE_SELECTION_FLAG_POLE_HEIGHT * 0.82,
+		0.0
+	)
 	var banner := MeshInstance3D.new()
 	banner.name = "Banner"
 	var banner_mesh := BoxMesh.new()
-	banner_mesh.size = Vector3(1.2, 0.68, 0.045)
+	banner_mesh.size = Vector3(
+		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x,
+		VILLAGE_SELECTION_FLAG_BANNER_SIZE.y,
+		0.105
+	)
 	banner.mesh = banner_mesh
-	banner.position = Vector3(0.62, 2.55, 0.0)
-	banner.material_override = _make_flag_material(Color(0.78, 0.12, 0.1, 1.0))
-	flag.add_child(banner)
+	banner.position = banner_center
+	banner.material_override = _make_flag_material(Color(0.78, 0.1, 0.08, 1.0))
+	banner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	banner.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	marker.add_child(banner)
+
+	var stripe := MeshInstance3D.new()
+	stripe.name = "AccentStripe"
+	var stripe_mesh := BoxMesh.new()
+	stripe_mesh.size = Vector3(
+		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 1.03,
+		VILLAGE_SELECTION_FLAG_BANNER_SIZE.y * 0.22,
+		0.12
+	)
+	stripe.mesh = stripe_mesh
+	stripe.position = banner_center + Vector3(0.0, -VILLAGE_SELECTION_FLAG_BANNER_SIZE.y * 0.32, 0.072)
+	stripe.material_override = _make_flag_material(Color(0.1, 0.28, 0.82, 1.0))
+	stripe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	stripe.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	marker.add_child(stripe)
 
 	var proxy := StaticBody3D.new()
 	proxy.name = "VillageFlagClickProxy"
@@ -1276,16 +1334,12 @@ func _generate_village_flag(terrain: Node3D) -> void:
 	proxy.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(2.0, 3.8, 2.0)
+	box.size = Vector3(VILLAGE_SELECTION_FLAG_BANNER_SIZE.x + 0.6, VILLAGE_SELECTION_ICON_LOCAL_HEIGHT, 1.2)
 	shape.shape = box
-	shape.position = Vector3(0.0, 1.9, 0.0)
+	shape.position = Vector3(VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 0.5, VILLAGE_SELECTION_ICON_LOCAL_HEIGHT * 0.5, 0.0)
 	proxy.add_child(shape)
-	flag.add_child(proxy)
-	_configure_runtime_visibility_recursive(
-		flag,
-		village_visible_distance_meters,
-		village_visibility_fade_margin_meters
-	)
+	marker.add_child(proxy)
+	_update_village_selection_icon_camera_lock()
 
 
 func _generate_village_storage(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
@@ -1357,10 +1411,14 @@ func _generate_village_storage(terrain: Node3D, house_placements: Array[Dictiona
 	)
 
 
-func _make_flag_material(color: Color) -> StandardMaterial3D:
+func _make_flag_material(color: Color, always_visible := false) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.albedo_color = color
-	material.roughness = 0.82
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if always_visible:
+		material.no_depth_test = true
+		material.render_priority = 30
 	return material
 
 
