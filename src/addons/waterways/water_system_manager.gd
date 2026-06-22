@@ -41,8 +41,8 @@ func _get_configuration_warning() -> String:
 	return ""
 
 
-func _get_property_list() -> Array:
-	return [
+func _get_property_list() -> Array[Dictionary]:
+	var props: Array[Dictionary] = [
 		{
 			name = "system_map",
 			type = TYPE_OBJECT,
@@ -94,6 +94,7 @@ func _get_property_list() -> Array:
 			usage = PROPERTY_USAGE_STORAGE
 		}
 	]
+	return props
 
 
 func generate_system_maps() -> void:

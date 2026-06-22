@@ -118,9 +118,13 @@ func _draw_cells(
 
 
 func _get_cached_cell_lines(region: ForestRegionScript, terrain: Node3D) -> PackedVector3Array:
+	if _base_line_cache == null:
+		_base_line_cache = {}
 	var region_id := region.get_instance_id()
 	var cache_signature := _get_cell_line_cache_signature(region, terrain)
 	var cache := _base_line_cache.get(region_id, {}) as Dictionary
+	if cache == null:
+		cache = {}
 	var cached_record: Variant = cache.get("forest")
 	if cached_record is Dictionary:
 		var record := cached_record as Dictionary
