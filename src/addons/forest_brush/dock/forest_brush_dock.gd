@@ -70,7 +70,7 @@ func set_region(region: ForestRegionScript, selected_plant_ids: Array[StringName
 		_density_spinbox.value = _region.density_multiplier if has_region else 1.0
 		_density_spinbox.editable = has_region
 	if _macro_overlay_checkbox:
-		_macro_overlay_checkbox.button_pressed = _region.macro_overlay_enabled if has_region else true
+		_macro_overlay_checkbox.button_pressed = _region.macro_overlay_enabled if has_region else false
 		_macro_overlay_checkbox.disabled = not has_region
 	if _tree_scale_spinbox:
 		_tree_scale_spinbox.value = _region.tree_scale_multiplier if has_region else 1.0

@@ -73,11 +73,15 @@ func _run_checks(failures: Array[String]) -> void:
 	var forest := ForestRegionScript.new() as ForestRegion
 	forest.name = "Forest"
 	forest.async_runtime_preview_on_ready = false
+	_expect(not forest.macro_overlay_enabled, "forest macro overlay should default off for runtime maps", failures)
+	forest.macro_overlay_enabled = true
 	forest.set_forest_data(
-		[Vector2i(0, 0), Vector2i(1, 0)],
+		[Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)],
 		{
 			"0,0": [&"forest_tree_01"],
 			"1,0": [&"forest_smooth_grass_01"],
+			"0,1": [&"forest_tree_01"],
+			"1,1": [&"forest_smooth_grass_01"],
 		}
 	)
 	scene_root.add_child(forest)
@@ -104,7 +108,12 @@ func _run_checks(failures: Array[String]) -> void:
 
 	_expect(atlas.has_atlas(), "atlas should produce a texture", failures)
 	_expect(atlas.get_image() != null and atlas.get_image().get_width() > 0, "atlas image should be non-empty", failures)
-	_expect(_sample_alpha(atlas, Vector2(2.0, 2.0)) > 0.05, "forest tree cell should write alpha", failures)
+	var forest_center_alpha := _sample_alpha(atlas, Vector2(2.0, 2.0))
+	var forest_exposed_edge_alpha := _sample_alpha(atlas, Vector2(0.0, 2.0))
+	var forest_internal_seam_alpha := _sample_alpha(atlas, Vector2(4.0, 2.0))
+	_expect(forest_center_alpha > 0.05, "forest tree cell should write alpha", failures)
+	_expect(forest_exposed_edge_alpha < forest_center_alpha * 0.82, "forest macro overlay should feather exposed edges", failures)
+	_expect(forest_internal_seam_alpha > 0.05, "forest macro overlay should keep adjacent cells continuous", failures)
 	_expect(_sample_near_hide_mask(atlas, Vector2(2.0, 2.0)) > 0.95, "forest tree cell should write near-hide mask", failures)
 	_expect(_sample_alpha(atlas, Vector2(14.0, 2.0)) <= 0.01, "house-only cell should not write macro overlay alpha", failures)
 	var field_pixel := _sample_pixel(atlas, Vector2(22.0, 2.0))

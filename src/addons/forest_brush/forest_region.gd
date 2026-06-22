@@ -44,7 +44,7 @@ enum PaintMode {
 		density_multiplier = clamped_value
 		_notify_cells_changed([], true)
 
-@export var macro_overlay_enabled := true:
+@export var macro_overlay_enabled := false:
 	set(value):
 		if macro_overlay_enabled == value:
 			return

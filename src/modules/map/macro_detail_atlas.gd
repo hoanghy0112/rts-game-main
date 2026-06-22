@@ -304,13 +304,17 @@ func _rasterize_forest(data: Dictionary) -> void:
 	var density_multiplier := maxf(float(data.get("density_multiplier", 1.0)), 0.0)
 	var palette: Variant = data.get("palette")
 	var cell_plant_ids := data.get("cell_plant_ids", {}) as Dictionary
-	for cell: Vector2i in _variant_to_cells(data.get("forest_cells", [])):
+	var forest_cells := _variant_to_cells(data.get("forest_cells", []))
+	var forest_cell_lookup: Dictionary = {}
+	for cell: Vector2i in forest_cells:
+		forest_cell_lookup[cell] = true
+	for cell: Vector2i in forest_cells:
 		var plant_ids := _plant_ids_for_cell(cell, cell_plant_ids)
 		var style := _forest_style_for_plant_ids(plant_ids, palette, density_multiplier)
 		var color := style.get("color", Color(0.08, 0.24, 0.07, 1.0)) as Color
 		var strength := float(style.get("strength", 0.55))
 		var seed := _hash_string("|".join(_string_array_from_ids(plant_ids)))
-		_rasterize_cell(transform, inverse, origin, cell_size, cell, color, strength, seed, true)
+		_rasterize_forest_cell(transform, inverse, origin, cell_size, cell, color, strength, seed, forest_cell_lookup)
 
 
 func _rasterize_village(data: Dictionary) -> void:
@@ -381,6 +385,62 @@ func _rasterize_cell(
 			_blend_pixel(x, y, tinted, alpha)
 			if write_near_hide_mask and alpha > MIN_ALPHA:
 				_write_near_hide_mask_pixel(x, y)
+
+
+func _rasterize_forest_cell(
+	transform: Transform3D,
+	inverse: Transform3D,
+	origin: Vector3,
+	cell_size: float,
+	cell: Vector2i,
+	color: Color,
+	strength: float,
+	seed: int,
+	forest_cell_lookup: Dictionary
+) -> void:
+	var world_rect := _world_rect_for_cell(transform, origin, cell_size, cell)
+	var pixel_bounds := _pixel_bounds_for_world_rect(world_rect)
+	var cell_min := Vector2(float(cell.x) * cell_size, float(cell.y) * cell_size) + Vector2(origin.x, origin.z)
+	var cell_max := cell_min + Vector2.ONE * cell_size
+	var edge_feather := minf(maxf(_effective_sample_size, cell_size * 0.16), cell_size * 0.45)
+	for y: int in range(pixel_bounds.position.y, pixel_bounds.end.y):
+		for x: int in range(pixel_bounds.position.x, pixel_bounds.end.x):
+			var world_point := _pixel_to_world_point(x, y)
+			var region_point := _world_to_region_point(inverse, world_point)
+			if region_point.x < cell_min.x or region_point.y < cell_min.y or region_point.x >= cell_max.x or region_point.y >= cell_max.y:
+				continue
+			var edge_alpha := _forest_exposed_edge_alpha(region_point, cell_min, cell_max, cell, edge_feather, forest_cell_lookup)
+			if edge_alpha <= MIN_ALPHA:
+				continue
+			var noise := _noise_01(x, y, seed)
+			var alpha := strength * edge_alpha * (0.68 + 0.32 * noise)
+			var tinted := _adjust_color(color, (noise - 0.5) * 0.16)
+			_blend_pixel(x, y, tinted, alpha)
+			if alpha > MIN_ALPHA:
+				_write_near_hide_mask_pixel(x, y)
+
+
+func _forest_exposed_edge_alpha(
+	region_point: Vector2,
+	cell_min: Vector2,
+	cell_max: Vector2,
+	cell: Vector2i,
+	edge_feather: float,
+	forest_cell_lookup: Dictionary
+) -> float:
+	if edge_feather <= 0.001:
+		return 1.0
+
+	var alpha := 1.0
+	if not forest_cell_lookup.has(cell + Vector2i(-1, 0)):
+		alpha = minf(alpha, clampf((region_point.x - cell_min.x) / edge_feather, 0.0, 1.0))
+	if not forest_cell_lookup.has(cell + Vector2i(1, 0)):
+		alpha = minf(alpha, clampf((cell_max.x - region_point.x) / edge_feather, 0.0, 1.0))
+	if not forest_cell_lookup.has(cell + Vector2i(0, -1)):
+		alpha = minf(alpha, clampf((region_point.y - cell_min.y) / edge_feather, 0.0, 1.0))
+	if not forest_cell_lookup.has(cell + Vector2i(0, 1)):
+		alpha = minf(alpha, clampf((cell_max.y - region_point.y) / edge_feather, 0.0, 1.0))
+	return alpha
 
 
 func _rasterize_field_plot(
