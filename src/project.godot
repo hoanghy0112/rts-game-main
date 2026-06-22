@@ -21,6 +21,10 @@ config/icon="res://icon.svg"
 SettingsManager="*res://globals/settings_manager.gd"
 StartupPerformanceProbe="*res://globals/startup_performance_probe.gd"
 
+[display]
+
+window/size/mode=3
+
 [dotnet]
 
 project/assembly_name="RTS Game"
