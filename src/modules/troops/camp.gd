@@ -9,8 +9,12 @@ const SELECTABLE_NODE_PATH_META := &"troop_node_path"
 const SELECTABLE_CAMP_TYPE := &"camp"
 const CAMP_CLICK_PROXY_NAME := "CampClickProxy"
 const CAMP_FLAG_NAME := "CampFlag"
+const CAMP_FLAG_SPRITE_NAME := "Gonfalon"
 const FLAG_BORDER_NODE_NAME := "CampFlagHoverBorder"
 const RANGE_RING_NAME := "CampRange"
+const FLAG_TEXTURE_WIDTH := 96
+const FLAG_TEXTURE_HEIGHT := 144
+const FLAG_BORDER_PIXEL_SIZE_MULTIPLIER := 1.08
 
 @export_group("Identity")
 @export var camp_id: StringName = &"camp"
@@ -33,7 +37,7 @@ const RANGE_RING_NAME := "CampRange"
 		_emit_logistics_changed_if_ready()
 
 @export_group("Range")
-@export_range(1.0, 512.0, 0.5, "or_greater") var camp_range_m: float = 18.0:
+@export_range(1.0, 512.0, 0.5, "or_greater") var camp_range_m: float = 36.0:
 	set(value):
 		camp_range_m = maxf(value, 1.0)
 		if is_inside_tree():
@@ -55,6 +59,41 @@ const RANGE_RING_NAME := "CampRange"
 		camp_flag_color = value
 		if is_inside_tree():
 			_rebuild_visuals()
+@export var affect_zone_color: Color = Color(1.0, 0.82, 0.28, 1.0):
+	set(value):
+		affect_zone_color = Color(value.r, value.g, value.b, 1.0)
+		if is_inside_tree():
+			_rebuild_visuals()
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var camp_flag_pixel_size: float = 0.00075:
+	set(value):
+		camp_flag_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_flag_camera_scale(true)
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var camp_flag_min_pixel_size: float = 0.00028:
+	set(value):
+		camp_flag_min_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_flag_camera_scale(true)
+@export_range(1.0, 2000.0, 1.0, "or_greater") var camp_flag_near_camera_distance_m: float = 32.0:
+	set(value):
+		camp_flag_near_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_flag_camera_scale(true)
+@export_range(1.0, 4000.0, 1.0, "or_greater") var camp_flag_far_camera_distance_m: float = 260.0:
+	set(value):
+		camp_flag_far_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_flag_camera_scale(true)
+@export_range(0.05, 16.0, 0.005, "or_greater") var camp_flag_proxy_width_m: float = 0.10625:
+	set(value):
+		camp_flag_proxy_width_m = maxf(value, 0.05)
+		if is_inside_tree():
+			_rebuild_visuals()
+@export_range(0.05, 18.0, 0.005, "or_greater") var camp_flag_proxy_height_m: float = 0.18125:
+	set(value):
+		camp_flag_proxy_height_m = maxf(value, 0.05)
+		if is_inside_tree():
+			_rebuild_visuals()
 @export_flags_3d_physics var selection_collision_layer: int = 1 << 5:
 	set(value):
 		selection_collision_layer = value
@@ -65,6 +104,9 @@ const RANGE_RING_NAME := "CampRange"
 var _selected := false
 var _hovered := false
 var _visual_root: Node3D
+var _flag_sprite: Sprite3D
+var _flag_border_sprite: Sprite3D
+var _last_flag_pixel_size := -1.0
 var _ready_to_emit := false
 
 
@@ -73,6 +115,10 @@ func _ready() -> void:
 	_ready_to_emit = true
 	_rebuild_visuals()
 	_emit_logistics_changed_if_ready()
+
+
+func _process(_delta: float) -> void:
+	_update_flag_camera_scale()
 
 
 func _exit_tree() -> void:
@@ -185,7 +231,10 @@ func get_troop_summary() -> Dictionary:
 
 func get_management_flag_world_position() -> Vector3:
 	var flag := find_child(CAMP_FLAG_NAME, true, false) as Node3D
-	return flag.global_position if flag else global_position + Vector3(0.0, 6.0 * camp_building_scale, 0.0)
+	if flag:
+		var sprite := flag.get_node_or_null(CAMP_FLAG_SPRITE_NAME) as Node3D
+		return sprite.global_position if sprite else flag.global_position
+	return global_position + Vector3(0.0, 6.0 * camp_building_scale, 0.0)
 
 
 func _copy_troop_color(troop: Node, property_name: StringName, team_color: bool) -> void:
@@ -210,16 +259,16 @@ func _rebuild_visuals() -> void:
 	add_child(_visual_root)
 	_visual_root.owner = null
 
+	var s := maxf(camp_building_scale, 0.1)
 	var ring := MeshInstance3D.new()
 	ring.name = RANGE_RING_NAME
 	ring.mesh = _build_ring_mesh(camp_range_m)
-	ring.position.y = range_surface_offset
+	ring.position.y = range_surface_offset + 0.02
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	ring.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	ring.material_override = _make_range_material()
 	_visual_root.add_child(ring)
 
-	var s := maxf(camp_building_scale, 0.1)
 	_add_storage_hut(Vector3(-2.2 * s, 0.0, -1.25 * s), s)
 	_add_supply_rack(Vector3(1.5 * s, 0.0, -1.35 * s), s)
 	_add_fire(Vector3(0.1 * s, 0.0, 0.8 * s), s)
@@ -234,9 +283,9 @@ func _rebuild_visuals() -> void:
 	flag.position = Vector3(4.1 * s, 2.75 * s, -2.55 * s)
 	_visual_root.add_child(flag)
 
-	_add_flag_border(flag, s)
-	_add_selection_proxy(s)
+	_add_selection_proxy(flag, s)
 	_update_hover_visuals()
+	_update_flag_camera_scale(true)
 
 
 func _add_storage_hut(position_value: Vector3, s: float) -> void:
@@ -321,44 +370,59 @@ func _add_living_hut(position_value: Vector3, yaw: float, s: float) -> void:
 	hut.add_child(roof)
 
 
-func _create_flag(flag_name: String, banner_color: Color, accent_color: Color, s: float) -> Node3D:
+func _create_flag(flag_name: String, banner_color: Color, accent_color: Color, _s: float) -> Node3D:
 	var flag := Node3D.new()
 	flag.name = flag_name
-	var pole := _make_cylinder("Pole", 0.045 * s, 2.65 * s, Color(0.42, 0.28, 0.12, 1.0), 8)
-	pole.position = Vector3(0.0, 1.32 * s, 0.0)
-	pole.material_override = _make_flag_material(Color(0.42, 0.28, 0.12, 1.0))
-	flag.add_child(pole)
-	var banner := _make_box("Banner", Vector3(1.25, 0.76, 0.045) * s, banner_color)
-	banner.position = Vector3(0.63 * s, 2.13 * s, 0.0)
-	banner.material_override = _make_flag_material(banner_color)
-	flag.add_child(banner)
-	var stripe := _make_box("TeamStripe", Vector3(1.28, 0.18, 0.055) * s, accent_color)
-	stripe.position = banner.position + Vector3(0.0, -0.25 * s, 0.03 * s)
-	stripe.material_override = _make_flag_material(accent_color)
-	flag.add_child(stripe)
+
+	var sprite_position := Vector3(0.0, camp_flag_proxy_height_m * 0.5, 0.0)
+	var initial_pixel_size := _get_flag_camera_scaled_pixel_size()
+	var border := _create_flag_sprite(
+		FLAG_BORDER_NODE_NAME,
+		_build_gonfalon_texture(Color(1.0, 0.82, 0.28, 1.0), Color(1.0, 0.82, 0.28, 1.0)),
+		initial_pixel_size * FLAG_BORDER_PIXEL_SIZE_MULTIPLIER,
+		29
+	)
+	border.position = sprite_position
+	border.visible = false
+	flag.add_child(border)
+	_flag_border_sprite = border
+
+	var sprite := _create_flag_sprite(
+		CAMP_FLAG_SPRITE_NAME,
+		_build_gonfalon_texture(banner_color, accent_color),
+		initial_pixel_size,
+		30
+	)
+	sprite.position = sprite_position
+	flag.add_child(sprite)
+	_flag_sprite = sprite
 	return flag
 
 
-func _add_flag_border(flag: Node3D, s: float) -> void:
-	var color := _get_hover_color()
-	var center := Vector3(0.63 * s, 2.13 * s, 0.06 * s)
-	var width := 1.25 * s
-	var height := 0.76 * s
-	var t := maxf(0.055 * s, 0.025)
-	for data: Dictionary in [
-		{"name": "Top", "size": Vector3(width + t * 2.0, t, t), "pos": center + Vector3(0.0, height * 0.5 + t * 0.5, 0.0)},
-		{"name": "Bottom", "size": Vector3(width + t * 2.0, t, t), "pos": center + Vector3(0.0, -height * 0.5 - t * 0.5, 0.0)},
-		{"name": "Left", "size": Vector3(t, height, t), "pos": center + Vector3(-width * 0.5 - t * 0.5, 0.0, 0.0)},
-		{"name": "Right", "size": Vector3(t, height, t), "pos": center + Vector3(width * 0.5 + t * 0.5, 0.0, 0.0)},
-	]:
-		var strip := _make_box("%s_%s" % [FLAG_BORDER_NODE_NAME, String(data["name"])], data["size"] as Vector3, color)
-		strip.position = data["pos"] as Vector3
-		strip.visible = false
-		strip.material_override = _make_hover_material(color)
-		flag.add_child(strip)
+func _create_flag_sprite(
+	sprite_name: String,
+	texture: Texture2D,
+	pixel_size_value: float,
+	render_priority_value: int
+) -> Sprite3D:
+	var sprite := Sprite3D.new()
+	sprite.name = sprite_name
+	sprite.texture = texture
+	sprite.centered = true
+	sprite.pixel_size = maxf(pixel_size_value, 0.0001)
+	_set_property_if_present(sprite, &"billboard", BaseMaterial3D.BILLBOARD_ENABLED)
+	_set_property_if_present(sprite, &"fixed_size", true)
+	_set_property_if_present(sprite, &"no_depth_test", true)
+	_set_property_if_present(sprite, &"shaded", false)
+	_set_property_if_present(sprite, &"double_sided", true)
+	_set_property_if_present(sprite, &"transparent", true)
+	_set_property_if_present(sprite, &"render_priority", render_priority_value)
+	return sprite
 
 
-func _add_selection_proxy(s: float) -> void:
+func _add_selection_proxy(flag: Node3D, _s: float) -> void:
+	if not flag:
+		return
 	var proxy := StaticBody3D.new()
 	proxy.name = CAMP_CLICK_PROXY_NAME
 	proxy.collision_layer = selection_collision_layer
@@ -367,22 +431,83 @@ func _add_selection_proxy(s: float) -> void:
 	proxy.set_meta(SELECTABLE_TYPE_META, SELECTABLE_CAMP_TYPE)
 	proxy.set_meta(SELECTABLE_NODE_PATH_META, get_path() if is_inside_tree() else NodePath("."))
 	var shape := CollisionShape3D.new()
-	var cylinder := CylinderShape3D.new()
-	cylinder.radius = maxf(5.25 * s, 2.0)
-	cylinder.height = 4.6 * s
-	shape.shape = cylinder
-	shape.position = Vector3(0.0, 2.1 * s, 0.0)
+	shape.name = "CollisionShape3D"
+	var box := BoxShape3D.new()
+	box.size = Vector3(
+		maxf(camp_flag_proxy_width_m, 0.05),
+		maxf(camp_flag_proxy_height_m, 0.05),
+		1.2
+	)
+	shape.shape = box
+	shape.position = Vector3(0.0, box.size.y * 0.5, 0.0)
 	proxy.add_child(shape)
-	_visual_root.add_child(proxy)
+	flag.add_child(proxy)
 
 
 func _update_hover_visuals() -> void:
 	var active := _hovered or _selected
 	var color := _get_hover_color()
-	for node: Node in find_children("%s*" % FLAG_BORDER_NODE_NAME, "MeshInstance3D", true, false):
-		var strip := node as MeshInstance3D
-		strip.visible = active
-		strip.material_override = _make_hover_material(color)
+	for node: Node in find_children("%s*" % FLAG_BORDER_NODE_NAME, "Sprite3D", true, false):
+		var border := node as Sprite3D
+		border.visible = active
+		border.modulate = color
+
+
+func _update_flag_camera_scale(force: bool = false) -> void:
+	if not is_instance_valid(_flag_sprite):
+		return
+	var pixel_size := _get_flag_camera_scaled_pixel_size()
+	if (
+		not force
+		and _last_flag_pixel_size >= 0.0
+		and absf(pixel_size - _last_flag_pixel_size) <= 0.00000001
+	):
+		return
+	_flag_sprite.pixel_size = pixel_size
+	if is_instance_valid(_flag_border_sprite):
+		_flag_border_sprite.pixel_size = pixel_size * FLAG_BORDER_PIXEL_SIZE_MULTIPLIER
+	_last_flag_pixel_size = pixel_size
+
+
+func _get_flag_camera_scaled_pixel_size() -> float:
+	var near_size := maxf(camp_flag_pixel_size, 0.0001)
+	var far_size := maxf(camp_flag_min_pixel_size, 0.0001)
+	var lower_size := minf(near_size, far_size)
+	var upper_size := maxf(near_size, far_size)
+	var camera := _get_active_camera()
+	if not camera:
+		return clampf(near_size, lower_size, upper_size)
+
+	var near_distance := maxf(camp_flag_near_camera_distance_m, 0.001)
+	var far_distance := maxf(camp_flag_far_camera_distance_m, 0.001)
+	var distance_span := maxf(absf(far_distance - near_distance), 0.001)
+	var distance := _get_flag_camera_distance(camera)
+	var t := clampf((distance - near_distance) / distance_span, 0.0, 1.0)
+	if far_distance < near_distance:
+		t = 1.0 - t
+	return clampf(lerpf(near_size, far_size, t), lower_size, upper_size)
+
+
+func _get_flag_camera_distance(camera: Camera3D) -> float:
+	if camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		return maxf(camera.size, 0.001)
+	var flag_position := _get_cached_flag_world_position()
+	var forward := -camera.global_transform.basis.z.normalized()
+	var depth := (flag_position - camera.global_position).dot(forward)
+	if depth > camera.near:
+		return depth
+	return camera.global_position.distance_to(flag_position)
+
+
+func _get_cached_flag_world_position() -> Vector3:
+	if is_instance_valid(_flag_sprite):
+		return _flag_sprite.global_position
+	return get_management_flag_world_position()
+
+
+func _get_active_camera() -> Camera3D:
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null
 
 
 func _build_ring_mesh(radius: float) -> ArrayMesh:
@@ -468,15 +593,13 @@ func _make_flag_material(color: Color) -> StandardMaterial3D:
 func _make_range_material() -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	material.no_depth_test = true
 	material.render_priority = 21
-	material.vertex_color_use_as_albedo = true
-	material.albedo_color = Color(1.0, 0.82, 0.28, 0.32)
+	material.albedo_color = affect_zone_color
 	material.emission_enabled = true
-	material.emission = Color(1.0, 0.62, 0.18, 1.0)
-	material.emission_energy_multiplier = 0.14
+	material.emission = Color(affect_zone_color.r, affect_zone_color.g, affect_zone_color.b, 1.0)
+	material.emission_energy_multiplier = 0.2
 	return material
 
 
@@ -500,12 +623,81 @@ func _get_hover_color() -> Color:
 	return Color(1.0, 0.82, 0.28, 0.74)
 
 
+func _build_gonfalon_texture(banner_color: Color, accent_color: Color) -> Texture2D:
+	var image := Image.create(FLAG_TEXTURE_WIDTH, FLAG_TEXTURE_HEIGHT, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+
+	_fill_image_rect(image, Rect2i(15, 12, 5, 122), Color(0.35, 0.22, 0.1, 1.0))
+	_fill_image_rect(image, Rect2i(10, 16, 72, 6), Color(0.42, 0.28, 0.12, 1.0))
+	_fill_image_rect(image, Rect2i(12, 130, 12, 5), Color(0.24, 0.14, 0.06, 1.0))
+
+	var outline := banner_color.darkened(0.35)
+	var banner_top := 22
+	var banner_bottom := 130
+	var accent_top := 84
+	var accent_bottom := 101
+	for y: int in range(banner_top, banner_bottom):
+		for x: int in range(26, 82):
+			if not _is_gonfalon_pixel(x, y):
+				continue
+			var color := banner_color
+			if y >= accent_top and y <= accent_bottom:
+				color = accent_color
+			if _is_gonfalon_outline_pixel(x, y):
+				color = outline
+			image.set_pixel(x, y, color)
+
+	return ImageTexture.create_from_image(image)
+
+
+func _is_gonfalon_pixel(x: int, y: int) -> bool:
+	var left := 26
+	var right := 81
+	var top := 22
+	var bottom := 129
+	if x < left or x > right or y < top or y > bottom:
+		return false
+	var tail_start := 106
+	if y < tail_start:
+		return true
+	var t := float(y - tail_start) / float(maxi(bottom - tail_start, 1))
+	var notch_half_width := roundi(11.0 * t)
+	var center := 54
+	return abs(x - center) > notch_half_width
+
+
+func _is_gonfalon_outline_pixel(x: int, y: int) -> bool:
+	if not _is_gonfalon_pixel(x, y):
+		return false
+	for offset: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if not _is_gonfalon_pixel(x + offset.x, y + offset.y):
+			return true
+	return false
+
+
+func _fill_image_rect(image: Image, rect: Rect2i, color: Color) -> void:
+	for y: int in range(rect.position.y, rect.position.y + rect.size.y):
+		for x: int in range(rect.position.x, rect.position.x + rect.size.x):
+			if x >= 0 and y >= 0 and x < image.get_width() and y < image.get_height():
+				image.set_pixel(x, y, color)
+
+
+func _set_property_if_present(object: Object, property_name: StringName, value: Variant) -> void:
+	for property: Dictionary in object.get_property_list():
+		if StringName(property.get("name", &"")) == property_name:
+			object.set(String(property_name), value)
+			return
+
+
 func _clear_visuals() -> void:
 	if _visual_root and is_instance_valid(_visual_root):
 		if _visual_root.get_parent():
 			_visual_root.get_parent().remove_child(_visual_root)
 		_visual_root.free()
 	_visual_root = null
+	_flag_sprite = null
+	_flag_border_sprite = null
+	_last_flag_pixel_size = -1.0
 
 
 func _emit_logistics_changed_if_ready() -> void:

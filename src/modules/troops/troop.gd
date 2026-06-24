@@ -45,6 +45,7 @@ const SELECTABLE_CAMP_TYPE := &"camp"
 const SOLDIER_CONTAINER_NAME := "Soldiers"
 const RING_NODE_NAME := "TroopRing"
 const MANAGEMENT_FLAG_NODE_NAME := "TroopManagementFlag"
+const MANAGEMENT_FLAG_SPRITE_NAME := "Gonfalon"
 const SELECTION_PROXY_NAME := "TroopFlagClickProxy"
 const SELECTION_HIGHLIGHT_NAME := "TroopSelectionHighlight"
 const ATTACK_ZONE_NODE_NAME := "TroopAttackZone"
@@ -57,6 +58,9 @@ const SOLDIER_BATCH_RENDERER_NAME := "TroopSoldierBatchRenderer"
 const COMBAT_DEBUG_LINES_NODE_NAME := "TroopCombatDebugLines"
 const CARRIER_CONTAINER_NAME := "CarrierTasks"
 const CAMP_NODE_NAME := "TroopCamp"
+const MANAGEMENT_FLAG_TEXTURE_WIDTH := 96
+const MANAGEMENT_FLAG_TEXTURE_HEIGHT := 144
+const MANAGEMENT_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER := 1.08
 
 const RESOURCE_FOOD := &"food"
 const RESOURCE_WOOD := &"wood"
@@ -219,6 +223,26 @@ const MISSION_COMPLETE := &"complete"
 		if is_inside_tree():
 			_rebuild_management_flag()
 @export var management_flag_face_camera := true
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var management_flag_pixel_size: float = 0.00075:
+	set(value):
+		management_flag_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_management_flag_camera_scale(true)
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var management_flag_min_pixel_size: float = 0.00028:
+	set(value):
+		management_flag_min_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_management_flag_camera_scale(true)
+@export_range(1.0, 2000.0, 1.0, "or_greater") var management_flag_near_camera_distance_m: float = 32.0:
+	set(value):
+		management_flag_near_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_management_flag_camera_scale(true)
+@export_range(1.0, 4000.0, 1.0, "or_greater") var management_flag_far_camera_distance_m: float = 260.0:
+	set(value):
+		management_flag_far_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_management_flag_camera_scale(true)
 
 @export_group("Visibility")
 @export_range(0.0, 128.0, 0.1, "or_greater") var ring_radius: float = 0.0:
@@ -641,6 +665,9 @@ var _soldier_container: Node3D
 var _soldier_batch_renderer: Node
 var _ring_instance: MeshInstance3D
 var _management_flag: Node3D
+var _management_flag_sprite: Sprite3D
+var _management_flag_border_sprite: Sprite3D
+var _last_management_flag_pixel_size := -1.0
 var _selection_proxy: StaticBody3D
 var _selection_highlight: MeshInstance3D
 var _attack_zone_indicator: MeshInstance3D
@@ -939,6 +966,7 @@ func _process(delta: float) -> void:
 	_update_management_flag_position()
 	_update_attack_zone_indicator()
 	_update_management_flag_facing()
+	_update_management_flag_camera_scale()
 	_sync_soldier_batch_renderer(delta)
 
 
@@ -1705,6 +1733,8 @@ func get_engagement_sample_points() -> PackedVector3Array:
 
 
 func get_management_flag_world_position() -> Vector3:
+	if is_instance_valid(_management_flag_sprite):
+		return _management_flag_sprite.global_position
 	return _management_flag.global_position if is_instance_valid(_management_flag) else Vector3.ZERO
 
 
@@ -3074,46 +3104,34 @@ func _rebuild_management_flag() -> void:
 	add_child(_management_flag)
 	_management_flag.owner = null
 
-	var pole := MeshInstance3D.new()
-	pole.name = "Pole"
-	var pole_mesh := CylinderMesh.new()
-	pole_mesh.top_radius = management_flag_pole_radius
-	pole_mesh.bottom_radius = management_flag_pole_radius
-	pole_mesh.height = management_flag_pole_height
-	pole_mesh.radial_segments = 8
-	pole.mesh = pole_mesh
-	pole.position = Vector3(0.0, management_flag_pole_height * 0.5, 0.0)
-	pole.material_override = _make_flag_material(Color(0.42, 0.28, 0.12, 1.0))
-	_management_flag.add_child(pole)
-
-	var banner_center := Vector3(
-		management_flag_banner_size.x * 0.5,
-		management_flag_pole_height * 0.82,
-		0.0
+	var flag_center := _get_management_flag_sprite_center()
+	var initial_pixel_size := _get_management_flag_camera_scaled_pixel_size()
+	var border := _create_management_flag_sprite(
+		FLAG_BORDER_NODE_NAME,
+		_build_management_gonfalon_texture(Color(1.0, 0.82, 0.28, 1.0), Color(1.0, 0.82, 0.28, 1.0)),
+		initial_pixel_size * MANAGEMENT_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER,
+		29
 	)
-	var banner := MeshInstance3D.new()
-	banner.name = "Banner"
-	var banner_mesh := BoxMesh.new()
-	banner_mesh.size = Vector3(management_flag_banner_size.x, management_flag_banner_size.y, 0.055)
-	banner.mesh = banner_mesh
-	banner.position = banner_center
-	banner.material_override = _make_flag_material(troop_flag_color)
-	_management_flag.add_child(banner)
+	border.position = flag_center
+	border.visible = false
+	_management_flag.add_child(border)
+	_management_flag_border_sprite = border
 
-	var stripe := MeshInstance3D.new()
-	stripe.name = "TeamStripe"
-	var stripe_mesh := BoxMesh.new()
-	stripe_mesh.size = Vector3(management_flag_banner_size.x * 1.04, management_flag_banner_size.y * 0.24, 0.065)
-	stripe.mesh = stripe_mesh
-	stripe.position = banner_center + Vector3(0.0, -management_flag_banner_size.y * 0.32, 0.035)
-	stripe.material_override = _make_flag_material(team_flag_color)
-	_management_flag.add_child(stripe)
+	var sprite := _create_management_flag_sprite(
+		MANAGEMENT_FLAG_SPRITE_NAME,
+		_build_management_gonfalon_texture(troop_flag_color, team_flag_color),
+		initial_pixel_size,
+		30
+	)
+	sprite.position = flag_center
+	_management_flag.add_child(sprite)
+	_management_flag_sprite = sprite
 
-	_add_management_flag_border(banner_center)
-	_add_management_flag_proxy(banner_center)
+	_add_management_flag_proxy(flag_center)
 	_update_management_flag_position()
 	_update_hover_visuals()
 	_update_management_flag_facing()
+	_update_management_flag_camera_scale(true)
 
 
 func _clear_management_flag() -> void:
@@ -3123,6 +3141,9 @@ func _clear_management_flag() -> void:
 			_management_flag.get_parent().remove_child(_management_flag)
 		_management_flag.free()
 	_management_flag = null
+	_management_flag_sprite = null
+	_management_flag_border_sprite = null
+	_last_management_flag_pixel_size = -1.0
 
 
 func _add_management_flag_proxy(banner_center: Vector3) -> void:
@@ -3147,6 +3168,82 @@ func _add_management_flag_proxy(banner_center: Vector3) -> void:
 	_selection_proxy.add_child(shape)
 	_management_flag.add_child(_selection_proxy)
 	_selection_proxy.owner = null
+
+
+func _get_management_flag_sprite_center() -> Vector3:
+	return Vector3(0.0, management_flag_pole_height * 0.82, 0.0)
+
+
+func _create_management_flag_sprite(
+	sprite_name: String,
+	texture: Texture2D,
+	pixel_size_value: float,
+	render_priority_value: int
+) -> Sprite3D:
+	var sprite := Sprite3D.new()
+	sprite.name = sprite_name
+	sprite.texture = texture
+	sprite.centered = true
+	sprite.pixel_size = maxf(pixel_size_value, 0.0001)
+	_set_property_if_present(sprite, &"billboard", BaseMaterial3D.BILLBOARD_ENABLED)
+	_set_property_if_present(sprite, &"fixed_size", true)
+	_set_property_if_present(sprite, &"no_depth_test", true)
+	_set_property_if_present(sprite, &"shaded", false)
+	_set_property_if_present(sprite, &"double_sided", true)
+	_set_property_if_present(sprite, &"transparent", true)
+	_set_property_if_present(sprite, &"render_priority", render_priority_value)
+	return sprite
+
+
+func _update_management_flag_camera_scale(force: bool = false) -> void:
+	if not is_instance_valid(_management_flag_sprite):
+		return
+	var pixel_size := _get_management_flag_camera_scaled_pixel_size()
+	if (
+		not force
+		and _last_management_flag_pixel_size >= 0.0
+		and absf(pixel_size - _last_management_flag_pixel_size) <= 0.00000001
+	):
+		return
+	_management_flag_sprite.pixel_size = pixel_size
+	if is_instance_valid(_management_flag_border_sprite):
+		_management_flag_border_sprite.pixel_size = pixel_size * MANAGEMENT_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER
+	_last_management_flag_pixel_size = pixel_size
+
+
+func _get_management_flag_camera_scaled_pixel_size() -> float:
+	var near_size := maxf(management_flag_pixel_size, 0.0001)
+	var far_size := maxf(management_flag_min_pixel_size, 0.0001)
+	var lower_size := minf(near_size, far_size)
+	var upper_size := maxf(near_size, far_size)
+	var camera := _get_active_camera_3d()
+	if not camera:
+		return clampf(near_size, lower_size, upper_size)
+
+	var near_distance := maxf(management_flag_near_camera_distance_m, 0.001)
+	var far_distance := maxf(management_flag_far_camera_distance_m, 0.001)
+	var distance_span := maxf(absf(far_distance - near_distance), 0.001)
+	var distance := _get_management_flag_camera_distance(camera)
+	var t := clampf((distance - near_distance) / distance_span, 0.0, 1.0)
+	if far_distance < near_distance:
+		t = 1.0 - t
+	return clampf(lerpf(near_size, far_size, t), lower_size, upper_size)
+
+
+func _get_management_flag_camera_distance(camera: Camera3D) -> float:
+	if camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		return maxf(camera.size, 0.001)
+	var flag_position := get_management_flag_world_position()
+	var forward := -camera.global_transform.basis.z.normalized()
+	var depth := (flag_position - camera.global_position).dot(forward)
+	if depth > camera.near:
+		return depth
+	return camera.global_position.distance_to(flag_position)
+
+
+func _get_active_camera_3d() -> Camera3D:
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null
 
 
 func _add_unit_selection_proxy(soldier: Node3D) -> void:
@@ -3487,7 +3584,11 @@ func _update_hover_visuals() -> void:
 	var color := _get_hover_border_color()
 	if _management_flag and is_instance_valid(_management_flag):
 		for child: Node in _management_flag.get_children():
-			if child is MeshInstance3D and String(child.name).begins_with(FLAG_BORDER_NODE_NAME):
+			if child is Sprite3D and String(child.name).begins_with(FLAG_BORDER_NODE_NAME):
+				var sprite := child as Sprite3D
+				sprite.visible = active
+				sprite.modulate = color
+			elif child is MeshInstance3D and String(child.name).begins_with(FLAG_BORDER_NODE_NAME):
 				var strip := child as MeshInstance3D
 				strip.visible = active
 				strip.material_override = _make_hover_border_material(color)
@@ -3726,6 +3827,72 @@ func _make_flag_material(color: Color) -> StandardMaterial3D:
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return material
+
+
+func _build_management_gonfalon_texture(banner_color: Color, accent_color: Color) -> Texture2D:
+	var image := Image.create(MANAGEMENT_FLAG_TEXTURE_WIDTH, MANAGEMENT_FLAG_TEXTURE_HEIGHT, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+
+	_fill_management_flag_image_rect(image, Rect2i(15, 12, 5, 122), Color(0.35, 0.22, 0.1, 1.0))
+	_fill_management_flag_image_rect(image, Rect2i(10, 16, 72, 6), Color(0.42, 0.28, 0.12, 1.0))
+	_fill_management_flag_image_rect(image, Rect2i(12, 130, 12, 5), Color(0.24, 0.14, 0.06, 1.0))
+
+	var outline := banner_color.darkened(0.35)
+	var banner_top := 22
+	var banner_bottom := 130
+	var accent_top := 84
+	var accent_bottom := 101
+	for y: int in range(banner_top, banner_bottom):
+		for x: int in range(26, 82):
+			if not _is_management_gonfalon_pixel(x, y):
+				continue
+			var color := banner_color
+			if y >= accent_top and y <= accent_bottom:
+				color = accent_color
+			if _is_management_gonfalon_outline_pixel(x, y):
+				color = outline
+			image.set_pixel(x, y, color)
+
+	return ImageTexture.create_from_image(image)
+
+
+func _is_management_gonfalon_pixel(x: int, y: int) -> bool:
+	var left := 26
+	var right := 81
+	var top := 22
+	var bottom := 129
+	if x < left or x > right or y < top or y > bottom:
+		return false
+	var tail_start := 106
+	if y < tail_start:
+		return true
+	var t := float(y - tail_start) / float(maxi(bottom - tail_start, 1))
+	var notch_half_width := roundi(11.0 * t)
+	var center := 54
+	return abs(x - center) > notch_half_width
+
+
+func _is_management_gonfalon_outline_pixel(x: int, y: int) -> bool:
+	if not _is_management_gonfalon_pixel(x, y):
+		return false
+	for offset: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if not _is_management_gonfalon_pixel(x + offset.x, y + offset.y):
+			return true
+	return false
+
+
+func _fill_management_flag_image_rect(image: Image, rect: Rect2i, color: Color) -> void:
+	for y: int in range(rect.position.y, rect.position.y + rect.size.y):
+		for x: int in range(rect.position.x, rect.position.x + rect.size.x):
+			if x >= 0 and y >= 0 and x < image.get_width() and y < image.get_height():
+				image.set_pixel(x, y, color)
+
+
+func _set_property_if_present(object: Object, property_name: StringName, value: Variant) -> void:
+	for property: Dictionary in object.get_property_list():
+		if StringName(property.get("name", &"")) == property_name:
+			object.set(String(property_name), value)
+			return
 
 
 func _get_effective_ring_radius() -> float:

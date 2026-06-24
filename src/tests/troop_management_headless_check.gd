@@ -308,11 +308,14 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(_approx(float(troop.call("get_camp_total_wood_cost_kg")), 200.0, 0.001), "two camp living huts should cost 200kg wood", failures)
 	_expect(bool(troop.call("has_management_flag")), "troop should create a management flag", failures)
 	_expect(_flag_uses_unshaded_materials(troop, "TroopManagementFlag"), "management flag should ignore scene lighting", failures)
+	_expect(_flag_is_fixed_billboard_sprite(troop, "TroopManagementFlag"), "management flag should be a fixed-size camera-facing sprite", failures)
+	_expect(_flag_sprite_pixel_size(troop, "TroopManagementFlag") <= 0.001, "management flag should not dominate the camera view", failures)
 	var proxy := troop.call("get_selection_proxy") as StaticBody3D
 	_expect(proxy != null, "troop should create a flag selection proxy", failures)
 	if proxy:
 		_expect(proxy.name == "TroopFlagClickProxy", "troop selection proxy should be attached to the management flag", failures)
 		_expect(proxy.has_meta(&"troop_selectable_type"), "flag selection proxy should carry troop metadata", failures)
+	await _check_troop_management_flag_zoom_clamps(troop, failures)
 	unit_proxy = null
 	var rebuilt_first_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
 	if rebuilt_first_soldier:
@@ -2227,7 +2230,23 @@ func _check_troop_logistics_tasks(failures: Array[String]) -> void:
 	_expect(_approx(float(summary.get("camp_wood_kg", -1.0)), 10.0, 0.001), "camp storage should keep leftover troop wood after establishment", failures)
 	var camp_proxy := _find_node_in_group_with_child(&"camps", "CampClickProxy")
 	_expect(camp_proxy != null and StringName(camp_proxy.get_meta(&"troop_selectable_type", &"")) == &"camp", "camp should expose a selectable camp proxy", failures)
+	var camp_flag := root.find_child("CampFlag", true, false)
+	_expect(camp_flag != null, "camp should expose a visible flag target", failures)
+	_expect(root.find_child("CampSelectZone", true, false) == null, "camp should not draw a ground selecting zone", failures)
+	if camp_proxy and camp_flag:
+		_expect(camp_proxy.get_parent() == camp_flag, "camp selection proxy should be attached to the flag", failures)
+		var camp_proxy_shape_node := camp_proxy.get_node_or_null("CollisionShape3D") as CollisionShape3D
+		var camp_proxy_shape := camp_proxy_shape_node.shape as BoxShape3D if camp_proxy_shape_node else null
+		_expect(camp_proxy_shape != null, "camp flag proxy should use a flag-sized box hit target", failures)
+		if camp_proxy_shape:
+			_expect(camp_proxy_shape.size.y > camp_proxy_shape.size.x, "camp flag proxy should be taller than it is wide", failures)
+			_expect(camp_proxy_shape.size.x <= 0.13 and camp_proxy_shape.size.y <= 0.23, "camp flag proxy should stay close to the visible flag instead of covering the camp", failures)
 	_expect(_flag_uses_unshaded_materials(root, "CampFlag"), "camp flag should ignore scene lighting", failures)
+	_expect(_flag_is_fixed_billboard_sprite(root, "CampFlag"), "camp flag should be a fixed-size camera-facing sprite", failures)
+	_expect(_flag_sprite_pixel_size(root, "CampFlag") <= 0.001, "camp flag should not dominate the camera view", failures)
+	var camp_node := _find_group_owner_for_node(camp_proxy, &"camps")
+	if camp_node and camp_flag:
+		await _check_camp_flag_zoom_clamps(camp_node, camp_flag, failures)
 	var camp_position: Vector3 = summary.get("camp_position", troop.global_position)
 	troop.global_position += Vector3(40.0, 0.0, 0.0)
 	summary = troop.call("get_troop_summary") as Dictionary
@@ -2468,6 +2487,80 @@ func _find_node_in_group_with_child(group_name: StringName, child_name: String) 
 	return null
 
 
+func _find_group_owner_for_node(node: Node, group_name: StringName) -> Node:
+	var current := node
+	while current:
+		if current.is_in_group(group_name):
+			return current
+		current = current.get_parent()
+	return null
+
+
+func _check_troop_management_flag_zoom_clamps(troop_node: Node, failures: Array[String]) -> void:
+	var flag := troop_node.find_child("TroopManagementFlag", true, false) as Node3D
+	if not flag:
+		return
+	var sprite := flag.find_child("Gonfalon", true, false) as Node3D
+	var flag_position := sprite.global_position if sprite else flag.global_position
+
+	var camera := Camera3D.new()
+	camera.name = "TroopFlagClampCheckCamera"
+	root.add_child(camera)
+	camera.current = true
+	await process_frame
+
+	var near_size := float(troop_node.get("management_flag_pixel_size"))
+	var far_size := float(troop_node.get("management_flag_min_pixel_size"))
+	_expect(far_size < near_size, "management flag far-zoom clamp should be smaller than the near/default size", failures)
+	troop_node.set("management_flag_near_camera_distance_m", 10.0)
+	troop_node.set("management_flag_far_camera_distance_m", 30.0)
+
+	camera.global_position = flag_position + Vector3(0.0, 0.0, 5.0)
+	camera.look_at(flag_position, Vector3.UP)
+	troop_node.call("_update_management_flag_camera_scale", true)
+	_expect(_approx(_flag_sprite_pixel_size(troop_node, "TroopManagementFlag"), near_size, 0.00001), "management flag should clamp to the readable near size when zoomed in", failures)
+
+	camera.global_position = flag_position + Vector3(0.0, 0.0, 80.0)
+	camera.look_at(flag_position, Vector3.UP)
+	troop_node.call("_update_management_flag_camera_scale", true)
+	_expect(_approx(_flag_sprite_pixel_size(troop_node, "TroopManagementFlag"), far_size, 0.00001), "management flag should clamp to the smaller far size when zoomed out", failures)
+
+	root.remove_child(camera)
+	camera.free()
+
+
+func _check_camp_flag_zoom_clamps(camp_node: Node, camp_flag: Node, failures: Array[String]) -> void:
+	var flag_spatial := camp_flag as Node3D
+	if not flag_spatial:
+		return
+
+	var camera := Camera3D.new()
+	camera.name = "CampFlagClampCheckCamera"
+	root.add_child(camera)
+	camera.current = true
+	await process_frame
+
+	var near_size := float(camp_node.get("camp_flag_pixel_size"))
+	var far_size := float(camp_node.get("camp_flag_min_pixel_size"))
+	_expect(far_size < near_size, "camp flag far-zoom clamp should be smaller than the near/default size", failures)
+	camp_node.set("camp_flag_near_camera_distance_m", 10.0)
+	camp_node.set("camp_flag_far_camera_distance_m", 30.0)
+
+	var flag_position := flag_spatial.global_position
+	camera.global_position = flag_position + Vector3(0.0, 0.0, 5.0)
+	camera.look_at(flag_position, Vector3.UP)
+	camp_node.call("_update_flag_camera_scale", true)
+	_expect(_approx(_flag_sprite_pixel_size(root, "CampFlag"), near_size, 0.00001), "camp flag should clamp to the readable near size when zoomed in", failures)
+
+	camera.global_position = flag_position + Vector3(0.0, 0.0, 80.0)
+	camera.look_at(flag_position, Vector3.UP)
+	camp_node.call("_update_flag_camera_scale", true)
+	_expect(_approx(_flag_sprite_pixel_size(root, "CampFlag"), far_size, 0.00001), "camp flag should clamp to the smaller far size when zoomed out", failures)
+
+	root.remove_child(camera)
+	camera.free()
+
+
 func _get_spear_visual_length_m(spear: Node3D) -> float:
 	if not spear:
 		return 0.0
@@ -2512,6 +2605,9 @@ func _flag_uses_unshaded_materials(root_node: Node, flag_name: String) -> bool:
 	var flag := root_node.find_child(flag_name, true, false)
 	if not flag:
 		return false
+	var sprite := flag.find_child("Gonfalon", true, false) as Sprite3D
+	if sprite:
+		return not bool(_get_property_value(sprite, &"shaded", true))
 	if not _flag_surface_uses_unshaded_material(flag, "Pole"):
 		return false
 	if not _flag_surface_uses_unshaded_material(flag, "Banner"):
@@ -2531,6 +2627,39 @@ func _flag_surface_uses_unshaded_material(flag: Node, surface_name: String) -> b
 		and material.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
 		and material.cull_mode == BaseMaterial3D.CULL_DISABLED
 	)
+
+
+func _flag_is_fixed_billboard_sprite(root_node: Node, flag_name: String) -> bool:
+	var flag := root_node.find_child(flag_name, true, false)
+	if not flag:
+		return false
+	var sprite := flag.find_child("Gonfalon", true, false) as Sprite3D
+	if not sprite:
+		return false
+	return (
+		sprite.texture != null
+		and bool(_get_property_value(sprite, &"fixed_size", false))
+		and int(_get_property_value(sprite, &"billboard", BaseMaterial3D.BILLBOARD_DISABLED)) == BaseMaterial3D.BILLBOARD_ENABLED
+	)
+
+
+func _flag_sprite_pixel_size(root_node: Node, flag_name: String) -> float:
+	var flag := root_node.find_child(flag_name, true, false)
+	if not flag:
+		return INF
+	var sprite := flag.find_child("Gonfalon", true, false) as Sprite3D
+	if not sprite:
+		return INF
+	return sprite.pixel_size
+
+
+func _get_property_value(object: Object, property_name: StringName, fallback: Variant = null) -> Variant:
+	if not object:
+		return fallback
+	for property: Dictionary in object.get_property_list():
+		if StringName(property.get("name", &"")) == property_name:
+			return object.get(String(property_name))
+	return fallback
 
 
 func _mesh_uses_solid_vertex_color(mesh: Mesh) -> bool:
