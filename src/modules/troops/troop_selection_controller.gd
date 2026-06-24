@@ -22,6 +22,7 @@ const FORMATION_PREVIEW_NODE_NAME := "FormationDragPreview"
 @export_range(8, 64, 1, "or_greater") var formation_preview_circle_segments: int = 24
 @export_range(0.0, 4.0, 0.01, "or_greater") var formation_preview_height_m: float = 0.18
 @export var formation_preview_color: Color = Color(0.42, 0.88, 1.0, 0.68)
+@export var formation_preview_chevron_color: Color = Color(0.86, 1.0, 1.0, 0.9)
 @export_range(1.0, 96.0, 1.0, "or_greater") var unit_screen_pick_radius_px: float = 28.0
 @export_flags_3d_physics var troop_collision_mask: int = 1 << 5
 @export_flags_3d_physics var destination_collision_mask: int = 0xFFFFFFFF
@@ -266,6 +267,18 @@ func _build_formation_preview_mesh(start: Vector3, end: Vector3, origin: Vector3
 			forward
 		)
 
+	var chevron_center := forward * (depth * 0.5 + maxf(spacing * 0.7, formation_preview_circle_radius_m * 1.6))
+	_append_preview_chevron(
+		vertices,
+		normals,
+		colors,
+		indices,
+		chevron_center,
+		right,
+		forward,
+		spacing
+	)
+
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
@@ -303,6 +316,56 @@ func _append_preview_circle(
 		indices.append(start_index)
 		indices.append(start_index + 1 + segment)
 		indices.append(start_index + 1 + next_segment)
+
+
+func _append_preview_chevron(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	colors: PackedColorArray,
+	indices: PackedInt32Array,
+	center: Vector3,
+	right: Vector3,
+	forward: Vector3,
+	spacing: float
+) -> void:
+	var length := maxf(spacing * 0.78, formation_preview_circle_radius_m * 2.2)
+	var half_width := maxf(spacing * 0.48, formation_preview_circle_radius_m * 1.45)
+	var thickness := maxf(formation_preview_circle_radius_m * 0.34, 0.12)
+	var tip := center + forward * (length * 0.5)
+	var left_tail := center - forward * (length * 0.5) - right * half_width
+	var right_tail := center - forward * (length * 0.5) + right * half_width
+	_append_preview_strip(vertices, normals, colors, indices, left_tail, tip, thickness)
+	_append_preview_strip(vertices, normals, colors, indices, tip, right_tail, thickness)
+
+
+func _append_preview_strip(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	colors: PackedColorArray,
+	indices: PackedInt32Array,
+	start: Vector3,
+	end: Vector3,
+	thickness: float
+) -> void:
+	var segment := end - start
+	segment.y = 0.0
+	if segment.length_squared() <= 0.0001:
+		return
+	var side := Vector3(-segment.z, 0.0, segment.x).normalized() * (thickness * 0.5)
+	var start_index := vertices.size()
+	vertices.append(start + side)
+	vertices.append(start - side)
+	vertices.append(end - side)
+	vertices.append(end + side)
+	for _index: int in range(4):
+		normals.append(Vector3.UP)
+		colors.append(formation_preview_chevron_color)
+	indices.append(start_index)
+	indices.append(start_index + 1)
+	indices.append(start_index + 2)
+	indices.append(start_index)
+	indices.append(start_index + 2)
+	indices.append(start_index + 3)
 
 
 func _get_selected_troop_preview_soldier_count() -> int:

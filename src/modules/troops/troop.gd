@@ -670,6 +670,7 @@ var _formation_motion_time := 0.0
 var _suppress_formation_rebuild := false
 var _formation_destination_yaw_active := false
 var _formation_destination_yaw := 0.0
+var _explicit_formation_destination_yaw_for_next_move := false
 var _carrier_container: Node3D
 var _carrier_tasks: Array[Dictionary] = []
 var _busy_carrier_soldiers := 0
@@ -1065,6 +1066,8 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 	if not _movement_map:
 		_last_path_result = MovementMapPathfinderScript.find_path(null, global_position, world_position)
 		_set_state(STATE_BLOCKED)
+		if not _explicit_formation_destination_yaw_for_next_move:
+			_formation_destination_yaw_active = false
 		_manual_move_override_active = false
 		_emit_destination_changed()
 		return false
@@ -1084,6 +1087,8 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 		_path_points.clear()
 		_current_path_index = 0
 		_has_destination = false
+		if not _explicit_formation_destination_yaw_for_next_move:
+			_formation_destination_yaw_active = false
 		_clear_route_visual()
 		_set_state(STATE_BLOCKED)
 		_manual_move_override_active = false
@@ -1094,9 +1099,14 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 	_current_path_index = 1 if _path_points.size() > 1 else 0
 	_destination = _snap_world_point(result.get("resolved_destination", world_position) as Vector3)
 	_refresh_active_formation_slot_metas()
-	if manual_command and _formation_destination_yaw_active:
-		var reassignment_path_index := _get_moving_retarget_formation_path_index()
-		_prepare_formation_for_manual_move_command(reassignment_path_index)
+	if manual_command:
+		if not _explicit_formation_destination_yaw_for_next_move:
+			_set_formation_destination_yaw_from_manual_move(world_position)
+		if _formation_destination_yaw_active:
+			var reassignment_path_index := _get_moving_retarget_formation_path_index()
+			_prepare_formation_for_manual_move_command(reassignment_path_index)
+	elif not _explicit_formation_destination_yaw_for_next_move:
+		_formation_destination_yaw_active = false
 	_has_destination = true
 	_route_refresh_remaining = 0.0
 	_manual_move_override_active = manual_command
@@ -1157,7 +1167,9 @@ func set_formation_destination(
 	_formation_destination_yaw = _get_yaw_for_formation_right_axis(horizontal_right)
 	_formation_destination_yaw_active = true
 
+	_explicit_formation_destination_yaw_for_next_move = true
 	var accepted := set_move_destination(world_center, manual_command)
+	_explicit_formation_destination_yaw_for_next_move = false
 	if not accepted:
 		_formation_destination_yaw_active = false
 		_set_formation_columns_preserving_soldiers(previous_columns)
@@ -2692,6 +2704,20 @@ func _get_yaw_for_direction(direction: Vector3) -> float:
 		return rotation.y
 	horizontal = horizontal.normalized()
 	return atan2(-horizontal.x, -horizontal.z)
+
+
+func _set_formation_destination_yaw_from_manual_move(requested_world_position: Vector3) -> void:
+	var direction := _destination - global_position
+	direction.y = 0.0
+	if direction.length_squared() <= 0.0001:
+		direction = requested_world_position - global_position
+		direction.y = 0.0
+	if direction.length_squared() <= 0.0001:
+		direction = _get_formation_path_direction(_get_moving_retarget_formation_path_index())
+	if direction.length_squared() <= 0.0001:
+		return
+	_formation_destination_yaw = _get_yaw_for_direction(direction)
+	_formation_destination_yaw_active = true
 
 
 func _sort_formation_path_assignment_record(a: Variant, b: Variant) -> bool:

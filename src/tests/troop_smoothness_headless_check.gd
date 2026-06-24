@@ -92,6 +92,17 @@ func _run() -> void:
 						"formation-drag facing error ratio %.3f exceeded %.3f"
 						% [float(drag_facing_errors) / float(drag_facing_checks), MAX_FACING_ERROR_RATIO]
 					)
+				var override_direction := Vector3(18.0, 0.0, 0.0)
+				var override_destination := (mover as Node3D).global_position + override_direction
+				if not bool(mover.call("set_move_destination", override_destination)):
+					failures.append("plain move after formation drag was rejected")
+				else:
+					var override_yaw_error := _get_yaw_error_degrees((mover as Node3D).rotation.y, override_direction)
+					if override_yaw_error > 4.0:
+						failures.append(
+							"plain move after formation drag kept stale formation yaw; error %.2f degrees"
+							% override_yaw_error
+						)
 
 	var attacker := _make_troop(&"smooth_attacker", &"player", Vector3(18.0, 0.0, 24.0), movement_map)
 	var defender := _make_troop(&"smooth_defender", &"enemy", Vector3(76.0, 0.0, 24.0), movement_map)
@@ -499,6 +510,16 @@ func _get_facing_angle_degrees(soldier: Node3D, direction: Vector3) -> float:
 	flat_direction.y = 0.0
 	flat_direction = flat_direction.normalized()
 	return rad_to_deg(acos(clampf(forward.dot(flat_direction), -1.0, 1.0)))
+
+
+func _get_yaw_error_degrees(yaw: float, direction: Vector3) -> float:
+	var flat_direction := direction
+	flat_direction.y = 0.0
+	if flat_direction.length_squared() <= 0.0001:
+		return 0.0
+	flat_direction = flat_direction.normalized()
+	var expected_yaw := atan2(-flat_direction.x, -flat_direction.z)
+	return rad_to_deg(absf(angle_difference(yaw, expected_yaw)))
 
 
 func _get_primary_walk_pose_value(troop: Node) -> Variant:
