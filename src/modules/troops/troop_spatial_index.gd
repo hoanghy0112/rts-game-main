@@ -12,7 +12,7 @@ func rebuild(nodes: Array, cell_size: float) -> void:
 	_cell_size = maxf(cell_size, 0.1)
 	_recycle_buckets()
 	for node: Variant in nodes:
-		if not (node is Node3D):
+		if not is_instance_valid(node) or not (node is Node3D):
 			continue
 		var spatial := node as Node3D
 		var cell := _get_cell(spatial.global_position)
@@ -43,7 +43,7 @@ func query(position: Vector3, max_count: int, out_array: Array[Node3D]) -> void:
 					continue
 				var bucket := bucket_variant as Array
 				for node: Variant in bucket:
-					if not (node is Node3D):
+					if not is_instance_valid(node) or not (node is Node3D):
 						continue
 					out_array.append(node as Node3D)
 					if out_array.size() >= limit:

@@ -33,7 +33,7 @@ layout_mode = 0
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
-offset_top = -456.0
+offset_top = -486.0
 offset_right = 494.0
 offset_bottom = -16.0
 grow_horizontal = 1
@@ -91,6 +91,11 @@ autowrap_mode = 3
 unique_name_in_owner = true
 layout_mode = 2
 text = "Soldier profiling"
+
+[node name="CombatLinesCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Combat lines"
 
 [node name="SelectedOnlyCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true

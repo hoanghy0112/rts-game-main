@@ -75,6 +75,8 @@ var _active_pose_elapsed := 0.0
 var _stationary_pose_applied := false
 var _combat_idle_pose_applied := false
 var _logic_sleeping := false
+var _has_visual_facing_position := false
+var _last_visual_facing_position := Vector3.ZERO
 
 
 func _ready() -> void:
@@ -106,7 +108,11 @@ func _physics_process(delta: float) -> void:
 func step_formation_logic(delta: float) -> void:
 	if not formation_visual_only:
 		return
+	if not is_inside_tree():
+		return
 	_state_time += delta
+	var previous_visual_position := _last_visual_facing_position
+	var had_previous_visual_position := _has_visual_facing_position
 	var perf_started := Time.get_ticks_usec() if soldier_perf_monitoring_enabled else 0
 	if _combat_stats_emit_pending:
 		_update_combat_stats_signal(delta)
@@ -118,12 +124,13 @@ func step_formation_logic(delta: float) -> void:
 		_independent_motion_active = false
 		_has_independent_target = false
 		_update_monitored_procedural_pose(delta)
+		_has_visual_facing_position = false
 		_finish_perf_sample(perf_started)
 		return
 	var moving_independently := _update_independent_motion(delta)
 	if _formation_attacking:
 		_formation_attack_time += delta
-		if is_instance_valid(_combat_target):
+		if is_instance_valid(_combat_target) and _combat_target.is_inside_tree():
 			var to_target := _combat_target.global_position - global_position
 			to_target.y = 0.0
 			if to_target.length_squared() > 0.0001:
@@ -144,6 +151,9 @@ func step_formation_logic(delta: float) -> void:
 		_set_state(STATE_IDLE)
 	_update_desertion_motion(delta)
 	_update_formation_visual_pose(delta, moving_independently)
+	_apply_actual_visual_motion_facing(previous_visual_position, had_previous_visual_position, moving_independently)
+	_last_visual_facing_position = global_position
+	_has_visual_facing_position = true
 	_finish_perf_sample(perf_started)
 
 
@@ -321,6 +331,20 @@ func _update_formation_visual_pose(delta: float, moving_independently: bool) -> 
 		_perf_last_pose_usec = 0
 
 
+func _apply_actual_visual_motion_facing(previous_position: Vector3, has_previous_position: bool, moving_independently: bool) -> void:
+	if not has_previous_position:
+		return
+	if is_instance_valid(_combat_focus_target):
+		return
+	if not (_formation_walking or moving_independently):
+		return
+	var displacement := global_position - previous_position
+	displacement.y = 0.0
+	if displacement.length_squared() <= 0.000225:
+		return
+	rotation.y = atan2(-displacement.x, -displacement.z)
+
+
 func _finish_perf_sample(perf_started: int) -> void:
 	if not soldier_perf_monitoring_enabled:
 		return
@@ -465,6 +489,18 @@ func set_independent_move_target(world_position: Vector3, speed_mps: float, arri
 		if _independent_motion_active or _has_independent_target:
 			clear_independent_motion()
 		return
+	if _has_independent_target and _independent_motion_active and _independent_path_points.is_empty():
+		var target_delta := world_position - _independent_target
+		target_delta.y = 0.0
+		var retarget_epsilon := clampf(arrival * 0.55, 0.08, 0.36)
+		if (
+			target_delta.length_squared() <= retarget_epsilon * retarget_epsilon
+			and absf(float(_independent_speed) - speed) <= 0.08
+			and absf(float(_independent_arrival_radius) - arrival) <= 0.04
+		):
+			_independent_target = _independent_target.lerp(world_position, 0.35)
+			set_formation_walking(true, _independent_speed)
+			return
 	if (
 		_has_independent_target
 		and _independent_motion_active
@@ -563,7 +599,7 @@ func set_independent_combat(active: bool, target: Node3D = null, in_range: bool 
 	else:
 		_stationary_pose_applied = false
 		_combat_idle_pose_applied = false
-	if is_instance_valid(_combat_target):
+	if is_instance_valid(_combat_target) and _combat_target.is_inside_tree():
 		var to_target := _combat_target.global_position - global_position
 		to_target.y = 0.0
 		if to_target.length_squared() > 0.0001:
@@ -577,11 +613,11 @@ func is_formation_attacking() -> bool:
 
 
 func has_combat_target() -> bool:
-	return is_instance_valid(_combat_target)
+	return is_instance_valid(_combat_target) and _combat_target.is_inside_tree()
 
 
 func get_combat_target() -> Node3D:
-	return _combat_target if is_instance_valid(_combat_target) else null
+	return _combat_target if is_instance_valid(_combat_target) and _combat_target.is_inside_tree() else null
 
 
 func trigger_spear_thrust(target: Node3D = null, duration: float = -1.0) -> void:
@@ -590,10 +626,11 @@ func trigger_spear_thrust(target: Node3D = null, duration: float = -1.0) -> void
 	_wake_logic()
 	if target:
 		_combat_target = target
-		var to_target := target.global_position - global_position
-		to_target.y = 0.0
-		if to_target.length_squared() > 0.0001:
-			_face_direction(to_target.normalized(), 1.0)
+		if target.is_inside_tree():
+			var to_target := target.global_position - global_position
+			to_target.y = 0.0
+			if to_target.length_squared() > 0.0001:
+				_face_direction(to_target.normalized(), 1.0)
 	_spear_thrust_duration = maxf(duration if duration > 0.0 else attack_cooldown * 0.72, 0.18)
 	_spear_thrust_remaining = _spear_thrust_duration
 	_formation_attacking = true
@@ -607,6 +644,14 @@ func trigger_spear_thrust(target: Node3D = null, duration: float = -1.0) -> void
 
 func is_spear_thrust_active() -> bool:
 	return _spear_thrust_remaining > 0.0
+
+
+func needs_full_rate_combat_visual() -> bool:
+	return (
+		_independent_motion_active
+		or _spear_thrust_remaining > 0.0
+		or _hit_reaction_remaining > 0.0
+	)
 
 
 func apply_strength_damage(amount: float, reason: StringName = &"combat") -> void:
@@ -1052,14 +1097,19 @@ func _update_independent_motion(delta: float) -> bool:
 	var step := minf(maxf(_independent_speed, 0.1) * motion_delta, distance)
 	global_position += direction * step
 	var facing_direction := _formation_frame_motion + direction * step
-	if is_instance_valid(_combat_focus_target):
+	var combat_focus_active := is_instance_valid(_combat_focus_target) and _combat_focus_target.is_inside_tree()
+	if combat_focus_active:
 		var to_focus := _combat_focus_target.global_position - global_position
 		to_focus.y = 0.0
 		if to_focus.length_squared() > 0.0001:
 			facing_direction = to_focus.normalized()
 	if facing_direction.length_squared() <= 0.0001:
 		facing_direction = _formation_facing_direction if _formation_facing_direction.length_squared() > 0.0001 else direction
-	_face_direction(facing_direction, delta)
+	if formation_visual_only and not combat_focus_active and facing_direction.length_squared() > 0.0001:
+		var target_yaw := atan2(-facing_direction.x, -facing_direction.z)
+		rotation.y = target_yaw
+	else:
+		_face_direction(facing_direction, delta)
 	set_formation_walking(true, _independent_speed)
 	return true
 
