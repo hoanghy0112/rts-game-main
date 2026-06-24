@@ -166,6 +166,286 @@ func _run() -> void:
 	_free_test_node(autonomous_player)
 	_free_test_node(autonomous_enemy)
 
+	var defensive_zone_player := _make_troop(&"defensive_zone_player", &"player", Vector3(84.0, 0.0, 58.0), movement_map)
+	var defensive_zone_enemy := _make_troop(&"defensive_zone_enemy", &"enemy", Vector3(20.0, 0.0, 58.0), movement_map)
+	defensive_zone_player.set("soldier_count", 24)
+	defensive_zone_player.set("formation_columns", 6)
+	defensive_zone_enemy.set("soldier_count", 24)
+	defensive_zone_enemy.set("formation_columns", 6)
+	defensive_zone_enemy.set("controllable", false)
+	defensive_zone_enemy.set("troop_mode", "defensive")
+	defensive_zone_enemy.set("detection_range_m", 8.0)
+	defensive_zone_enemy.set("ai_chase_detection_range_m", 96.0)
+	defensive_zone_enemy.set("defensive_engagement_range_m", 10.0)
+	defensive_zone_enemy.set("combat_range_m", 10.0)
+	defensive_zone_enemy.set("defensive_engagement_delay", 0.0)
+	defensive_zone_enemy.set("combat_scan_interval", 60.0)
+	defensive_zone_enemy.set("chase_repath_interval", 0.05)
+	root.add_child(defensive_zone_player)
+	root.add_child(defensive_zone_enemy)
+	await _wait_frames(8)
+	await _wait_frames(90)
+	var defensive_far_summary := _get_summary(defensive_zone_enemy)
+	if not NodePath(defensive_far_summary.get("combat_target", NodePath(""))).is_empty():
+		failures.append("non-controllable defensive enemy should not acquire a troop only because it is inside AI chase range")
+	if StringName(defensive_far_summary.get("state", &"")) != &"idle":
+		failures.append("non-controllable defensive enemy should stay idle before a player enters its attack zone")
+	(defensive_zone_player as Node3D).global_position = (defensive_zone_enemy as Node3D).global_position + Vector3(6.0, 0.0, 0.0)
+	if not await _wait_for_state(defensive_zone_enemy, &"fighting", 180):
+		failures.append("non-controllable defensive enemy did not fight when a player troop entered its attack zone")
+	else:
+		var defensive_zone_summary := _get_summary(defensive_zone_enemy)
+		var defensive_zone_target := NodePath(defensive_zone_summary.get("combat_target", NodePath("")))
+		if defensive_zone_target != defensive_zone_player.get_path():
+			failures.append("non-controllable defensive enemy did not target the player troop inside its attack zone")
+
+	_free_test_node(defensive_zone_player)
+	_free_test_node(defensive_zone_enemy)
+
+	var auto_guard := _make_troop(&"manual_move_auto_guard", &"player", Vector3(20.0, 0.0, 64.0), movement_map)
+	var auto_intruder := _make_troop(&"manual_move_auto_intruder", &"enemy", Vector3(52.0, 0.0, 64.0), movement_map)
+	auto_guard.set("defensive_engagement_range_m", 10.0)
+	auto_guard.set("combat_range_m", 10.0)
+	auto_guard.set("combat_scan_interval", 0.01)
+	auto_guard.set("defensive_engagement_delay", 0.0)
+	auto_intruder.set("defensive_engagement_range_m", 10.0)
+	auto_intruder.set("combat_range_m", 10.0)
+	root.add_child(auto_guard)
+	root.add_child(auto_intruder)
+	await _wait_frames(8)
+	if not bool(auto_guard.call("set_move_destination", Vector3(80.0, 0.0, 64.0))):
+		failures.append("manual move auto-fight setup rejected reachable move destination")
+	else:
+		await _wait_frames(4)
+		(auto_intruder as Node3D).global_position = (auto_guard as Node3D).global_position + Vector3(6.0, 0.0, 0.0)
+		if not await _wait_for_state(auto_guard, &"fighting", 180):
+			failures.append("manual moving troop did not auto-fight when an enemy entered engagement range")
+		else:
+			var auto_summary := _get_summary(auto_guard)
+			if bool(auto_summary.get("has_destination", true)):
+				failures.append("manual moving troop kept its move destination after auto-fight engaged")
+			if not bool(auto_guard.call("_should_continue_engagement", auto_intruder, false, 0.2)):
+				failures.append("committed combat dropped on a single false engagement-zone sample")
+
+	_free_test_node(auto_guard)
+	_free_test_node(auto_intruder)
+
+	var idle_guard := _make_troop(&"idle_auto_guard", &"player", Vector3(20.0, 0.0, 70.0), movement_map)
+	var far_intruder := _make_troop(&"idle_far_intruder", &"enemy", Vector3(48.0, 0.0, 70.0), movement_map)
+	var close_intruder := _make_troop(&"idle_close_intruder", &"enemy", Vector3(100.0, 0.0, 70.0), movement_map)
+	idle_guard.set("defensive_engagement_range_m", 10.0)
+	idle_guard.set("combat_range_m", 10.0)
+	idle_guard.set("defensive_engagement_delay", 0.0)
+	far_intruder.set("defensive_engagement_range_m", 10.0)
+	far_intruder.set("combat_range_m", 10.0)
+	close_intruder.set("defensive_engagement_range_m", 10.0)
+	close_intruder.set("combat_range_m", 10.0)
+	root.add_child(idle_guard)
+	root.add_child(far_intruder)
+	root.add_child(close_intruder)
+	await _wait_frames(40)
+	(close_intruder as Node3D).global_position = (idle_guard as Node3D).global_position + Vector3(6.0, 0.0, 0.0)
+	if not await _wait_for_state(idle_guard, &"fighting", 120):
+		failures.append("idle troop did not proactively fight when a new enemy entered engagement range")
+	else:
+		var idle_summary := _get_summary(idle_guard)
+		var target_path := NodePath(idle_summary.get("combat_target", NodePath("")))
+		if target_path != close_intruder.get_path():
+			failures.append("idle troop did not prioritize the enemy inside engagement range over a stale detected target")
+
+	_free_test_node(idle_guard)
+	_free_test_node(far_intruder)
+	_free_test_node(close_intruder)
+
+	var enemy_guard := _make_troop(&"enemy_unified_auto_guard", &"enemy", Vector3(20.0, 0.0, 76.0), movement_map)
+	var enemy_far_target := _make_troop(&"enemy_unified_far_target", &"player", Vector3(86.0, 0.0, 76.0), movement_map)
+	var enemy_close_intruder := _make_troop(&"enemy_unified_close_intruder", &"player", Vector3(116.0, 0.0, 76.0), movement_map)
+	for troop: Node in [enemy_guard, enemy_far_target, enemy_close_intruder]:
+		troop.set("soldier_count", 24)
+		troop.set("formation_columns", 6)
+		troop.set("defensive_engagement_range_m", 10.0)
+		troop.set("combat_range_m", 10.0)
+		troop.set("defensive_engagement_delay", 0.0)
+	enemy_guard.set("controllable", false)
+	enemy_guard.set("troop_mode", "defensive")
+	enemy_guard.set("combat_scan_interval", 60.0)
+	enemy_guard.set("chase_repath_interval", 0.05)
+	root.add_child(enemy_guard)
+	root.add_child(enemy_far_target)
+	root.add_child(enemy_close_intruder)
+	await _wait_frames(8)
+	if not bool(enemy_guard.call("command_attack_troop", enemy_far_target)):
+		failures.append("enemy unified auto-fight setup rejected a reachable attack target")
+	else:
+		await _wait_frames(4)
+		(enemy_close_intruder as Node3D).global_position = (enemy_guard as Node3D).global_position + Vector3(6.0, 0.0, 0.0)
+		if not await _wait_for_state(enemy_guard, &"fighting", 180):
+			failures.append("enemy troop did not proactively fight when a player troop entered its engagement range")
+		else:
+			var enemy_guard_summary := _get_summary(enemy_guard)
+			var enemy_guard_target_path := NodePath(enemy_guard_summary.get("combat_target", NodePath("")))
+			if enemy_guard_target_path != enemy_close_intruder.get_path():
+				failures.append("enemy troop did not use unified close-range target priority over a stale attack target")
+
+	_free_test_node(enemy_guard)
+	_free_test_node(enemy_far_target)
+	_free_test_node(enemy_close_intruder)
+
+	var line_player := _make_troop(&"line_status_player", &"player", Vector3(20.0, 0.0, 82.0), movement_map)
+	var line_enemy := _make_troop(&"line_status_enemy", &"enemy", Vector3(24.0, 0.0, 82.0), movement_map)
+	line_player.set("soldier_count", 2)
+	line_player.set("formation_columns", 2)
+	line_player.set("combat_spear_range_m", 2.5)
+	line_enemy.set("soldier_count", 2)
+	line_enemy.set("formation_columns", 2)
+	root.add_child(line_player)
+	root.add_child(line_enemy)
+	await _wait_frames(8)
+	var line_attackers := _get_active_soldier_nodes(line_player)
+	var line_defenders := _get_active_soldier_nodes(line_enemy)
+	if line_attackers.is_empty() or line_defenders.is_empty():
+		failures.append("combat line status setup did not spawn active soldiers")
+	else:
+		var line_attacker := line_attackers[0] as Node3D
+		var line_defender := line_defenders[0] as Node3D
+		line_attacker.global_position = Vector3(20.0, 0.0, 82.0)
+		line_defender.global_position = Vector3(21.4, 0.0, 82.0)
+		line_player.call("_set_state", &"fighting")
+		line_player.call("set_combat_debug_lines_enabled", true)
+		var line_load_by_defender := {
+			line_defender.get_instance_id(): 0,
+		}
+		line_player.call("_assign_combat_target_to_soldier", line_attacker, line_defender, line_load_by_defender)
+		line_player.call("_update_combat_debug_lines")
+		var in_range_relation: Dictionary = line_player.call("get_combat_target_relation_for_soldier", line_attacker) as Dictionary
+		var in_range_summary := _get_summary(line_player)
+		if StringName(in_range_relation.get("status", &"")) != &"fighting":
+			failures.append("assigned soldier in spear range should immediately report fighting, even before socket lock")
+		if int(in_range_summary.get("combat_debug_line_fighting_pair_count", 0)) != 1:
+			failures.append("combat debug red line should appear for assigned soldier in spear range")
+		var unlocked_defender_strength_before := _get_soldier_strength(line_defender)
+		line_player.call("_resolve_combat_tick", line_enemy, 10.0)
+		var unlocked_defender_strength_after := _get_soldier_strength(line_defender)
+		if unlocked_defender_strength_after >= unlocked_defender_strength_before:
+			failures.append("assigned soldier in spear range did not deal damage before socket lock")
+		line_player.call("_lock_combat_soldier", line_attacker, line_defender)
+		line_player.call("_update_combat_debug_lines")
+		var fighting_relation: Dictionary = line_player.call("get_combat_target_relation_for_soldier", line_attacker) as Dictionary
+		var fighting_summary := _get_summary(line_player)
+		if StringName(fighting_relation.get("status", &"")) != &"fighting":
+			failures.append("locked in-range soldier target relation should become fighting")
+		if int(fighting_summary.get("combat_debug_line_fighting_pair_count", 0)) < 1:
+			failures.append("combat debug red line should keep counting assigned in-range fighting pairs")
+		var defender_strength_before := _get_soldier_strength(line_defender)
+		line_player.call("_update_soldier_attack", line_attacker, line_defender, 10.0)
+		var defender_strength_after := _get_soldier_strength(line_defender)
+		if defender_strength_after >= defender_strength_before:
+			failures.append("locked red-line fighting pair did not deal soldier damage")
+
+	_free_test_node(line_player)
+	_free_test_node(line_enemy)
+
+	var surround_player := _make_troop(&"four_surround_player", &"player", Vector3(30.0, 0.0, 88.0), movement_map)
+	var surround_enemy := _make_troop(&"four_surround_enemy", &"enemy", Vector3(34.0, 0.0, 88.0), movement_map)
+	surround_player.set("soldier_count", 4)
+	surround_player.set("formation_columns", 4)
+	surround_player.set("base_soldier_strength", 1000.0)
+	surround_player.set("soldier_strength_variance", 0.0)
+	surround_player.set("combat_range_m", 24.0)
+	surround_player.set("combat_spear_range_m", 3.2)
+	surround_player.set("combat_socket_radius", 1.7)
+	surround_player.set("combat_socket_arrival_radius", 0.32)
+	surround_player.set("combat_slot_follow_speed", 1.0)
+	surround_player.set("combat_max_attackers_per_target", 4)
+	surround_player.set("combat_attacker_updates_per_tick", 8)
+	surround_player.set("combat_target_assignment_budget_per_tick", 8)
+	surround_player.set("combat_rebalance_interval", 0.05)
+	surround_player.set("combat_logic_interval", 0.0)
+	surround_player.set("attack_interval", 0.08)
+	surround_player.set("base_soldier_damage", 2.0)
+	surround_player.set("soldier_damage_variance", 0.0)
+	surround_player.set("attack_engagement_delay", 0.0)
+	surround_enemy.set("soldier_count", 1)
+	surround_enemy.set("formation_columns", 1)
+	surround_enemy.set("defensive_engagement_range_m", 24.0)
+	surround_enemy.set("combat_spear_range_m", 3.2)
+	surround_enemy.set("base_soldier_strength", 1000.0)
+	surround_enemy.set("soldier_strength_variance", 0.0)
+	surround_enemy.set("base_soldier_damage", 0.1)
+	surround_enemy.set("soldier_damage_variance", 0.0)
+	surround_enemy.set("defensive_engagement_delay", 0.0)
+	root.add_child(surround_player)
+	root.add_child(surround_enemy)
+	await _wait_frames(8)
+	var surround_attackers := _get_active_soldier_nodes(surround_player)
+	var surround_defenders := _get_active_soldier_nodes(surround_enemy)
+	if surround_attackers.size() < 4 or surround_defenders.is_empty():
+		failures.append("four-surround combat setup did not spawn expected active soldiers")
+	else:
+		var surround_defender := surround_defenders[0] as Node3D
+		surround_defender.global_position = Vector3(34.0, 0.0, 88.0)
+		var surround_offsets := [
+			Vector3(2.35, 0.0, 0.0),
+			Vector3(0.0, 0.0, -2.35),
+			Vector3(0.0, 0.0, 2.35),
+			Vector3(-2.35, 0.0, 0.0),
+		]
+		for index: int in range(4):
+			var surround_attacker := surround_attackers[index] as Node3D
+			surround_attacker.global_position = surround_defender.global_position + surround_offsets[index]
+		var defender_strength_before := _get_soldier_strength(surround_defender)
+		if not bool(surround_player.call("command_attack_troop", surround_enemy)):
+			failures.append("four-surround combat setup rejected attack command")
+		else:
+			await _wait_frames(12)
+			var fighting_count := 0
+			var animated_count := 0
+			for index: int in range(4):
+				var surround_attacker := surround_attackers[index]
+				var relation: Dictionary = surround_player.call("get_combat_target_relation_for_soldier", surround_attacker) as Dictionary
+				if StringName(relation.get("status", &"")) == &"fighting":
+					fighting_count += 1
+				if surround_attacker.has_method("is_formation_attacking") and bool(surround_attacker.call("is_formation_attacking")):
+					animated_count += 1
+			var surround_summary := _get_summary(surround_player)
+			if fighting_count != 4:
+				failures.append("four attackers surrounding one defender should all report fighting status; got %d" % fighting_count)
+			if animated_count != 4:
+				failures.append("four attackers surrounding one defender should all use fighting animation; got %d" % animated_count)
+			await _wait_frames(36)
+			surround_summary = _get_summary(surround_player)
+			if int(surround_summary.get("combat_visual_thrust_count", 0)) < 4:
+				failures.append("four attackers surrounding one defender should all produce attack thrusts")
+			var defender_survived := is_instance_valid(surround_defender)
+			var defender_strength_after := _get_soldier_strength(surround_defender) if defender_survived else -INF
+			if defender_survived and defender_strength_after >= defender_strength_before:
+				failures.append("four-surround fighting did not deal damage to the defender")
+			if defender_survived:
+				var stability_metrics := await _sample_surround_combat_stability(
+					surround_player,
+					surround_attackers.slice(0, 4),
+					surround_defender,
+					360
+				)
+				_print_metrics("four_surround_stability", stability_metrics)
+				if int(stability_metrics.get("min_fighting_count", 0)) < 4:
+					failures.append(
+						"four-surround combat dropped fighting status during sustained combat; min=%d"
+						% int(stability_metrics.get("min_fighting_count", 0))
+					)
+				if int(stability_metrics.get("min_animated_count", 0)) < 4:
+					failures.append(
+						"four-surround combat dropped fighting animation during sustained combat; min=%d"
+						% int(stability_metrics.get("min_animated_count", 0))
+					)
+				if int(stability_metrics.get("thrust_delta", 0)) < 4:
+					failures.append("four-surround combat stopped producing attack thrusts during sustained combat")
+				if float(stability_metrics.get("strength_delta", 0.0)) <= 0.0:
+					failures.append("four-surround combat stopped dealing damage during sustained combat")
+
+	_free_test_node(surround_player)
+	_free_test_node(surround_enemy)
+
 	var regrouper := _make_troop(&"idle_regrouper", &"player", Vector3(24.0, 0.0, 72.0), movement_map)
 	regrouper.set("soldier_count", 48)
 	regrouper.set("formation_columns", 8)
@@ -408,6 +688,57 @@ func _sample_idle_independent_regroup(troop: Node, frame_count: int) -> Dictiona
 	}
 
 
+func _sample_surround_combat_stability(
+	troop: Node,
+	attackers: Array,
+	defender: Node3D,
+	frame_count: int
+) -> Dictionary:
+	var min_fighting_count := attackers.size()
+	var min_animated_count := attackers.size()
+	var first_strength := _get_soldier_strength(defender)
+	var first_summary := _get_summary(troop)
+	var first_thrust_count := int(first_summary.get("combat_visual_thrust_count", 0))
+	var final_strength := first_strength
+	var final_thrust_count := first_thrust_count
+	var sampled_windows := 0
+	for frame_index: int in range(frame_count):
+		await _wait_frames(1)
+		if not is_instance_valid(defender):
+			break
+		if frame_index % 30 != 29:
+			continue
+		sampled_windows += 1
+		var fighting_count := 0
+		var animated_count := 0
+		for attacker_variant: Variant in attackers:
+			if typeof(attacker_variant) != TYPE_OBJECT or not is_instance_valid(attacker_variant):
+				continue
+			var attacker := attacker_variant as Node
+			if not attacker:
+				continue
+			var relation: Dictionary = troop.call("get_combat_target_relation_for_soldier", attacker) as Dictionary
+			if StringName(relation.get("status", &"")) == &"fighting":
+				fighting_count += 1
+			if attacker.has_method("is_formation_attacking") and bool(attacker.call("is_formation_attacking")):
+				animated_count += 1
+		min_fighting_count = mini(min_fighting_count, fighting_count)
+		min_animated_count = mini(min_animated_count, animated_count)
+		final_strength = _get_soldier_strength(defender)
+		final_thrust_count = int(_get_summary(troop).get("combat_visual_thrust_count", 0))
+	return {
+		"sampled_windows": sampled_windows,
+		"min_fighting_count": min_fighting_count,
+		"min_animated_count": min_animated_count,
+		"strength_delta": first_strength - final_strength,
+		"thrust_delta": final_thrust_count - first_thrust_count,
+		"final_strength": final_strength,
+		"final_thrust_count": final_thrust_count,
+		"state": String(_get_summary(troop).get("state", &"")),
+		"assigned_count": int(_get_summary(troop).get("combat_assigned_target_count", 0)),
+	}
+
+
 func _assert_active_render_sync(label: String, metrics: Dictionary, failures: Array[String]) -> void:
 	var skips := int(metrics.get("render_sync_skips", 0))
 	if skips > 0 and label != "moving" and int(metrics.get("render_sync_count", 0)) <= 0:
@@ -483,10 +814,45 @@ func _get_soldier_positions(troop: Node) -> Dictionary:
 	return positions
 
 
+func _get_soldier_nodes(troop: Node) -> Array[Node]:
+	var nodes: Array[Node] = []
+	var soldiers := troop.get_node_or_null("Soldiers") if troop else null
+	if not soldiers:
+		return nodes
+	for soldier: Node in soldiers.get_children():
+		nodes.append(soldier)
+	return nodes
+
+
+func _get_active_soldier_nodes(troop: Node) -> Array[Node]:
+	var active: Array[Node] = []
+	for soldier: Node in _get_soldier_nodes(troop):
+		if soldier.has_method("is_combat_active"):
+			if bool(soldier.call("is_combat_active")):
+				active.append(soldier)
+		elif soldier.has_method("is_alive"):
+			if bool(soldier.call("is_alive")):
+				active.append(soldier)
+		else:
+			active.append(soldier)
+	return active
+
+
 func _is_soldier_alive(soldier: Node) -> bool:
 	if soldier.has_method("is_alive"):
 		return bool(soldier.call("is_alive"))
 	return true
+
+
+func _get_soldier_strength(soldier: Node) -> float:
+	if not soldier:
+		return 0.0
+	if soldier.has_method("get_combat_summary"):
+		var summary: Dictionary = soldier.call("get_combat_summary") as Dictionary
+		return float(summary.get("strength", 0.0))
+	if soldier.has_method("get_strength"):
+		return float(soldier.call("get_strength"))
+	return 0.0
 
 
 func _count_independent_motions(troop: Node) -> int:

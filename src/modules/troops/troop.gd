@@ -496,6 +496,8 @@ const MISSION_COMPLETE := &"complete"
 @export_range(0.2, 16.0, 0.05, "or_greater") var combat_socket_radius: float = 1.75
 @export_range(0.05, 4.0, 0.05, "or_greater") var combat_socket_arrival_radius: float = 0.65
 @export_range(0.05, 10.0, 0.05, "or_greater") var chase_repath_interval: float = 0.75
+@export_range(1.0, 4.0, 0.05, "or_greater") var combat_engagement_break_range_multiplier: float = 1.45
+@export_range(0.0, 5.0, 0.05, "or_greater") var combat_engagement_break_grace_seconds: float = 1.0
 @export_range(0.0, 10.0, 0.05, "or_greater") var rest_engagement_delay: float = 2.5
 @export_range(0.0, 10.0, 0.05, "or_greater") var training_engagement_delay: float = 2.0
 @export_range(0.0, 10.0, 0.05, "or_greater") var defensive_engagement_delay: float = 0.25
@@ -720,6 +722,7 @@ var _engagement_windup_remaining := 0.0
 var _engagement_zone_check_remaining := 0.0
 var _engagement_zone_cached_enemy_id := 0
 var _engagement_zone_cached_result := false
+var _combat_engagement_break_grace_remaining := 0.0
 var _combat_action_remaining := 0.0
 var _last_target_instance_id := 0
 var _combat_logic_accumulator := 0.0
@@ -2457,12 +2460,13 @@ func _get_nearby_deserter_troops() -> Array[Node]:
 	if not tree:
 		return deserters
 	for node: Node in tree.get_nodes_in_group(&"deserter_troops"):
-		if node == self or not (node is Node3D) or node.is_queued_for_deletion():
+		var spatial := _as_valid_node3d(node)
+		if not spatial or spatial == self or spatial.is_queued_for_deletion():
 			continue
-		if node.has_method("is_defeated") and bool(node.call("is_defeated")):
+		if spatial.has_method("is_defeated") and bool(spatial.call("is_defeated")):
 			continue
-		if global_position.distance_to((node as Node3D).global_position) <= maxf(deserter_persuasion_range_m, 0.1):
-			deserters.append(node)
+		if global_position.distance_to(spatial.global_position) <= maxf(deserter_persuasion_range_m, 0.1):
+			deserters.append(spatial)
 	return deserters
 
 
@@ -2937,10 +2941,10 @@ func _get_distance_to_attack_zone(world_position: Vector3, range_override: float
 	return sqrt(dx * dx + dz * dz) - float(bounds.get("range", 0.0))
 
 
-func _is_enemy_inside_engagement_zone(enemy: Node) -> bool:
+func _is_enemy_inside_engagement_zone(enemy: Node, range_override: float = -1.0) -> bool:
 	if not _is_valid_enemy(enemy):
 		return false
-	var bounds := _get_attack_zone_bounds()
+	var bounds := _get_attack_zone_bounds(range_override)
 	if bounds.is_empty():
 		return false
 	var inverse := global_transform.affine_inverse()
@@ -2976,10 +2980,44 @@ func _is_enemy_inside_engagement_zone_cached(enemy: Node, delta: float) -> bool:
 	return _engagement_zone_cached_result
 
 
+func _should_continue_engagement(enemy: Node, enemy_in_engagement_zone: bool, delta: float) -> bool:
+	if enemy_in_engagement_zone:
+		_combat_engagement_break_grace_remaining = maxf(combat_engagement_break_grace_seconds, 0.0)
+		return true
+
+	var combat_committed := _state == STATE_FIGHTING or _was_in_combat or _combat_scatter_active
+	if not combat_committed:
+		_combat_engagement_break_grace_remaining = 0.0
+		return false
+
+	if _is_enemy_inside_engagement_zone(enemy, _get_combat_engagement_break_range_m()):
+		_combat_engagement_break_grace_remaining = maxf(combat_engagement_break_grace_seconds, 0.0)
+		return true
+
+	_combat_engagement_break_grace_remaining = maxf(
+		_combat_engagement_break_grace_remaining - maxf(delta, 0.0),
+		0.0
+	)
+	return _combat_engagement_break_grace_remaining > 0.0
+
+
+func _get_combat_engagement_break_range_m() -> float:
+	var engagement_range := _get_mode_engagement_range()
+	var spacing_margin := maxf(
+		maxf(combat_spear_range_m, combat_socket_radius) * 2.0,
+		maxf(formation_spacing, 0.5)
+	)
+	return maxf(
+		engagement_range * maxf(combat_engagement_break_range_multiplier, 1.0),
+		engagement_range + spacing_margin
+	)
+
+
 func _get_enemy_attack_sample_points(enemy: Node) -> PackedVector3Array:
 	var points := PackedVector3Array()
-	if enemy and enemy.has_method("get_engagement_sample_points"):
-		var engagement_value: Variant = enemy.call("get_engagement_sample_points")
+	var enemy_node := _as_valid_node(enemy)
+	if enemy_node and enemy_node.has_method("get_engagement_sample_points"):
+		var engagement_value: Variant = enemy_node.call("get_engagement_sample_points")
 		if engagement_value is PackedVector3Array:
 			for point: Vector3 in engagement_value:
 				points.append(point)
@@ -2987,8 +3025,8 @@ func _get_enemy_attack_sample_points(enemy: Node) -> PackedVector3Array:
 			for point_variant: Variant in engagement_value as Array:
 				if point_variant is Vector3:
 					points.append(point_variant as Vector3)
-	if points.is_empty() and enemy and enemy.has_method("get_active_soldier_world_positions"):
-		var value: Variant = enemy.call("get_active_soldier_world_positions")
+	if points.is_empty() and enemy_node and enemy_node.has_method("get_active_soldier_world_positions"):
+		var value: Variant = enemy_node.call("get_active_soldier_world_positions")
 		if value is PackedVector3Array:
 			for point: Vector3 in value:
 				points.append(point)
@@ -2996,8 +3034,9 @@ func _get_enemy_attack_sample_points(enemy: Node) -> PackedVector3Array:
 			for point_variant: Variant in value as Array:
 				if point_variant is Vector3:
 					points.append(point_variant as Vector3)
-	if enemy is Node3D:
-		points.append((enemy as Node3D).global_position)
+	var enemy_spatial := _as_valid_node3d(enemy_node)
+	if enemy_spatial:
+		points.append(enemy_spatial.global_position)
 	return points
 
 
@@ -4328,11 +4367,12 @@ func get_combat_target_relation_for_soldier(soldier: Node) -> Dictionary:
 	if key <= 0:
 		return {}
 	var target_variant: Variant = _combat_soldier_targets.get(key)
-	if not is_instance_valid(target_variant):
+	var target := _as_valid_node3d(target_variant)
+	if not target:
 		return {}
 	return {
-		"target": target_variant,
-		"status": _get_combat_relation_status_by_key(key, target_variant as Node3D),
+		"target": target,
+		"status": _get_combat_relation_status_by_key(key, target),
 	}
 
 
@@ -4340,25 +4380,28 @@ func get_combat_attackers_targeting_soldier(target: Node) -> Array[Dictionary]:
 	var target_id := _get_valid_node_instance_id(target)
 	if target_id <= 0:
 		return []
+	var target_spatial := _as_valid_node3d(target)
+	if not target_spatial:
+		return []
 	var attackers_variant: Variant = _combat_target_attackers.get(target_id)
 	if not (attackers_variant is Dictionary):
 		return []
 	var attackers := attackers_variant as Dictionary
 	var relationships: Array[Dictionary] = []
 	for attacker_key: Variant in attackers.keys():
-		var attacker := _get_node_from_instance_id_key(attacker_key)
-		if not (attacker is Node3D) or not _is_soldier_active(attacker):
+		var attacker := _as_valid_node3d(_get_node_from_instance_id_key(attacker_key))
+		if not attacker or not _is_soldier_active(attacker):
 			continue
 		relationships.append({
 			"attacker": attacker,
-			"status": _get_combat_relation_status_by_key(attacker_key, target as Node3D),
+			"status": _get_combat_relation_status_by_key(attacker_key, target_spatial),
 		})
 	return relationships
 
 
 func get_combat_fighting_attacker_targeting(target: Node) -> Node3D:
-	var target_spatial := target as Node3D
-	if not is_instance_valid(target_spatial):
+	var target_spatial := _as_valid_node3d(target)
+	if not target_spatial:
 		return null
 	var target_id := target_spatial.get_instance_id()
 	var attackers_variant: Variant = _combat_target_attackers.get(target_id)
@@ -4370,7 +4413,7 @@ func get_combat_fighting_attacker_targeting(target: Node) -> Node3D:
 	for attacker_key: Variant in attackers.keys():
 		if _get_combat_relation_status_by_key(attacker_key, target_spatial) != COMBAT_RELATION_FIGHTING:
 			continue
-		var attacker := _get_node_from_instance_id_key(attacker_key) as Node3D
+		var attacker := _as_valid_node3d(_get_node_from_instance_id_key(attacker_key))
 		if not attacker or not _is_soldier_active(attacker):
 			continue
 		var distance_squared := attacker.global_position.distance_squared_to(target_spatial.global_position)
@@ -4456,13 +4499,13 @@ func _update_combat_debug_lines() -> void:
 func _add_combat_debug_line_surface(immediate: ImmediateMesh, status_filter: StringName, material: Material) -> void:
 	var began_surface := false
 	for key: Variant in _combat_soldier_targets.keys():
-		var attacker_node := _get_node_from_instance_id_key(key)
-		if not (attacker_node is Node3D) or not _is_soldier_active(attacker_node):
+		var attacker_node := _as_valid_node3d(_get_node_from_instance_id_key(key))
+		if not attacker_node or not _is_soldier_active(attacker_node):
 			continue
 		var defender_variant: Variant = _combat_soldier_targets.get(key)
-		if not is_instance_valid(defender_variant) or not (defender_variant is Node3D):
+		var defender := _as_valid_node3d(defender_variant)
+		if not defender:
 			continue
-		var defender := defender_variant as Node3D
 		if not defender.is_inside_tree():
 			continue
 		var status := _get_combat_relation_status_by_key(key, defender)
@@ -4471,7 +4514,7 @@ func _add_combat_debug_line_surface(immediate: ImmediateMesh, status_filter: Str
 		if not began_surface:
 			immediate.surface_begin(Mesh.PRIMITIVE_LINES, material)
 			began_surface = true
-		var start := (attacker_node as Node3D).global_position
+		var start := attacker_node.global_position
 		var end := defender.global_position
 		start.y += maxf(combat_debug_line_height, 0.0)
 		end.y += maxf(combat_debug_line_height, 0.0)
@@ -4986,6 +5029,7 @@ func _update_combat_ai(delta: float) -> void:
 		_combat_action_remaining = 0.0
 		_combat_logic_accumulator = 0.0
 		_combat_target_reassign_remaining = 0.0
+		_combat_engagement_break_grace_remaining = 0.0
 		_clear_independent_combat(true)
 		if _state == STATE_FIGHTING:
 			_set_state(STATE_IDLE)
@@ -4993,16 +5037,38 @@ func _update_combat_ai(delta: float) -> void:
 
 	if _manual_move_override_active and _state == STATE_MOVING:
 		_manual_attack_target = null
-		_active_enemy = null
-		_was_in_combat = false
-		_combat_action_remaining = 0.0
-		_combat_logic_accumulator = 0.0
-		_engagement_zone_cached_enemy_id = 0
-		_engagement_zone_cached_result = false
-		return
+		var immediate_enemy := _find_enemy_inside_engagement_zone()
+		if immediate_enemy:
+			_active_enemy = immediate_enemy
+		_combat_scan_remaining -= delta
+		if _combat_scan_remaining <= 0.0:
+			_combat_scan_remaining = maxf(combat_scan_interval, 0.05)
+			_refresh_active_enemy()
+		if _is_valid_enemy(_active_enemy) and _is_enemy_inside_engagement_zone_cached(_active_enemy, delta):
+			_path_points.clear()
+			_current_path_index = 0
+			_has_destination = false
+			_manual_move_override_active = false
+			_regroup_scattered_positions_on_move = false
+			_clear_formation_motion_commands()
+			_clear_route_visual()
+			_set_state(STATE_IDLE)
+			_emit_destination_changed()
+		else:
+			_active_enemy = null
+			_was_in_combat = false
+			_combat_action_remaining = 0.0
+			_combat_logic_accumulator = 0.0
+			_combat_engagement_break_grace_remaining = 0.0
+			_engagement_zone_cached_enemy_id = 0
+			_engagement_zone_cached_result = false
+			return
 
-	var manual_attack_active := _is_valid_enemy(_manual_attack_target)
-	if manual_attack_active:
+	var manual_attack_valid := _is_valid_enemy(_manual_attack_target)
+	var immediate_enemy := _find_enemy_inside_engagement_zone()
+	if immediate_enemy:
+		_active_enemy = immediate_enemy
+	elif manual_attack_valid:
 		_active_enemy = _manual_attack_target
 	else:
 		_manual_attack_target = null
@@ -5010,8 +5076,11 @@ func _update_combat_ai(delta: float) -> void:
 		if _combat_scan_remaining <= 0.0:
 			_combat_scan_remaining = maxf(combat_scan_interval, 0.05)
 			_refresh_active_enemy()
+	if immediate_enemy:
+		_combat_scan_remaining = maxf(combat_scan_interval, 0.05)
 
 	var enemy := _active_enemy
+	var active_enemy_is_manual_attack := manual_attack_valid and enemy == _manual_attack_target
 	if not _is_valid_enemy(enemy):
 		_active_enemy = null
 		if enemy == _manual_attack_target:
@@ -5021,6 +5090,7 @@ func _update_combat_ai(delta: float) -> void:
 		if _was_in_combat or _combat_scatter_active:
 			_clear_independent_combat(true)
 		_was_in_combat = false
+		_combat_engagement_break_grace_remaining = 0.0
 		if _state == STATE_FIGHTING:
 			_set_state(STATE_IDLE)
 		return
@@ -5038,16 +5108,33 @@ func _update_combat_ai(delta: float) -> void:
 		_combat_target_reassign_remaining = 0.0
 		_engagement_zone_check_remaining = 0.0
 		_engagement_zone_cached_result = false
+		_combat_engagement_break_grace_remaining = 0.0
 	else:
 		_engagement_windup_remaining = maxf(_engagement_windup_remaining - delta, 0.0)
 
-	var enemy_in_engagement_zone := _is_enemy_inside_engagement_zone_cached(enemy, delta)
+	var enemy_in_engagement_zone := _should_continue_engagement(
+		enemy,
+		_is_enemy_inside_engagement_zone_cached(enemy, delta),
+		delta
+	)
 	var should_chase := _should_chase_active_enemy(enemy, enemy_in_engagement_zone)
 	if should_chase and not enemy_in_engagement_zone:
 		_chase_repath_remaining -= delta
 		if _chase_repath_remaining <= 0.0:
 			_chase_repath_remaining = maxf(chase_repath_interval, 0.05)
-			_repath_to_attack_target(enemy)
+			var was_committed_to_combat := _state == STATE_FIGHTING or _was_in_combat or _combat_scatter_active
+			if not _repath_to_attack_target(enemy) and not active_enemy_is_manual_attack and not was_committed_to_combat:
+				_active_enemy = null
+				_was_in_combat = false
+				_combat_action_remaining = 0.0
+				_combat_logic_accumulator = 0.0
+				_combat_engagement_break_grace_remaining = 0.0
+				_engagement_zone_cached_enemy_id = 0
+				_engagement_zone_cached_result = false
+				_clear_independent_combat(true)
+				if _state == STATE_BLOCKED:
+					_set_state(STATE_IDLE)
+				return
 
 	var can_fight := enemy_in_engagement_zone and _engagement_windup_remaining <= 0.0
 	if can_fight:
@@ -5075,6 +5162,7 @@ func _update_combat_ai(delta: float) -> void:
 		_clear_independent_combat(true)
 		_was_in_combat = false
 		_combat_logic_accumulator = 0.0
+		_combat_engagement_break_grace_remaining = 0.0
 		_set_state(STATE_IDLE)
 
 
@@ -5084,7 +5172,7 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 	var defenders := _get_enemy_active_soldiers(enemy)
 	var perf_after_collect := Time.get_ticks_usec() if troop_perf_monitoring_enabled else 0
 	if attackers.is_empty() or defenders.is_empty():
-		_clear_independent_combat(true)
+		_end_combat_with_inactive_target(enemy)
 		return
 
 	var combat_attackers := attackers
@@ -5120,10 +5208,9 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 	var update_start := clampi(_combat_update_cursor, 0, maxi(attacker_count - 1, 0))
 	for offset_index: int in range(update_limit):
 		var index := (update_start + offset_index) % attacker_count
-		var attacker := combat_attackers[index]
-		if not (attacker is Node3D):
+		var attacker_spatial := _as_valid_node3d(combat_attackers[index])
+		if not attacker_spatial:
 			continue
-		var attacker_spatial := attacker as Node3D
 		var defender := _get_assigned_combat_target(attacker_spatial, defenders, _combat_defender_ids)
 		if not defender:
 			continue
@@ -5165,23 +5252,23 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 				_lock_combat_soldier(attacker_spatial, defender)
 				locked = true
 
-		if attacker.has_method("set_combat_focus_target"):
-			attacker.call("set_combat_focus_target", defender)
+		if attacker_spatial.has_method("set_combat_focus_target"):
+			attacker_spatial.call("set_combat_focus_target", defender)
 		_face_soldier_toward(attacker_spatial, defender, delta)
 		_set_combat_relation_status(attacker_spatial, defender, _get_combat_relation_status_for_pair(attacker_spatial, defender))
 		var settled_in_combat := _is_combat_pair_actively_fighting(attacker_spatial, defender)
-		if attacker.has_method("set_independent_combat"):
-			attacker.call("set_independent_combat", settled_in_combat, defender if settled_in_combat else null, settled_in_combat)
-		elif attacker.has_method("set_formation_attacking"):
-			attacker.call("set_formation_attacking", settled_in_combat, defender if settled_in_combat else null)
-		_mark_soldier_combat_touched(attacker)
+		if attacker_spatial.has_method("set_independent_combat"):
+			attacker_spatial.call("set_independent_combat", settled_in_combat, defender if settled_in_combat else null, settled_in_combat)
+		elif attacker_spatial.has_method("set_formation_attacking"):
+			attacker_spatial.call("set_formation_attacking", settled_in_combat, defender if settled_in_combat else null)
+		_mark_soldier_combat_touched(attacker_spatial)
 
 		if locked or settled_in_combat:
 			_face_passive_defender_toward_attacker(defender, attacker_spatial, delta)
 		if settled_in_combat:
-			_update_soldier_attack(attacker, defender, delta)
+			_update_soldier_attack(attacker_spatial, defender, delta)
 		else:
-			_reset_soldier_attack_delay(attacker)
+			_reset_soldier_attack_delay(attacker_spatial)
 	_enforce_combat_target_capacity(combat_attackers, defenders, _combat_defender_spatial_index, _combat_defender_ids)
 	_combat_update_cursor = (update_start + update_limit) % attacker_count
 	_separation_pair_checks_remaining = -1
@@ -5199,28 +5286,45 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 		_perf_max_combat_tick_usec = maxi(_perf_max_combat_tick_usec, _perf_last_combat_tick_usec)
 
 
+func _end_combat_with_inactive_target(enemy: Node) -> void:
+	if enemy == _active_enemy:
+		_active_enemy = null
+	if enemy == _manual_attack_target:
+		_manual_attack_target = null
+	_last_target_instance_id = 0
+	_engagement_zone_cached_enemy_id = 0
+	_engagement_zone_cached_result = false
+	_combat_engagement_break_grace_remaining = 0.0
+	_was_in_combat = false
+	_clear_independent_combat(true)
+	if _state == STATE_FIGHTING:
+		_set_state(STATE_IDLE)
+
+
 func _get_frontline_sorted_combat_attackers(attackers: Array[Node], enemy: Node) -> Array[Node]:
-	if attackers.size() <= 1 or not (enemy is Node3D):
+	var enemy_spatial := _as_valid_node3d(enemy)
+	if attackers.size() <= 1 or not enemy_spatial:
 		return attackers
-	_combat_frontline_sort_position = (enemy as Node3D).global_position
+	_combat_frontline_sort_position = enemy_spatial.global_position
 	var sorted: Array[Node] = attackers.duplicate()
 	sorted.sort_custom(Callable(self, "_compare_combat_frontline_attackers"))
 	return sorted
 
 
 func _get_frontline_combat_attackers_for_tick(attackers: Array[Node], enemy: Node, limit: int) -> Array[Node]:
-	if attackers.size() <= 1 or limit <= 0 or attackers.size() <= limit or not (enemy is Node3D):
+	var enemy_spatial := _as_valid_node3d(enemy)
+	if attackers.size() <= 1 or limit <= 0 or attackers.size() <= limit or not enemy_spatial:
 		return _get_frontline_sorted_combat_attackers(attackers, enemy)
-	var enemy_position := (enemy as Node3D).global_position
+	var enemy_position := enemy_spatial.global_position
 	var selected: Array[Node] = []
 	var scores: Array[float] = []
 	var safe_limit := mini(maxi(limit, 1), attackers.size())
-	for attacker: Node in attackers:
-		if not (attacker is Node3D):
+	for attacker_variant: Variant in attackers:
+		var spatial := _as_valid_node3d(attacker_variant)
+		if not spatial:
 			continue
-		var spatial := attacker as Node3D
 		var target_variant: Variant = _combat_soldier_targets.get(spatial.get_instance_id())
-		var sticky_bonus := 1000000000.0 if is_instance_valid(target_variant) else 0.0
+		var sticky_bonus := 1000000000.0 if _as_valid_node3d(target_variant) else 0.0
 		var score := spatial.global_position.distance_squared_to(enemy_position) - sticky_bonus
 		score += float(spatial.get_instance_id() % 1024) * 0.000001
 		var insert_at := selected.size()
@@ -5237,12 +5341,12 @@ func _get_frontline_combat_attackers_for_tick(attackers: Array[Node], enemy: Nod
 
 
 func _compare_combat_frontline_attackers(a: Node, b: Node) -> bool:
-	if not (a is Node3D):
+	var a_spatial := _as_valid_node3d(a)
+	if not a_spatial:
 		return false
-	if not (b is Node3D):
+	var b_spatial := _as_valid_node3d(b)
+	if not b_spatial:
 		return true
-	var a_spatial := a as Node3D
-	var b_spatial := b as Node3D
 	var a_score := a_spatial.global_position.distance_squared_to(_combat_frontline_sort_position)
 	var b_score := b_spatial.global_position.distance_squared_to(_combat_frontline_sort_position)
 	if is_equal_approx(a_score, b_score):
@@ -5321,8 +5425,9 @@ func _build_node_id_set(nodes: Array[Node]) -> Dictionary:
 func _build_node_id_set_into(nodes: Array, ids: Dictionary) -> void:
 	ids.clear()
 	for node: Variant in nodes:
-		if node is Node and is_instance_valid(node):
-			ids[(node as Node).get_instance_id()] = true
+		var valid_node := _as_valid_node(node)
+		if valid_node:
+			ids[valid_node.get_instance_id()] = true
 
 
 func _prune_combat_assignments(attacker_ids: Dictionary, defender_ids: Dictionary) -> void:
@@ -5381,27 +5486,28 @@ func _assign_combat_targets_budgeted(
 	while visited < attackers.size() and processed < budget:
 		var index := (start + visited) % attackers.size()
 		visited += 1
-		var attacker := attackers[index]
-		if not (attacker is Node3D):
+		var attacker := _as_valid_node3d(attackers[index])
+		if not attacker:
 			continue
 		processed += 1
 		var key := attacker.get_instance_id()
 		var existing_target: Variant = _combat_soldier_targets.get(key)
-		var existing_valid := is_instance_valid(existing_target) and defender_ids.has(_get_valid_node_instance_id(existing_target))
+		var existing_target_spatial := _as_valid_node3d(existing_target)
+		var existing_valid := existing_target_spatial != null and defender_ids.has(existing_target_spatial.get_instance_id())
 		if (
 			existing_valid
-			and _should_keep_combat_assignment(attacker as Node3D, existing_target as Node3D, load_by_defender, force_rebalance)
+			and _should_keep_combat_assignment(attacker, existing_target_spatial, load_by_defender, force_rebalance)
 		):
 			continue
 		if not existing_valid and current_assignments >= active_assignment_limit:
 			continue
 		if existing_valid:
-			var existing_id := _get_valid_node_instance_id(existing_target)
+			var existing_id := existing_target_spatial.get_instance_id()
 			load_by_defender[existing_id] = maxi(int(load_by_defender.get(existing_id, 0)) - 1, 0)
 			current_assignments = maxi(current_assignments - 1, 0)
 		_release_combat_assignment(key)
 		var best_target := _find_best_combat_target(
-			attacker as Node3D,
+			attacker,
 			defenders,
 			load_by_defender,
 			defender_index,
@@ -5410,14 +5516,14 @@ func _assign_combat_targets_budgeted(
 		)
 		if not best_target and defender_index and use_underloaded_fallback:
 			best_target = _find_sampled_underloaded_combat_target(
-				attacker as Node3D,
+				attacker,
 				_combat_underloaded_defender_buffer,
 				load_by_defender
 			)
 		var defender_capacity := defenders.size() * maxi(combat_max_attackers_per_target, 1)
 		if not best_target and active_assignment_limit > defender_capacity:
 			best_target = _find_best_combat_target(
-				attacker as Node3D,
+				attacker,
 				defenders,
 				load_by_defender,
 				defender_index,
@@ -5425,7 +5531,7 @@ func _assign_combat_targets_budgeted(
 				true
 			)
 		if best_target:
-			_assign_combat_target_to_soldier(attacker as Node3D, best_target, load_by_defender)
+			_assign_combat_target_to_soldier(attacker, best_target, load_by_defender)
 			current_assignments += 1
 	_combat_assignment_cursor = (start + maxi(visited, 1)) % attackers.size()
 	_enforce_combat_target_capacity(attackers, defenders, defender_index, defender_ids)
@@ -5444,21 +5550,23 @@ func _assign_combat_targets(
 ) -> void:
 	var load_by_defender := _combat_target_loads
 	_get_combat_target_loads_into(defenders, load_by_defender)
-	for attacker: Node in attackers:
-		if not (attacker is Node3D):
+	for attacker_variant: Variant in attackers:
+		var attacker_spatial := _as_valid_node3d(attacker_variant)
+		if not attacker_spatial:
 			continue
-		var key := attacker.get_instance_id()
+		var key := attacker_spatial.get_instance_id()
 		var existing_target: Variant = _combat_soldier_targets.get(key)
+		var existing_target_spatial := _as_valid_node3d(existing_target)
 		if (
-			is_instance_valid(existing_target)
-			and defender_ids.has(_get_valid_node_instance_id(existing_target))
-			and _should_keep_combat_assignment(attacker as Node3D, existing_target as Node3D, load_by_defender, false)
+			existing_target_spatial != null
+			and defender_ids.has(existing_target_spatial.get_instance_id())
+			and _should_keep_combat_assignment(attacker_spatial, existing_target_spatial, load_by_defender, false)
 		):
 			continue
 		_release_combat_assignment(key)
-		var best_target := _find_best_combat_target(attacker as Node3D, defenders, load_by_defender, defender_index)
+		var best_target := _find_best_combat_target(attacker_spatial, defenders, load_by_defender, defender_index)
 		if best_target:
-			_assign_combat_target_to_soldier(attacker as Node3D, best_target, load_by_defender)
+			_assign_combat_target_to_soldier(attacker_spatial, best_target, load_by_defender)
 	_enforce_combat_target_capacity(attackers, defenders, defender_index, defender_ids)
 
 
@@ -5477,10 +5585,10 @@ func _enforce_combat_target_capacity(
 	var load_by_defender := _combat_target_loads
 	_get_combat_target_loads_into(defenders, load_by_defender)
 	var attackers_by_defender := {}
-	for attacker_node: Node in attackers:
-		if not (attacker_node is Node3D):
+	for attacker_node: Variant in attackers:
+		var attacker := _as_valid_node3d(attacker_node)
+		if not attacker:
 			continue
-		var attacker := attacker_node as Node3D
 		var key := attacker.get_instance_id()
 		var target_variant: Variant = _combat_soldier_targets.get(key)
 		var target_id := _get_valid_node_instance_id(target_variant)
@@ -5489,10 +5597,10 @@ func _enforce_combat_target_capacity(
 		var target_attackers: Array = attackers_by_defender.get(target_id, [])
 		target_attackers.append(attacker)
 		attackers_by_defender[target_id] = target_attackers
-	for defender_node: Node in defenders:
-		if not (defender_node is Node3D):
+	for defender_node: Variant in defenders:
+		var defender := _as_valid_node3d(defender_node)
+		if not defender:
 			continue
-		var defender := defender_node as Node3D
 		var defender_id := defender.get_instance_id()
 		var target_attackers: Array = attackers_by_defender.get(defender_id, [])
 		while target_attackers.size() > max_load:
@@ -5514,7 +5622,7 @@ func _pop_farthest_combat_attacker_from_target(attackers: Array, target: Node3D)
 	var best_index := -1
 	var best_distance_squared := -1.0
 	for index: int in range(attackers.size()):
-		var attacker := attackers[index] as Node3D
+		var attacker := _as_valid_node3d(attackers[index])
 		if not attacker:
 			continue
 		var distance_squared := attacker.global_position.distance_squared_to(target.global_position)
@@ -5523,7 +5631,7 @@ func _pop_farthest_combat_attacker_from_target(attackers: Array, target: Node3D)
 			best_index = index
 	if best_index < 0:
 		return null
-	var attacker := attackers[best_index] as Node3D
+	var attacker := _as_valid_node3d(attackers[best_index])
 	attackers.remove_at(best_index)
 	return attacker
 
@@ -5536,7 +5644,10 @@ func _get_combat_target_loads(defenders: Array[Node]) -> Dictionary:
 
 func _get_combat_target_loads_into(defenders: Array, load_by_defender: Dictionary) -> void:
 	load_by_defender.clear()
-	for defender: Node in defenders:
+	for defender_variant: Variant in defenders:
+		var defender := _as_valid_node(defender_variant)
+		if not defender:
+			continue
 		load_by_defender[defender.get_instance_id()] = 0
 	for target_variant: Variant in _combat_soldier_targets.values():
 		if not is_instance_valid(target_variant):
@@ -5556,10 +5667,10 @@ func _get_underloaded_combat_defenders_into(
 ) -> void:
 	out_defenders.clear()
 	var max_load := maxi(combat_max_attackers_per_target, 1)
-	for defender_node: Node in defenders:
-		if not (defender_node is Node3D):
+	for defender_node: Variant in defenders:
+		var defender := _as_valid_node3d(defender_node)
+		if not defender:
 			continue
-		var defender := defender_node as Node3D
 		if int(load_by_defender.get(defender.get_instance_id(), 0)) < max_load:
 			out_defenders.append(defender)
 
@@ -5581,8 +5692,12 @@ func _get_max_combat_target_load() -> int:
 
 func _get_combat_relation_status_count(status: StringName) -> int:
 	var count := 0
-	for stored_status: Variant in _combat_soldier_target_statuses.values():
-		if stored_status is StringName and stored_status == status:
+	for key: Variant in _combat_soldier_targets.keys():
+		var defender_variant: Variant = _combat_soldier_targets.get(key)
+		var defender := _as_valid_node3d(defender_variant)
+		if not defender:
+			continue
+		if _get_combat_relation_status_by_key(key, defender) == status:
 			count += 1
 	return count
 
@@ -5627,12 +5742,22 @@ func _assign_combat_target_to_soldier(attacker: Node3D, defender: Node3D, load_b
 
 
 func _get_valid_node_instance_id(value: Variant) -> int:
-	if not is_instance_valid(value):
-		return 0
-	var node := value as Node
+	var node := _as_valid_node(value)
 	if not node:
 		return 0
 	return node.get_instance_id()
+
+
+func _as_valid_node(value: Variant) -> Node:
+	if typeof(value) != TYPE_OBJECT or not is_instance_valid(value):
+		return null
+	return value as Node
+
+
+func _as_valid_node3d(value: Variant) -> Node3D:
+	if typeof(value) != TYPE_OBJECT or not is_instance_valid(value):
+		return null
+	return value as Node3D
 
 
 func _set_combat_relation_status(attacker: Node3D, defender: Node3D, status: StringName) -> void:
@@ -5671,13 +5796,13 @@ func _get_combat_relation_status_for_pair(attacker: Node3D, defender: Node3D) ->
 
 
 func _get_combat_relation_status_by_key(key: Variant, defender: Node3D = null) -> StringName:
+	if is_instance_valid(defender):
+		var attacker := _as_valid_node3d(_get_node_from_instance_id_key(key))
+		if attacker:
+			return _get_combat_relation_status_for_pair(attacker, defender)
 	var stored: Variant = _combat_soldier_target_statuses.get(key, COMBAT_RELATION_COMING)
 	if stored is StringName:
 		return stored
-	if is_instance_valid(defender):
-		var attacker := _get_node_from_instance_id_key(key) as Node3D
-		if attacker:
-			return _get_combat_relation_status_for_pair(attacker, defender)
 	return COMBAT_RELATION_COMING
 
 
@@ -5702,12 +5827,12 @@ func _find_best_combat_target(
 	var best_target: Node3D
 	var best_score := INF
 	var max_load := maxi(combat_max_attackers_per_target, 1)
-	for defender_node: Node in candidates:
-		if not (defender_node is Node3D):
+	for defender_node: Variant in candidates:
+		var defender := _as_valid_node3d(defender_node)
+		if not defender:
 			continue
 		_combat_perf_target_candidate_scans += 1
 		_combat_perf_target_candidate_scan_window += 1
-		var defender := defender_node as Node3D
 		var defender_id := defender.get_instance_id()
 		var load := int(load_by_defender.get(defender_id, 0))
 		if not allow_overflow and load >= max_load and defender != current_target:
@@ -5797,9 +5922,9 @@ func _get_enemy_fighting_attacker_targeting_soldier(enemy: Node, soldier: Node3D
 	if not is_instance_valid(enemy) or not enemy.has_method("get_combat_fighting_attacker_targeting"):
 		return null
 	var attacker: Variant = enemy.call("get_combat_fighting_attacker_targeting", soldier)
-	if not (attacker is Node3D):
+	var attacker_spatial := _as_valid_node3d(attacker)
+	if not attacker_spatial:
 		return null
-	var attacker_spatial := attacker as Node3D
 	if not _combat_defender_ids.has(attacker_spatial.get_instance_id()):
 		return null
 	if not _is_combat_pair_in_fight_range(soldier, attacker_spatial):
@@ -5821,7 +5946,6 @@ func _force_combat_soldier_to_retaliate(
 			load_by_defender[current_target_id] = maxi(int(load_by_defender.get(current_target_id, 0)) - 1, 0)
 		_release_combat_assignment(key)
 		_assign_combat_target_to_soldier(soldier, forced_target, load_by_defender)
-	_set_combat_relation_status(soldier, forced_target, COMBAT_RELATION_FIGHTING)
 	_lock_combat_soldier(soldier, forced_target)
 	return forced_target
 
@@ -5833,8 +5957,9 @@ func _get_assigned_combat_target(
 ) -> Node3D:
 	var key := attacker.get_instance_id()
 	var target_variant: Variant = _combat_soldier_targets.get(key)
-	if is_instance_valid(target_variant) and defender_ids.has(_get_valid_node_instance_id(target_variant)):
-		return target_variant as Node3D
+	var target := _as_valid_node3d(target_variant)
+	if target and defender_ids.has(target.get_instance_id()):
+		return target
 	_release_combat_assignment(key)
 	return null
 
@@ -5949,11 +6074,11 @@ func _refresh_close_combat_spacing_targets(attackers: Array[Node], attacker_inde
 	var start := clampi(_combat_update_cursor, 0, maxi(attackers.size() - 1, 0))
 	var processed := 0
 	while processed < attackers.size() and _separation_pair_checks_remaining != 0:
-		var attacker_node := attackers[(start + processed) % attackers.size()]
+		var attacker_node := _as_valid_node3d(attackers[(start + processed) % attackers.size()])
 		processed += 1
-		if not (attacker_node is Node3D):
+		if not attacker_node:
 			continue
-		var a := attacker_node as Node3D
+		var a := attacker_node
 		var a_id := a.get_instance_id()
 		_query_spatial_index(
 			attacker_index,
@@ -5981,16 +6106,16 @@ func _refresh_close_combat_spacing_targets(attackers: Array[Node], attacker_inde
 			var distance_squared := separation.length_squared()
 			if distance_squared >= min_distance_squared:
 				continue
-			_request_combat_spacing_target_refresh(a, now_usec)
-			_request_combat_spacing_target_refresh(b, now_usec)
+			_request_combat_spacing_target_refresh(a, now_usec, true)
+			_request_combat_spacing_target_refresh(b, now_usec, true)
 
 
-func _request_combat_spacing_target_refresh(soldier: Node3D, now_usec: int) -> void:
+func _request_combat_spacing_target_refresh(soldier: Node3D, now_usec: int, force: bool = false) -> void:
 	if not is_instance_valid(soldier):
 		return
 	var key := soldier.get_instance_id()
 	var next_refresh_usec := int(_combat_soldier_spacing_refresh_times.get(key, 0))
-	if now_usec < next_refresh_usec:
+	if not force and now_usec < next_refresh_usec:
 		return
 	_combat_soldier_steering_cache.erase(key)
 	_combat_soldier_move_targets.erase(key)
@@ -6062,6 +6187,8 @@ func _is_combat_attack_position_good_enough(attacker: Node3D, defender: Node3D, 
 	)
 	if attacker.global_position.distance_squared_to(socket_position) <= relaxed_radius * relaxed_radius:
 		return true
+	if _is_combat_surround_coverage_good_enough(attacker, defender):
+		return true
 	var from_defender := attacker.global_position - defender.global_position
 	from_defender.y = 0.0
 	var desired_from_defender := socket_position - defender.global_position
@@ -6073,6 +6200,42 @@ func _is_combat_attack_position_good_enough(attacker: Node3D, defender: Node3D, 
 	if direction_alignment >= 0.35 and radial_error <= relaxed_radius:
 		return true
 	return false
+
+
+func _is_combat_surround_coverage_good_enough(attacker: Node3D, defender: Node3D) -> bool:
+	if not is_instance_valid(attacker) or not is_instance_valid(defender):
+		return false
+	if not _is_combat_pair_in_fight_range(attacker, defender):
+		return false
+	var required_slots := mini(maxi(combat_max_attackers_per_target, 1), 4)
+	if required_slots < 3:
+		return false
+	var attacker_in_surround := false
+	var directions: Array[Vector3] = []
+	for key: Variant in _combat_soldier_targets.keys():
+		var target_variant: Variant = _combat_soldier_targets.get(key)
+		var target := _as_valid_node3d(target_variant)
+		if target != defender:
+			continue
+		var soldier := _as_valid_node3d(_get_node_from_instance_id_key(key))
+		if not soldier or not _is_soldier_active(soldier) or not _is_combat_pair_in_fight_range(soldier, defender):
+			continue
+		if soldier == attacker:
+			attacker_in_surround = true
+		var offset := soldier.global_position - defender.global_position
+		offset.y = 0.0
+		if offset.length_squared() <= 0.0001:
+			continue
+		var direction := offset.normalized()
+		var duplicate_direction := false
+		for existing: Vector3 in directions:
+			if direction.dot(existing) > 0.45:
+				duplicate_direction = true
+				break
+		if duplicate_direction:
+			continue
+		directions.append(direction)
+	return attacker_in_surround and directions.size() >= required_slots
 
 
 func _get_budgeted_combat_desired_position(
@@ -6179,7 +6342,7 @@ func _get_soft_separation_offset_from_grids(
 	var ally_limit := maxi(combat_max_separation_neighbors, 1) + 1
 	_get_spatial_neighbors_into(attacker_grid, attacker.global_position, cell_size, ally_limit, _spatial_neighbor_buffer)
 	for ally_node: Node3D in _spatial_neighbor_buffer:
-		if ally_node == attacker or not (ally_node is Node3D):
+		if ally_node == attacker or not is_instance_valid(ally_node):
 			continue
 		offset += _get_pair_separation(attacker, ally_node, soldier_personal_space_radius + soldier_personal_space_radius)
 	_get_spatial_neighbors_into(
@@ -6190,7 +6353,7 @@ func _get_soft_separation_offset_from_grids(
 		_spatial_neighbor_buffer_secondary
 	)
 	for enemy_node: Node3D in _spatial_neighbor_buffer_secondary:
-		if not (enemy_node is Node3D):
+		if not is_instance_valid(enemy_node):
 			continue
 		offset += _get_pair_separation(attacker, enemy_node, soldier_personal_space_radius + enemy_personal_space_radius)
 	var max_offset := maxf(combat_separation_strength, 0.0) * 0.22
@@ -6208,7 +6371,7 @@ func _get_soft_separation_offset_from_indexes(
 	var ally_limit := maxi(combat_max_separation_neighbors, 1) + 1
 	_query_spatial_index(attacker_index, attacker.global_position, ally_limit, _spatial_neighbor_buffer)
 	for ally_node: Node3D in _spatial_neighbor_buffer:
-		if ally_node == attacker or not (ally_node is Node3D):
+		if ally_node == attacker or not is_instance_valid(ally_node):
 			continue
 		offset += _get_pair_separation(attacker, ally_node, soldier_personal_space_radius + soldier_personal_space_radius)
 	_query_spatial_index(
@@ -6218,7 +6381,7 @@ func _get_soft_separation_offset_from_indexes(
 		_spatial_neighbor_buffer_secondary
 	)
 	for enemy_node: Node3D in _spatial_neighbor_buffer_secondary:
-		if not (enemy_node is Node3D):
+		if not is_instance_valid(enemy_node):
 			continue
 		offset += _get_pair_separation(attacker, enemy_node, soldier_personal_space_radius + enemy_personal_space_radius)
 	var max_offset := maxf(combat_separation_strength, 0.0) * 0.22
@@ -6260,9 +6423,9 @@ func _build_spatial_grid_into(nodes: Array, cell_size: float, grid: Dictionary) 
 	grid.clear()
 	var safe_cell_size := maxf(cell_size, 0.1)
 	for node: Variant in nodes:
-		if not (node is Node3D):
+		var spatial := _as_valid_node3d(node)
+		if not spatial:
 			continue
-		var spatial := node as Node3D
 		var cell := _get_spatial_cell(spatial.global_position, safe_cell_size)
 		var bucket: Array = grid.get(cell, [])
 		bucket.append(spatial)
@@ -6294,9 +6457,10 @@ func _get_spatial_neighbors_into(
 				continue
 			var bucket := bucket_variant as Array
 			for node: Variant in bucket:
-				if not (node is Node3D):
+				var spatial := _as_valid_node3d(node)
+				if not spatial:
 					continue
-				neighbors.append(node as Node3D)
+				neighbors.append(spatial)
 				if neighbors.size() >= limit:
 					return
 
@@ -6398,10 +6562,7 @@ func _update_combat_perf_rate_window(delta: float) -> void:
 
 
 func _is_combat_pair_actively_fighting(attacker: Node3D, defender: Node3D) -> bool:
-	return (
-		_is_combat_soldier_locked_to(attacker, defender)
-		and _get_combat_relation_status_for_pair(attacker, defender) == COMBAT_RELATION_FIGHTING
-	)
+	return _get_combat_relation_status_for_pair(attacker, defender) == COMBAT_RELATION_FIGHTING
 
 
 func _is_combat_pair_in_fight_range(attacker: Node3D, defender: Node3D) -> bool:
@@ -6431,7 +6592,8 @@ func _is_combat_soldier_locked_to(soldier: Node3D, defender: Node3D) -> bool:
 	if not _combat_soldier_lock_positions.has(key):
 		return false
 	var target_variant: Variant = _combat_soldier_targets.get(key)
-	return is_instance_valid(target_variant) and target_variant == defender
+	var target := _as_valid_node3d(target_variant)
+	return target != null and target == defender
 
 
 func _lock_combat_soldier(soldier: Node3D, defender: Node3D) -> void:
@@ -6453,8 +6615,9 @@ func _unlock_combat_soldier(soldier: Node3D) -> void:
 	_combat_soldier_shuffle_offsets.erase(key)
 	_combat_soldier_shuffle_timers.erase(key)
 	var target_variant: Variant = _combat_soldier_targets.get(key)
-	if target_variant is Node3D and is_instance_valid(target_variant):
-		_set_combat_relation_status(soldier, target_variant as Node3D, COMBAT_RELATION_COMING)
+	var target := _as_valid_node3d(target_variant)
+	if target:
+		_set_combat_relation_status(soldier, target, COMBAT_RELATION_COMING)
 
 
 func _update_locked_combat_shuffle(soldier: Node3D, defender: Node3D, delta: float) -> void:
@@ -6585,13 +6748,11 @@ func _should_chase_active_enemy(enemy: Node, enemy_in_engagement_zone: bool) -> 
 		return false
 	if _is_valid_enemy(_manual_attack_target) and _manual_attack_target == enemy:
 		return true
-	if get_troop_mode() == MODE_ATTACK:
-		return true
 	return _has_uncommanded_chase_authority()
 
 
 func _has_uncommanded_chase_authority() -> bool:
-	return team_id == TEAM_ENEMY or not controllable
+	return get_troop_mode() == MODE_ATTACK
 
 
 func _get_enemy_scan_range() -> float:
@@ -6602,12 +6763,19 @@ func _get_enemy_scan_range() -> float:
 
 
 func _refresh_active_enemy() -> void:
+	var engagement_enemy := _find_enemy_inside_engagement_zone()
+	if engagement_enemy:
+		_active_enemy = engagement_enemy
+		return
+
 	var scan_range := _get_enemy_scan_range()
+	var active_enemy_spatial := _as_valid_node3d(_active_enemy)
 	if (
-		_is_valid_enemy(_active_enemy)
+		active_enemy_spatial != null
+		and _is_valid_enemy(active_enemy_spatial)
 		and (
-			global_position.distance_to((_active_enemy as Node3D).global_position) <= scan_range
-			or _is_enemy_inside_engagement_zone(_active_enemy)
+			global_position.distance_to(active_enemy_spatial.global_position) <= scan_range
+			or _is_enemy_inside_engagement_zone(active_enemy_spatial)
 		)
 	):
 		return
@@ -6618,29 +6786,52 @@ func _refresh_active_enemy() -> void:
 	if not tree:
 		return
 	for node: Node in tree.get_nodes_in_group(&"troops"):
-		if node == self or not (node is Node3D) or node.is_queued_for_deletion():
+		var spatial := _as_valid_node3d(node)
+		if not spatial or spatial == self or spatial.is_queued_for_deletion():
 			continue
-		if not _is_valid_enemy(node):
+		if not _is_valid_enemy(spatial):
 			continue
-		var distance_squared := global_position.distance_squared_to((node as Node3D).global_position)
-		if distance_squared > scan_range * scan_range and not _is_enemy_inside_engagement_zone(node):
+		var distance_squared := global_position.distance_squared_to(spatial.global_position)
+		if distance_squared > scan_range * scan_range and not _is_enemy_inside_engagement_zone(spatial):
 			continue
 		if distance_squared < best_distance_squared:
-			best_enemy = node
+			best_enemy = spatial
 			best_distance_squared = distance_squared
 	_active_enemy = best_enemy
 	if not _active_enemy:
 		_last_target_instance_id = 0
 
 
+func _find_enemy_inside_engagement_zone() -> Node:
+	var tree := get_tree()
+	if not tree:
+		return null
+	var best_enemy: Node
+	var best_distance_squared := INF
+	for node: Node in tree.get_nodes_in_group(&"troops"):
+		var spatial := _as_valid_node3d(node)
+		if not spatial or spatial == self or spatial.is_queued_for_deletion():
+			continue
+		if not _is_valid_enemy(spatial) or not _is_enemy_inside_engagement_zone(spatial):
+			continue
+		var distance_squared := global_position.distance_squared_to(spatial.global_position)
+		if distance_squared < best_distance_squared:
+			best_enemy = spatial
+			best_distance_squared = distance_squared
+	return best_enemy
+
+
 func _is_valid_enemy(enemy: Variant) -> bool:
-	if not is_instance_valid(enemy) or enemy == self or not (enemy is Node3D):
+	var enemy_node := _as_valid_node(enemy)
+	if not enemy_node or enemy_node == self:
 		return false
-	if (enemy as Node).is_queued_for_deletion():
+	if not (enemy_node is Node3D):
 		return false
-	if enemy.has_method("is_defeated") and bool(enemy.call("is_defeated")):
+	if enemy_node.is_queued_for_deletion():
 		return false
-	var enemy_team := StringName(enemy.get("team_id"))
+	if enemy_node.has_method("is_defeated") and bool(enemy_node.call("is_defeated")):
+		return false
+	var enemy_team := StringName(enemy_node.get("team_id"))
 	if enemy_team == TEAM_DESERTER:
 		return false
 	if enemy_team == team_id:
@@ -6753,8 +6944,9 @@ func _desert_soldiers(soldiers: Array, speed_multiplier: float = 1.0) -> void:
 		return
 	var valid_soldiers: Array[Node3D] = []
 	for soldier: Variant in soldiers:
-		if soldier is Node3D and is_instance_valid(soldier):
-			valid_soldiers.append(soldier as Node3D)
+		var soldier_spatial := _as_valid_node3d(soldier)
+		if soldier_spatial:
+			valid_soldiers.append(soldier_spatial)
 	if valid_soldiers.is_empty():
 		return
 
@@ -6840,25 +7032,21 @@ func _update_assigned_combat_visuals(delta: float) -> void:
 	var start := clampi(_combat_visual_stance_cursor, 0, maxi(key_count - 1, 0))
 	for offset_index: int in range(update_limit):
 		var key: Variant = keys[(start + offset_index) % key_count]
-		var soldier := _get_node_from_instance_id_key(key)
+		var soldier := _as_valid_node3d(_get_node_from_instance_id_key(key))
 		var defender_variant: Variant = _combat_soldier_targets.get(key)
-		if not is_instance_valid(defender_variant):
+		var defender := _as_valid_node3d(defender_variant)
+		if not defender:
 			_forget_combat_soldier_key(key, true)
 			continue
-		var defender := defender_variant as Node3D
-		if not soldier or not _is_soldier_active(soldier) or not is_instance_valid(defender) or not defender.is_inside_tree():
+		if not soldier or not _is_soldier_active(soldier) or not defender.is_inside_tree():
 			_forget_combat_soldier_key(key, true)
 			continue
-		var soldier_spatial := soldier as Node3D
-		if not soldier_spatial:
-			continue
-		var rotation_before := soldier_spatial.rotation.y
-		_face_soldier_toward(soldier_spatial, defender, 1.0)
-		var changed_for_render := absf(wrapf(soldier_spatial.rotation.y - rotation_before, -PI, PI)) > 0.002
+		var rotation_before := soldier.rotation.y
+		_face_soldier_toward(soldier, defender, 1.0)
+		var changed_for_render := absf(wrapf(soldier.rotation.y - rotation_before, -PI, PI)) > 0.002
 		var moving_to_socket := soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion"))
-		var locked_in_combat := _is_combat_soldier_locked_to(soldier_spatial, defender)
-		var visual_in_range := not moving_to_socket and locked_in_combat and _is_combat_pair_in_fight_range(soldier_spatial, defender)
-		if moving_to_socket:
+		var visual_in_range := _is_combat_pair_actively_fighting(soldier, defender)
+		if moving_to_socket and not visual_in_range:
 			if soldier.has_method("is_formation_attacking") and bool(soldier.call("is_formation_attacking")):
 				changed_for_render = true
 				if soldier.has_method("set_independent_combat"):
@@ -6923,10 +7111,8 @@ func _mark_soldier_render_dirty(soldier: Node) -> void:
 
 
 func _is_live_combat_node(value: Variant) -> bool:
-	if not (value is Node):
-		return false
-	var node := value as Node
-	return is_instance_valid(node) and not node.is_queued_for_deletion() and node.is_inside_tree()
+	var node := _as_valid_node(value)
+	return node != null and not node.is_queued_for_deletion() and node.is_inside_tree()
 
 
 func _get_node_from_instance_id_key(key: Variant) -> Node:
@@ -6934,7 +7120,7 @@ func _get_node_from_instance_id_key(key: Variant) -> Node:
 	if not is_instance_id_valid(object_id):
 		return null
 	var object := instance_from_id(object_id)
-	if object is Node and _is_live_combat_node(object):
+	if _is_live_combat_node(object):
 		return object as Node
 	return null
 
@@ -8301,6 +8487,7 @@ func _copy_configuration_to_child_troop(child: Troop) -> void:
 		"combat_spatial_rebuild_interval",
 		"combat_target_load_penalty", "combat_target_stickiness_bonus",
 		"combat_socket_radius", "combat_socket_arrival_radius", "chase_repath_interval",
+		"combat_engagement_break_range_multiplier", "combat_engagement_break_grace_seconds",
 		"walk_endurance_loss_per_second", "run_endurance_loss_per_second",
 		"fight_endurance_loss_per_second", "attack_mode_endurance_loss_per_second",
 		"endurance_rate_scale", "rest_endurance_recovery_per_second",

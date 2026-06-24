@@ -421,6 +421,10 @@ func configure_combat_stats(
 	run_speed_value: float = -1.0
 ) -> void:
 	_wake_logic()
+	var previous_max_strength := maxf(max_strength, 1.0)
+	var previous_health := get_health()
+	var health_ratio := clampf(previous_health / previous_max_strength, 0.0, 1.0)
+	var was_full_strength := previous_health <= 0.0 or previous_health >= previous_max_strength - 0.001
 	max_strength = maxf(strength_value, 1.0)
 	damage = maxf(damage_value, 0.1)
 	morale = clampf(morale_value, 0.0, 100.0)
@@ -428,6 +432,7 @@ func configure_combat_stats(
 	endurance = clampf(endurance_value, 0.0, max_endurance)
 	if run_speed_value > 0.0:
 		run_speed = maxf(run_speed_value, 0.1)
+	_health = max_strength if was_full_strength else clampf(max_strength * health_ratio, 0.0, max_strength)
 	_sync_combat_stats_to_human()
 	_queue_combat_stats_changed()
 
