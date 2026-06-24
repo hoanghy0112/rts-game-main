@@ -151,7 +151,7 @@ func _build_ui() -> void:
 	_minimap_canvas.hud = self
 	_minimap_canvas.full_map = false
 	_minimap_canvas.custom_minimum_size = Vector2(minimap_size_px - 16.0, minimap_size_px - 16.0)
-	_minimap_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_minimap_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
 	minimap_rows.add_child(_minimap_canvas)
 
 	_open_button = Button.new()
@@ -263,12 +263,10 @@ func _draw_map_canvas(canvas: Control, full_map: bool) -> void:
 
 
 func _handle_map_input(canvas: Control, full_map: bool, event: InputEvent) -> void:
-	if not full_map:
-		return
 	var world_rect := _get_world_rect()
 	if world_rect.size.x <= 0.0 or world_rect.size.y <= 0.0:
 		return
-	if event is InputEventMouseMotion:
+	if full_map and event is InputEventMouseMotion:
 		var mouse := (event as InputEventMouseMotion).position
 		_hover_marker = _find_hover_marker(canvas, mouse, world_rect)
 		_update_hover_label()
