@@ -105,6 +105,7 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_large_combat_uses_bounded_work(failures)
 	await _check_combat_socket_targets_stay_local(failures)
 	await _check_combat_debug_lines_only_show_near_fights(failures)
+	await _check_combat_fighting_target_forces_retaliation(failures)
 	await _check_combat_surround_sockets_and_facing(failures)
 	await _check_combat_target_capacity(failures)
 	await _check_normal_combat_assigns_all_attackers_with_capacity(failures)
@@ -1274,18 +1275,108 @@ func _check_combat_debug_lines_only_show_near_fights(failures: Array[String]) ->
 	player.call("_assign_combat_target_to_soldier", far_attacker, far_defender, load_by_defender)
 	player.call("_lock_combat_soldier", far_attacker, far_defender)
 	player.call("_update_combat_debug_lines")
+	var near_relation: Dictionary = player.call("get_combat_target_relation_for_soldier", near_attacker) as Dictionary
+	var far_relation: Dictionary = player.call("get_combat_target_relation_for_soldier", far_attacker) as Dictionary
+	var debug_summary: Dictionary = player.call("get_troop_summary") as Dictionary
 	var far_strength_before := _get_soldier_strength(far_defender)
 	player.call("_resolve_combat_tick", enemy, 10.0)
 	var far_strength_after := _get_soldier_strength(far_defender)
 	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(StringName(near_relation.get("status", &"")) == &"fighting", "near assigned pair should store fighting status", failures)
+	_expect(StringName(far_relation.get("status", &"")) == &"coming", "far assigned pair should store coming status", failures)
 	_expect(bool(player.call("_is_combat_pair_actively_fighting", near_attacker, near_defender)), "near locked pair should count as an active fight", failures)
 	_expect(not bool(player.call("_is_combat_pair_actively_fighting", far_attacker, far_defender)), "far locked pair should not count as an active fight", failures)
 	_expect(_approx(far_strength_after, far_strength_before, 0.001), "far assigned defender should not take damage before the attacker closes to spear range", failures)
 	_expect(
-		int(summary.get("combat_debug_line_pair_count", 0)) == 1,
-		"combat debug lines should draw only active near fighting pairs, not far movement assignments",
+		int(debug_summary.get("combat_debug_line_pair_count", 0)) == 2,
+		"combat debug lines should draw both coming and fighting target relationships",
 		failures
 	)
+	_expect(
+		int(debug_summary.get("combat_debug_line_fighting_pair_count", 0)) == 1,
+		"combat debug lines should count exactly one red fighting pair",
+		failures
+	)
+	_expect(
+		int(debug_summary.get("combat_debug_line_coming_pair_count", 0)) == 1,
+		"combat debug lines should count exactly one sky coming pair",
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_combat_fighting_target_forces_retaliation(failures: Array[String]) -> void:
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"retaliation_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", 2)
+	player.set("formation_columns", 2)
+	player.set("troop_mode", "attack")
+	player.set("combat_spear_range_m", 3.0)
+	player.set("combat_socket_arrival_radius", 0.25)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"retaliation_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 2)
+	enemy.set("formation_columns", 2)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_spear_range_m", 3.0)
+	enemy.set("combat_socket_arrival_radius", 0.25)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(8.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	var player_soldiers := _get_active_soldier_nodes(player)
+	var enemy_soldiers := _get_active_soldier_nodes(enemy)
+	_expect(player_soldiers.size() >= 2 and enemy_soldiers.size() >= 2, "retaliation setup should have two soldiers per side", failures)
+	if player_soldiers.size() < 2 or enemy_soldiers.size() < 2:
+		root.remove_child(enemy)
+		enemy.free()
+		root.remove_child(player)
+		player.free()
+		return
+
+	var caught_soldier := player_soldiers[0] as Node3D
+	var original_target := enemy_soldiers[1] as Node3D
+	var catching_enemy := enemy_soldiers[0] as Node3D
+	var player_other := player_soldiers[1] as Node3D
+	caught_soldier.global_position = Vector3(0.0, 0.0, 0.0)
+	player_other.global_position = Vector3(0.0, 0.0, 8.0)
+	catching_enemy.global_position = Vector3(1.7, 0.0, 0.0)
+	original_target.global_position = Vector3(12.0, 0.0, 0.0)
+	player.call("_set_state", &"fighting")
+	enemy.call("_set_state", &"fighting")
+
+	var enemy_load_by_defender := {
+		caught_soldier.get_instance_id(): 0,
+		player_other.get_instance_id(): 0,
+	}
+	enemy.call("_assign_combat_target_to_soldier", catching_enemy, caught_soldier, enemy_load_by_defender)
+	enemy.call("_lock_combat_soldier", catching_enemy, caught_soldier)
+	var player_load_by_defender := {
+		catching_enemy.get_instance_id(): 0,
+		original_target.get_instance_id(): 0,
+	}
+	player.call("_assign_combat_target_to_soldier", caught_soldier, original_target, player_load_by_defender)
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var relation: Dictionary = player.call("get_combat_target_relation_for_soldier", caught_soldier) as Dictionary
+	var target: Variant = relation.get("target")
+	_expect(target == catching_enemy, "a soldier caught in an enemy fighting relation should retarget that enemy immediately", failures)
+	_expect(StringName(relation.get("status", &"")) == &"fighting", "retaliating caught soldier should store fighting status", failures)
+	_expect(bool(player.call("_is_combat_soldier_locked_to", caught_soldier, catching_enemy)), "retaliating caught soldier should stop moving and lock in place", failures)
+	var attackers_targeting_catcher: Array = player.call("get_combat_attackers_targeting_soldier", catching_enemy) as Array
+	_expect(_combat_relation_list_contains(attackers_targeting_catcher, caught_soldier, &"fighting"), "retaliation target should store the caught soldier as a fighting attacker", failures)
 
 	root.remove_child(enemy)
 	enemy.free()
@@ -1532,7 +1623,7 @@ func _check_large_default_combat_assigns_all_when_capacity_exists(failures: Arra
 	)
 	_expect(
 		int(summary.get("combat_max_target_load", 0)) <= max_attackers,
-		"default large combat should still cap attackers per defender",
+		"default large combat should still cap attackers per defender; max load was %d" % int(summary.get("combat_max_target_load", 0)),
 		failures
 	)
 
@@ -2493,6 +2584,16 @@ func _get_soldier_strength(soldier: Node) -> float:
 		return 0.0
 	var summary: Dictionary = soldier.call("get_combat_summary") as Dictionary
 	return float(summary.get("strength", 0.0))
+
+
+func _combat_relation_list_contains(relations: Array, attacker: Node, status: StringName) -> bool:
+	for relation_variant: Variant in relations:
+		if not (relation_variant is Dictionary):
+			continue
+		var relation := relation_variant as Dictionary
+		if relation.get("attacker") == attacker and StringName(relation.get("status", &"")) == status:
+			return true
+	return false
 
 
 func _count_soldiers_away_from_slots(troop: Node, threshold: float) -> int:
