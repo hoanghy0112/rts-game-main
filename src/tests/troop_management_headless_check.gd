@@ -205,7 +205,7 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(_approx(float(troop.get("formation_spacing")), 4.35, 0.001), "troop formation spacing should default to 1.5x the current movement spacing", failures)
 	_expect(_approx(float(troop.get("formation_collision_distance")), 2.64, 0.001), "moving formation collision spacing should default to 1.5x the current distance", failures)
 	_expect(_approx(float(troop.get("carrier_formation_spacing")), 3.75, 0.001), "carrier formation spacing should default to 1.5x the current spacing", failures)
-	_expect(_approx(float(troop.get("combat_spear_range_m")), 9.4, 0.001), "combat spear range should default to 2x the current fighting spacing", failures)
+	_expect(_approx(float(troop.get("combat_spear_range_m")), 1.9, 0.001), "combat spear range should default to the visible spear length", failures)
 	_expect(_approx(float(troop.get("soldier_personal_space_radius")), 2.88, 0.001), "soldier combat personal space should default to 2x the current fighting spacing", failures)
 	_expect(_approx(float(troop.get("enemy_personal_space_radius")), 3.28, 0.001), "enemy combat personal space should default to 2x the current fighting spacing", failures)
 	_expect(_approx(float(troop.get("combat_frontline_width_per_soldier")), 4.4, 0.001), "combat frontline spacing should default to 2x the current fighting spacing", failures)
@@ -225,7 +225,7 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(int(troop.get("combat_target_search_candidates")) >= 12, "combat target search should cap candidate scans", failures)
 	_expect(int(troop.get("combat_assignment_candidates")) >= 8, "combat assignment should cap nearby target candidates", failures)
 	_expect(int(troop.get("combat_max_attackers_per_target")) == 4, "combat should default to four attackers per defender", failures)
-	_expect(float(troop.get("combat_socket_radius")) > 0.0, "combat should expose defender attack socket radius", failures)
+	_expect(_approx(float(troop.get("combat_socket_radius")), 1.75, 0.001), "combat socket radius should default inside visible spear reach", failures)
 	_expect(float(troop.get("combat_socket_arrival_radius")) > 0.0, "combat should expose socket arrival tolerance", failures)
 	_expect(bool(troop.get("soldier_render_batching_enabled")), "soldier render batching should be enabled by default", failures)
 	_expect(float(troop.get("unit_selection_proxy_refresh_interval")) > 0.0, "unit selection proxies should expose a throttled refresh interval", failures)
@@ -1274,9 +1274,13 @@ func _check_combat_debug_lines_only_show_near_fights(failures: Array[String]) ->
 	player.call("_assign_combat_target_to_soldier", far_attacker, far_defender, load_by_defender)
 	player.call("_lock_combat_soldier", far_attacker, far_defender)
 	player.call("_update_combat_debug_lines")
+	var far_strength_before := _get_soldier_strength(far_defender)
+	player.call("_resolve_combat_tick", enemy, 10.0)
+	var far_strength_after := _get_soldier_strength(far_defender)
 	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
 	_expect(bool(player.call("_is_combat_pair_actively_fighting", near_attacker, near_defender)), "near locked pair should count as an active fight", failures)
 	_expect(not bool(player.call("_is_combat_pair_actively_fighting", far_attacker, far_defender)), "far locked pair should not count as an active fight", failures)
+	_expect(_approx(far_strength_after, far_strength_before, 0.001), "far assigned defender should not take damage before the attacker closes to spear range", failures)
 	_expect(
 		int(summary.get("combat_debug_line_pair_count", 0)) == 1,
 		"combat debug lines should draw only active near fighting pairs, not far movement assignments",
@@ -2482,6 +2486,13 @@ func _count_damaged_soldiers(troop: Node) -> int:
 		if float(summary.get("strength", 0.0)) < float(summary.get("max_strength", 0.0)) - 0.01:
 			count += 1
 	return count
+
+
+func _get_soldier_strength(soldier: Node) -> float:
+	if not soldier or not soldier.has_method("get_combat_summary"):
+		return 0.0
+	var summary: Dictionary = soldier.call("get_combat_summary") as Dictionary
+	return float(summary.get("strength", 0.0))
 
 
 func _count_soldiers_away_from_slots(troop: Node, threshold: float) -> int:
