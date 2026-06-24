@@ -8,6 +8,7 @@ const SELECTABLE_VILLAGE_TYPE := &"village"
 
 @export var village_region_path: NodePath = NodePath("../VillageRegion")
 @export var info_drawer_path: NodePath = NodePath("../VillageInfoDrawer")
+@export var team_controller_path: NodePath = NodePath("../PlayerTeam")
 @export var camera_path: NodePath = NodePath("")
 @export_range(1.0, 20000.0, 1.0, "or_greater") var max_pick_distance: float = 5000.0
 @export_flags_3d_physics var selection_collision_mask: int = 1
@@ -22,6 +23,10 @@ func _ready() -> void:
 	var region := _get_village_region()
 	if drawer and region and drawer.has_method("bind_to_village_region"):
 		drawer.call("bind_to_village_region", region)
+	if drawer and drawer.has_signal(&"recruit_soldiers_requested"):
+		var recruit_callable := Callable(self, "_on_recruit_soldiers_requested")
+		if not drawer.is_connected(&"recruit_soldiers_requested", recruit_callable):
+			drawer.connect(&"recruit_soldiers_requested", recruit_callable)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -153,14 +158,24 @@ func _open_selectable(selectable: Node) -> void:
 	if not drawer:
 		return
 
-	var selectable_type := StringName(selectable.get_meta(SELECTABLE_TYPE_META, &""))
-	match selectable_type:
-		SELECTABLE_FLAG_TYPE:
-			if drawer.has_method("show_village_summary"):
-				drawer.call("show_village_summary")
-		SELECTABLE_VILLAGE_TYPE:
-			if drawer.has_method("show_village_summary"):
-				drawer.call("show_village_summary")
+	var selectable_type := str(selectable.get_meta(SELECTABLE_TYPE_META, ""))
+	if selectable_type == str(SELECTABLE_FLAG_TYPE) or selectable_type == str(SELECTABLE_VILLAGE_TYPE):
+		if drawer.has_method("show_village_summary"):
+			drawer.call("show_village_summary")
+
+
+func _on_recruit_soldiers_requested(count: int) -> void:
+	var region := _get_village_region()
+	if not region:
+		return
+	var team := _get_team_controller()
+	if team and team.has_method("recruit_soldiers_from_village"):
+		team.call("recruit_soldiers_from_village", region, maxi(count, 1))
+	elif region.has_method("recruit_villagers"):
+		region.call("recruit_villagers", maxi(count, 1))
+	var drawer := _get_info_drawer()
+	if drawer and drawer.has_method("show_village_summary"):
+		drawer.call("show_village_summary")
 
 
 func _get_village_region() -> VillageRegion:
@@ -170,6 +185,20 @@ func _get_village_region() -> VillageRegion:
 
 func _get_info_drawer() -> Node:
 	return get_node_or_null(info_drawer_path)
+
+
+func _get_team_controller() -> Node:
+	if not team_controller_path.is_empty():
+		var node := get_node_or_null(team_controller_path)
+		if node:
+			return node
+	var parent := get_parent()
+	if not parent:
+		return null
+	for child: Node in parent.get_children():
+		if child.has_method("recruit_soldiers_from_village") and str(child.get("team_id")) == "player":
+			return child
+	return null
 
 
 func _get_camera() -> Camera3D:

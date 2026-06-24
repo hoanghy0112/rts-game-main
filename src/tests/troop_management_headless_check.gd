@@ -2389,11 +2389,17 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		var terrain_path: NodePath = troop.get("terrain_path")
 		_expect(not terrain_path.is_empty(), "%s troop should have a terrain path" % scene_path, failures)
 		_expect(StringName(troop.get("team_id")) == &"player", "%s default troop should belong to player team" % scene_path, failures)
-	_expect(
-		instance.find_child("EnemyTroopSpawner", true, false) != null,
-		"%s should include an enemy troop spawner" % scene_path,
-		failures
-	)
+	var player_team := instance.find_child("PlayerTeam", true, false)
+	var enemy_team := instance.find_child("EnemyTroopSpawner", true, false)
+	var map_hud := instance.find_child("StrategicMapHud", true, false)
+	_expect(player_team != null and player_team.has_method("recruit_soldiers_from_village"), "%s should include a player team controller" % scene_path, failures)
+	_expect(enemy_team != null and enemy_team.has_method("spawn_enemies"), "%s should include an enemy team controller" % scene_path, failures)
+	_expect(map_hud != null and map_hud.has_method("toggle_full_map"), "%s should include the strategic map HUD" % scene_path, failures)
+	if player_team:
+		_expect(str(player_team.get("team_id")) == "player", "%s player team should use player id" % scene_path, failures)
+	if enemy_team:
+		_expect(str(enemy_team.get("team_id")) == "enemy", "%s enemy team should use enemy id" % scene_path, failures)
+		_expect(bool(enemy_team.get("spawn_initial_troops")), "%s enemy team should spawn opening troops" % scene_path, failures)
 
 	instance.free()
 

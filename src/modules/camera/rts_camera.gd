@@ -86,6 +86,14 @@ func cancel_right_drag_rotation() -> void:
 	_reset_right_mouse_rotation_state()
 
 
+func set_target_world_position(world_position: Vector3, snap: bool = false) -> void:
+	_desired_target_position = world_position
+	if snap:
+		_current_target_position = _desired_target_position
+		global_position = _current_target_position
+		_apply_camera_transform()
+
+
 func _handle_keyboard_movement(delta: float) -> void:
 	var input_vector := Input.get_vector(
 		ACTION_CAMERA_LEFT,

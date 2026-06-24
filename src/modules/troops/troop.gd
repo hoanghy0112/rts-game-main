@@ -1513,6 +1513,53 @@ func get_soldier_count() -> int:
 	return current_count
 
 
+func add_recruited_soldiers(count: int, spawn_world_position: Vector3 = Vector3(1.0e20, 1.0e20, 1.0e20)) -> int:
+	var requested := maxi(count, 0)
+	if requested <= 0:
+		return 0
+
+	_ensure_scene_nodes()
+	if not _soldier_container:
+		return 0
+
+	var scene := soldier_scene if soldier_scene else DEFAULT_SOLDIER_SCENE
+	var added := 0
+	var start_index := _get_formation_soldier_count()
+	var spawn_origin := spawn_world_position
+	if absf(spawn_origin.x) > 1.0e19 or absf(spawn_origin.y) > 1.0e19 or absf(spawn_origin.z) > 1.0e19:
+		spawn_origin = global_position
+
+	for offset_index: int in range(requested):
+		var instance := scene.instantiate()
+		if not (instance is Node3D):
+			instance.free()
+			continue
+		var soldier := instance as Node3D
+		var soldier_index := start_index + added
+		soldier.name = "Soldier_%03d" % soldier_index
+		_soldier_container.add_child(soldier)
+		soldier.owner = null
+		soldier.top_level = true
+		var angle := TAU * float(offset_index) / float(maxi(requested, 1))
+		var radius := maxf(formation_spacing * 0.45, 1.2)
+		soldier.global_position = _snap_world_point(spawn_origin + Vector3(cos(angle) * radius, 0.0, sin(angle) * radius))
+		soldier.rotation.y = rotation.y
+		soldier.scale = Vector3.ONE * soldier_scale
+		_configure_visual_soldier(soldier, soldier_index)
+		added += 1
+
+	if added <= 0:
+		return 0
+
+	_refresh_transferred_formation()
+	if _camp_established:
+		_rebuild_camp_visual()
+	_mark_combat_stats_dirty()
+	_emit_logistics_changed()
+	_emit_combat_changed()
+	return added
+
+
 func continue_mission() -> bool:
 	if not is_mission_troop or not _is_mission_active():
 		return false

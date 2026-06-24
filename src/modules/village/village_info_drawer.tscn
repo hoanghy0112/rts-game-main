@@ -35,7 +35,7 @@ anchor_right = 1.0
 offset_left = -304.0
 offset_top = 116.0
 offset_right = -16.0
-offset_bottom = 348.0
+offset_bottom = 456.0
 grow_horizontal = 0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
@@ -112,3 +112,42 @@ unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
 text = "Food days  0.0"
+
+[node name="RecruitSeparator" type="ColorRect" parent="Root/Panel/Margin/Rows"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+mouse_filter = 2
+color = Color(0.77, 0.84, 0.82, 0.22)
+
+[node name="RecruitStatusLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.82, 0.9, 0.86, 1)
+text = "Recruit pool  0 / 0   Rice output 0%   Soldiers 0"
+autowrap_mode = 3
+
+[node name="RecruitRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+mouse_filter = 1
+theme_override_constants/separation = 8
+
+[node name="RecruitLabel" type="Label" parent="Root/Panel/Margin/Rows/RecruitRow"]
+custom_minimum_size = Vector2(62, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.95, 0.93, 1)
+text = "Soldiers"
+
+[node name="RecruitSpinBox" type="SpinBox" parent="Root/Panel/Margin/Rows/RecruitRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(82, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 64.0
+step = 1.0
+value = 1.0
+
+[node name="RecruitButton" type="Button" parent="Root/Panel/Margin/Rows/RecruitRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Recruit"

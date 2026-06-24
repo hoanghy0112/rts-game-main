@@ -31,6 +31,8 @@
 [ext_resource type="Script" path="res://modules/troops/troop_selection_controller.gd" id="30_troop_select"]
 [ext_resource type="Script" path="res://modules/troops/troop_enemy_spawner.gd" id="31_enemy_spawner"]
 [ext_resource type="PackedScene" path="res://modules/troops/troop_background_jobs_debug_panel.tscn" id="32_jobs_debug"]
+[ext_resource type="PackedScene" path="res://modules/teams/team_controller.tscn" id="33_team_controller"]
+[ext_resource type="PackedScene" path="res://modules/ui/map/strategic_map_hud.tscn" id="34_map_hud"]
 
 [ext_resource type="Resource" path="res://modules/draft/draft_village_cells.tres" id="19_vcells"]
 
@@ -227,19 +229,51 @@ movement_map_path = "res://modules/draft/draft_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
 time_system_path = NodePath("../GameTimeSystem")
 
-[node name="EnemyTroopSpawner" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -184, 0, -44)
-script = ExtResource("31_enemy_spawner")
-spawn_seed = 41017
-min_enemy_troops = 2
-max_enemy_troops = 3
-min_soldiers_per_troop = 7
-max_soldiers_per_troop = 13
-spawn_radius_m = 5.0
+[node name="PlayerTeam" parent="." instance=ExtResource("33_team_controller")]
+team_id = &"player"
+display_name = "Player Team"
+controllable = true
+team_flag_color = Color(0.1, 0.28, 0.82, 1)
+troop_flag_color = Color(0.22, 0.48, 0.92, 1)
+default_camp_id = &"player_camp"
+default_camp_name = "Player Camp"
+default_camp_position = Vector3(-168, 0, -70)
+starting_food_kg = 800.0
+starting_wood_kg = 450.0
+primary_village_path = NodePath("../VillageRegion")
+primary_troop_paths = Array[NodePath]([NodePath("../Troop_01")])
 movement_map = ExtResource("25_draft_move_map")
 movement_map_path = "res://modules/draft/draft_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
 time_system_path = NodePath("../GameTimeSystem")
+
+[node name="EnemyTroopSpawner" parent="." instance=ExtResource("33_team_controller")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -184, 0, -44)
+team_id = &"enemy"
+display_name = "Enemy Team"
+controllable = false
+team_flag_color = Color(0.72, 0.1, 0.08, 1)
+troop_flag_color = Color(0.86, 0.18, 0.12, 1)
+default_camp_id = &"enemy_camp"
+default_camp_name = "Enemy Camp"
+default_camp_position = Vector3(-184, 0, -44)
+starting_food_kg = 650.0
+starting_wood_kg = 360.0
+troop_scene = ExtResource("28_troop")
+spawn_seed = 41017
+min_initial_troops = 2
+max_initial_troops = 3
+min_soldiers_per_troop = 7
+max_soldiers_per_troop = 13
+spawn_radius_m = 5.0
+troop_display_prefix = "Enemy"
+movement_map = ExtResource("25_draft_move_map")
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+terrain_path = NodePath("../Terrain3D")
+time_system_path = NodePath("../GameTimeSystem")
+spawn_initial_troops = true
+ai_enabled = true
+ai_attack_radius_m = 95.0
 
 [node name="VillageInfoDrawer" parent="." instance=ExtResource("21_food_drawer")]
 village_region_path = NodePath("../VillageRegion")
@@ -253,9 +287,16 @@ script = ExtResource("22_food_select")
 village_region_path = NodePath("../VillageRegion")
 info_drawer_path = NodePath("../VillageInfoDrawer")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
+team_controller_path = NodePath("../PlayerTeam")
 
 [node name="TroopSelectionController" type="Node" parent="."]
 script = ExtResource("30_troop_select")
 troop_drawer_path = NodePath("../TroopManagementDrawer")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
 forest_region_paths = Array[NodePath]([NodePath("../ForestRegion")])
+
+[node name="StrategicMapHud" parent="." instance=ExtResource("34_map_hud")]
+movement_map = ExtResource("25_draft_move_map")
+movement_map_path = "res://modules/draft/draft_movement_map.res"
+camera_path = NodePath("../RTSCameraRig/Camera3D")
+camera_rig_path = NodePath("../RTSCameraRig")

@@ -7,10 +7,34 @@ const VillageRegionScript = preload("res://addons/village_brush/village_region.g
 const PeasantScene: PackedScene = preload("res://modules/units/peasant/peasant.tscn")
 const VillageInfoDrawerScene: PackedScene = preload("res://modules/village/village_info_drawer.tscn")
 const VillageSelectionControllerScript = preload("res://modules/village/village_selection_controller.gd")
+const TeamControllerScript = preload("res://modules/teams/team_controller.gd")
 const GameTimeSystemScene: PackedScene = preload("res://modules/time/game_time_system.tscn")
 const GameDateDisplayScene: PackedScene = preload("res://modules/time/game_date_display.tscn")
+const StrategicMapHudScene: PackedScene = preload("res://modules/ui/map/strategic_map_hud.tscn")
 const RUNTIME_CONTAINER_NAME := "__VillageRuntimeInstances"
 const SELECTABLE_TYPE_META := &"village_selectable_type"
+
+
+class FakeRecruitTroop:
+	extends Node3D
+
+	var team_id: StringName = &"player"
+	var controllable := true
+	var team_flag_color := Color.WHITE
+	var troop_flag_color := Color.WHITE
+	var movement_map: Resource
+	var movement_map_path := ""
+	var terrain_path: NodePath
+	var time_system_path: NodePath
+	var soldier_count := 0
+
+	func add_recruited_soldiers(count: int, _spawn_world_position: Vector3 = Vector3.ZERO) -> int:
+		var accepted := maxi(count, 0)
+		soldier_count += accepted
+		return accepted
+
+	func get_soldier_count() -> int:
+		return soldier_count
 
 
 func _init() -> void:
@@ -33,6 +57,8 @@ func _run_deferred_checks() -> void:
 func _run_checks(failures: Array[String]) -> void:
 	_check_balance_defaults(failures)
 	_check_food_records_and_daily_math(failures)
+	_check_recruitment_reduces_village_productivity(failures)
+	_check_team_controller_recruitment(failures)
 	_check_time_system_advances_food(failures)
 	_check_ui_and_controller_load(failures)
 	_check_scene_wiring("res://modules/draft/draft.tscn", failures)
@@ -124,6 +150,92 @@ func _check_food_records_and_daily_math(failures: Array[String]) -> void:
 	scene_root.free()
 
 
+func _check_recruitment_reduces_village_productivity(failures: Array[String]) -> void:
+	var scene_root := Node3D.new()
+	root.add_child(scene_root)
+	var region := _make_region(4, 97531)
+	scene_root.add_child(region)
+	region.rebuild_runtime_preview()
+
+	var before := region.get_village_food_summary()
+	var before_production := float(before.get("daily_production_kg", 0.0))
+	_expect(int(before.get("available_villagers", -1)) == 4, "recruit pool should start from the peasant target", failures)
+	_expect(_approx(float(before.get("productivity_ratio", -1.0)), 1.0, 0.001), "full village should produce at full field capacity", failures)
+
+	var recruited := region.recruit_villagers(1)
+	var after := region.get_village_food_summary()
+	_expect(recruited == 1, "village should recruit one available villager", failures)
+	_expect(int(after.get("available_villagers", -1)) == 3, "recruitment should reduce available villagers", failures)
+	_expect(int(after.get("recruited_soldier_count", -1)) == 1, "village summary should track recruited soldiers", failures)
+	_expect(int(after.get("farmer_count", -1)) == 3, "recruitment should remove one working villager from production", failures)
+	_expect(int(after.get("full_productivity_villagers", -1)) == 4, "summary should expose the full-productivity villager baseline", failures)
+	_expect(_approx(float(after.get("productivity_ratio", -1.0)), 0.75, 0.001), "productivity should scale with available villagers", failures)
+	_expect(_approx(float(after.get("daily_production_kg", -1.0)), before_production * 0.75, 0.001), "rice output should scale down after recruitment", failures)
+
+	region.call("_update_runtime_peasant_population", 60.0)
+	var after_refill_attempt := region.get_village_food_summary()
+	_expect(int(after_refill_attempt.get("available_villagers", -1)) == 3, "recruited villagers should not be refilled by the peasant population tick", failures)
+
+	region.clear_runtime_instances()
+	scene_root.remove_child(region)
+	region.free()
+	root.remove_child(scene_root)
+	scene_root.free()
+
+
+func _check_team_controller_recruitment(failures: Array[String]) -> void:
+	var scene_root := Node3D.new()
+	root.add_child(scene_root)
+
+	var region := _make_region(4, 86420)
+	scene_root.add_child(region)
+	region.rebuild_runtime_preview()
+
+	var troop := FakeRecruitTroop.new()
+	troop.name = "FakeTroop"
+	scene_root.add_child(troop)
+
+	var team: Node = TeamControllerScript.new()
+	team.name = "PlayerTeam"
+	team.set("team_id", &"player")
+	team.set("display_name", "Player Team")
+	team.set("controllable", true)
+	team.set("starting_food_kg", 10.0)
+	team.set("starting_wood_kg", 5.0)
+	team.set("recruit_food_cost_kg", 2.0)
+	team.set("recruit_wood_cost_kg", 1.0)
+	team.set("primary_village_path", NodePath("../VillageRegion"))
+	var troop_paths: Array[NodePath] = []
+	troop_paths.append(NodePath("../FakeTroop"))
+	team.set("primary_troop_paths", troop_paths)
+	scene_root.add_child(team)
+	team.call("_initialize_team")
+
+	var result: Dictionary = team.call("recruit_soldiers_from_village", region, 2) as Dictionary
+	_expect(bool(result.get("accepted", false)), "team controller should accept affordable village recruits", failures)
+	_expect(int(result.get("added_soldiers", 0)) == 2, "team recruitment should add soldiers to the primary troop", failures)
+	_expect(troop.get_soldier_count() == 2, "primary troop should receive recruited soldiers", failures)
+
+	var team_summary: Dictionary = team.call("get_team_summary") as Dictionary
+	var camp_summary: Dictionary = team_summary.get("camp", {}) as Dictionary
+	_expect(_approx(float(camp_summary.get("camp_food_kg", -1.0)), 6.0, 0.001), "recruitment should spend food from the team camp", failures)
+	_expect(_approx(float(camp_summary.get("camp_wood_kg", -1.0)), 3.0, 0.001), "recruitment should spend wood from the team camp", failures)
+
+	var village_summary := region.get_village_food_summary()
+	_expect(int(village_summary.get("available_villagers", -1)) == 2, "team recruitment should reduce village worker pool", failures)
+	_expect(_approx(float(village_summary.get("productivity_ratio", -1.0)), 0.5, 0.001), "team recruitment should update village productivity", failures)
+
+	scene_root.remove_child(team)
+	team.free()
+	scene_root.remove_child(troop)
+	troop.free()
+	region.clear_runtime_instances()
+	scene_root.remove_child(region)
+	region.free()
+	root.remove_child(scene_root)
+	scene_root.free()
+
+
 func _check_time_system_advances_food(failures: Array[String]) -> void:
 	var scene_root := Node3D.new()
 	root.add_child(scene_root)
@@ -156,6 +268,7 @@ func _check_time_system_advances_food(failures: Array[String]) -> void:
 func _check_ui_and_controller_load(failures: Array[String]) -> void:
 	var drawer := VillageInfoDrawerScene.instantiate()
 	_expect(drawer != null and drawer.has_method("show_village_summary"), "VillageInfoDrawer scene should expose summary API", failures)
+	_expect(drawer != null and drawer.has_signal("recruit_soldiers_requested"), "VillageInfoDrawer should expose recruitment signal", failures)
 	if drawer:
 		drawer.free()
 
@@ -172,6 +285,16 @@ func _check_ui_and_controller_load(failures: Array[String]) -> void:
 	var controller := VillageSelectionControllerScript.new()
 	_expect(controller != null and controller.has_method("_pick_selectable"), "VillageSelectionController script should instantiate", failures)
 	controller.free()
+
+	var team := TeamControllerScript.new()
+	_expect(team != null and team.has_method("recruit_soldiers_from_village"), "TeamController should expose village recruitment API", failures)
+	_expect(team != null and team.has_method("spawn_enemies"), "TeamController should keep enemy spawner compatibility", failures)
+	team.free()
+
+	var map_hud := StrategicMapHudScene.instantiate()
+	_expect(map_hud != null and map_hud.has_method("toggle_full_map"), "StrategicMapHud scene should expose full-map API", failures)
+	if map_hud:
+		map_hud.free()
 
 
 func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
@@ -190,11 +313,17 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 	var controller := scene.get_node_or_null("VillageSelectionController")
 	var time_system := scene.get_node_or_null("GameTimeSystem")
 	var date_display := scene.get_node_or_null("GameDateDisplay")
+	var player_team := scene.get_node_or_null("PlayerTeam")
+	var enemy_team := scene.get_node_or_null("EnemyTroopSpawner")
+	var map_hud := scene.get_node_or_null("StrategicMapHud")
 	_expect(region is VillageRegion, "%s should contain VillageRegion" % scene_path, failures)
 	_expect(drawer != null and drawer.has_method("show_village_summary"), "%s should contain VillageInfoDrawer" % scene_path, failures)
 	_expect(controller != null and controller.has_method("_pick_selectable"), "%s should contain VillageSelectionController" % scene_path, failures)
 	_expect(time_system != null and time_system.has_method("get_current_snapshot"), "%s should contain GameTimeSystem" % scene_path, failures)
 	_expect(date_display != null and date_display.has_method("bind_to_time_system"), "%s should contain GameDateDisplay" % scene_path, failures)
+	_expect(player_team != null and player_team.has_method("recruit_soldiers_from_village"), "%s should contain PlayerTeam controller" % scene_path, failures)
+	_expect(enemy_team != null and enemy_team.has_method("spawn_enemies"), "%s should contain enemy team controller" % scene_path, failures)
+	_expect(map_hud != null and map_hud.has_method("toggle_full_map"), "%s should contain StrategicMapHud" % scene_path, failures)
 	if region:
 		_expect(region.get("time_system_path") == NodePath("../GameTimeSystem"), "%s VillageRegion should point at GameTimeSystem" % scene_path, failures)
 	if drawer:
@@ -205,6 +334,18 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		_expect(controller.get("village_region_path") == NodePath("../VillageRegion"), "%s controller should point at VillageRegion" % scene_path, failures)
 		_expect(controller.get("info_drawer_path") == NodePath("../VillageInfoDrawer"), "%s controller should point at VillageInfoDrawer" % scene_path, failures)
 		_expect(controller.get("camera_path") == NodePath("../RTSCameraRig/Camera3D"), "%s controller should point at the RTS camera" % scene_path, failures)
+		_expect(controller.get("team_controller_path") == NodePath("../PlayerTeam"), "%s controller should point at PlayerTeam for recruitment" % scene_path, failures)
+	if player_team:
+		_expect(str(player_team.get("team_id")) == "player", "%s PlayerTeam should use player team id" % scene_path, failures)
+		_expect(player_team.get("primary_village_path") == NodePath("../VillageRegion"), "%s PlayerTeam should point at VillageRegion" % scene_path, failures)
+		_expect((player_team.get("primary_troop_paths") as Array).has(NodePath("../Troop_01")), "%s PlayerTeam should own Troop_01" % scene_path, failures)
+	if enemy_team:
+		_expect(str(enemy_team.get("team_id")) == "enemy", "%s enemy team should use enemy team id" % scene_path, failures)
+		_expect(bool(enemy_team.get("spawn_initial_troops")), "%s enemy team should spawn initial troops" % scene_path, failures)
+		_expect(not bool(enemy_team.get("controllable")), "%s enemy team should be AI controlled/read-only" % scene_path, failures)
+	if map_hud:
+		_expect(map_hud.get("camera_path") == NodePath("../RTSCameraRig/Camera3D"), "%s map HUD should point at the RTS camera" % scene_path, failures)
+		_expect(not String(map_hud.get("movement_map_path")).is_empty(), "%s map HUD should reference movement-map data" % scene_path, failures)
 	scene.free()
 
 

@@ -222,6 +222,7 @@ var _food_last_shortage_kg := 0.0
 var _food_cumulative_shortage_kg := 0.0
 var _food_days_elapsed := 0
 var _food_last_farmer_count := -1
+var _recruited_villager_count := 0
 var _time_system_node: Node
 var _last_time_snapshot: Dictionary = {}
 var _peasant_runtime_terrain: Node3D
@@ -500,6 +501,8 @@ func to_runtime_data() -> Dictionary:
 		"village_ring_surface_offset": village_ring_surface_offset,
 		"village_ground_highlight_width": village_ground_highlight_width,
 		"peasant_target_count": _get_effective_peasant_target_count(),
+		"base_peasant_target_count": _get_base_peasant_target_count(),
+		"recruited_villager_count": _recruited_villager_count,
 		"peasant_spawn_rate_per_minute": _get_effective_peasant_spawn_rate_per_minute(),
 		"peasant_death_rate_per_minute": _get_effective_peasant_death_rate_per_minute(),
 		"peasant_house_spawn_radius": peasant_house_spawn_radius,
@@ -604,6 +607,29 @@ func deposit_food_kg(amount_kg: float) -> float:
 	_village_storage_food_kg += deposited
 	_refresh_food_summary(true)
 	return deposited
+
+
+func get_available_recruit_count() -> int:
+	return _get_available_villager_count()
+
+
+func can_recruit_villagers(count: int) -> bool:
+	return maxi(count, 0) > 0 and _get_available_villager_count() >= maxi(count, 0)
+
+
+func recruit_villagers(count: int) -> int:
+	var requested := maxi(count, 0)
+	if requested <= 0:
+		return 0
+
+	var recruited := mini(requested, _get_available_villager_count())
+	if recruited <= 0:
+		return 0
+
+	_recruited_villager_count += recruited
+	_despawn_surplus_peasants(recruited)
+	_refresh_food_summary(true)
+	return recruited
 
 
 func advance_food_days(days: int) -> void:
@@ -2095,6 +2121,7 @@ func _initialize_house_food_records(house_placements: Array[Dictionary], field_g
 	_food_cumulative_shortage_kg = 0.0
 	_food_days_elapsed = 0
 	_food_last_farmer_count = -1
+	_recruited_villager_count = 0
 
 	var default_reserve := maxf(_get_balance_float(&"default_food_reserve_kg_per_house", 30.0), 0.0)
 	for index: int in range(house_placements.size()):
@@ -2151,7 +2178,8 @@ func _get_total_field_area_m2(field_generation: Dictionary) -> float:
 
 func _get_daily_rice_production_kg() -> float:
 	var days_per_year := maxi(_get_balance_int(&"food_days_per_year", 360), 1)
-	return _food_total_field_area_m2 * maxf(_get_balance_float(&"rice_kg_per_square_meter_per_year", 0.1), 0.0) / float(days_per_year)
+	var field_capacity_daily := _food_total_field_area_m2 * maxf(_get_balance_float(&"rice_kg_per_square_meter_per_year", 0.1), 0.0) / float(days_per_year)
+	return field_capacity_daily * _get_village_productivity_ratio()
 
 
 func _get_daily_rice_consumption_kg() -> float:
@@ -2167,6 +2195,20 @@ func _get_total_house_resident_count() -> int:
 	for record: Dictionary in _house_food_records:
 		total += maxi(int(record.get("resident_count", 0)), 0)
 	return total
+
+
+func _get_available_villager_count() -> int:
+	if is_instance_valid(_runtime_container):
+		return _get_alive_peasant_count()
+	return maxi(_get_base_peasant_target_count() - _recruited_villager_count, 0)
+
+
+func _get_full_productivity_villagers() -> int:
+	return maxi(_get_base_peasant_target_count(), 1)
+
+
+func _get_village_productivity_ratio() -> float:
+	return clampf(float(_get_available_villager_count()) / float(_get_full_productivity_villagers()), 0.0, 1.0)
 
 
 func _refresh_food_summary(emit_signal: bool) -> void:
@@ -2205,6 +2247,10 @@ func _make_village_food_summary() -> Dictionary:
 		"house_count": _house_food_records.size(),
 		"resident_count": _get_total_house_resident_count(),
 		"farmer_count": _get_alive_peasant_count(),
+		"available_villagers": _get_available_villager_count(),
+		"recruited_soldier_count": _recruited_villager_count,
+		"full_productivity_villagers": _get_full_productivity_villagers(),
+		"productivity_ratio": _get_village_productivity_ratio(),
 		"total_reserve_kg": total_reserve,
 		"daily_production_kg": daily_production,
 		"daily_consumption_kg": daily_consumption,
@@ -3797,7 +3843,7 @@ func _get_peasant_scene() -> PackedScene:
 	return DEFAULT_PEASANT_SCENE
 
 
-func _get_effective_peasant_target_count() -> int:
+func _get_base_peasant_target_count() -> int:
 	if (
 		village_type
 		and peasant_target_count == DEFAULT_PEASANT_TARGET_COUNT
@@ -3805,6 +3851,10 @@ func _get_effective_peasant_target_count() -> int:
 	):
 		return maxi(village_type.peasant_target_count, 0)
 	return maxi(peasant_target_count, 0)
+
+
+func _get_effective_peasant_target_count() -> int:
+	return maxi(_get_base_peasant_target_count() - _recruited_villager_count, 0)
 
 
 func _get_effective_peasant_spawn_rate_per_minute() -> float:
