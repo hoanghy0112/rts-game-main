@@ -13,7 +13,7 @@ config_version=5
 config/name="RTS Game"
 run/main_scene="res://modules/loading/boot.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
-run/max_fps=100
+run/max_fps=300
 config/icon="res://icon.svg"
 
 [autoload]
@@ -24,6 +24,7 @@ StartupPerformanceProbe="*res://globals/startup_performance_probe.gd"
 [display]
 
 window/size/mode=3
+window/vsync/vsync_mode=0
 
 [dotnet]
 

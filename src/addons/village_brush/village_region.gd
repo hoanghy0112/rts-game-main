@@ -573,7 +573,9 @@ func get_village_storage_summary() -> Dictionary:
 
 func get_village_storage_world_position() -> Vector3:
 	if is_instance_valid(_village_storage_node):
-		return _village_storage_node.global_position
+		if _village_storage_node.is_inside_tree():
+			return _village_storage_node.global_position
+		return _region_local_to_world(_village_storage_node.position)
 
 	var center := _get_village_storage_center_local_2d()
 	var terrain := _get_terrain_node()
@@ -1737,7 +1739,7 @@ func _kill_random_runtime_peasant(reason: StringName) -> bool:
 		peasant.call("kill", reason)
 	else:
 		_runtime_peasants.erase(peasant)
-		peasant.queue_free()
+		_free_runtime_peasant(peasant)
 	return true
 
 
@@ -1748,7 +1750,7 @@ func _despawn_surplus_peasants(count: int) -> void:
 			return
 		var peasant := alive_peasants[alive_peasants.size() - 1]
 		_runtime_peasants.erase(peasant)
-		peasant.queue_free()
+		_free_runtime_peasant(peasant)
 
 
 func _get_alive_peasant_count() -> int:
@@ -1784,12 +1786,21 @@ func _on_runtime_peasant_died(_reason: StringName, peasant: Node3D) -> void:
 
 	var cleanup_delay := maxf(peasant_death_cleanup_seconds, 0.0)
 	if cleanup_delay <= 0.0 or not is_inside_tree():
-		peasant.queue_free()
+		_free_runtime_peasant(peasant)
 		return
 
 	await get_tree().create_timer(cleanup_delay).timeout
 	if is_instance_valid(peasant):
+		_free_runtime_peasant(peasant)
+
+
+func _free_runtime_peasant(peasant: Node) -> void:
+	if not is_instance_valid(peasant):
+		return
+	if peasant.is_inside_tree() and peasant.get_tree():
 		peasant.queue_free()
+	else:
+		peasant.free()
 
 
 func _refresh_food_summary_if_farmer_count_changed() -> void:

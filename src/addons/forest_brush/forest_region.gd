@@ -85,6 +85,19 @@ enum PaintMode {
 		tree_billboard_fade_margin_meters = clamped_value
 		_notify_resource_rendering_changed()
 
+@export_range(0.0, 10000.0, 1.0, "or_greater") var runtime_tree_far_visible_distance_cap_m: float = 900.0
+@export_range(0.0, 10000.0, 1.0, "or_greater") var runtime_tree_billboard_visible_distance_cap_m: float = 1400.0
+
+@export_group("Runtime Culling")
+@export var runtime_camera_culling_enabled := true:
+	set(value):
+		runtime_camera_culling_enabled = value
+		_update_runtime_culling_process()
+
+@export_range(0.05, 2.0, 0.05, "or_greater") var runtime_culling_interval_seconds: float = 0.25
+@export_range(64.0, 10000.0, 1.0, "or_greater") var runtime_multimesh_cull_distance_meters: float = 900.0
+@export_range(0.0, 2048.0, 1.0, "or_greater") var runtime_multimesh_cull_hysteresis_meters: float = 160.0
+
 @export_group("Gathering")
 @export_range(1.0, 10000.0, 1.0, "or_greater") var wood_per_tree_cell_kg: float = 200.0
 
@@ -154,6 +167,15 @@ var _editor_gizmo_update_pending := false
 var _editor_runtime_preview_batch_depth := 0
 var _runtime_container: Node3D
 var _scene_part_cache: Dictionary = {}
+var _runtime_cull_elapsed := 0.0
+var _runtime_visible_multimesh_count := 0
+var _runtime_culled_multimesh_count := 0
+var _runtime_min_multimesh_distance_m := 0.0
+var _runtime_max_multimesh_distance_m := 0.0
+var _runtime_avg_multimesh_distance_m := 0.0
+var _runtime_within_cull_distance_count := 0
+var _runtime_within_hysteresis_count := 0
+var _runtime_beyond_hysteresis_count := 0
 
 
 static func normalize_cells(value: Array[Vector2i]) -> Array[Vector2i]:
@@ -192,7 +214,9 @@ func _ready() -> void:
 	_ensure_region_data()
 	_sync_legacy_cache_from_region_data()
 	if Engine.is_editor_hint():
+		set_process(false)
 		return
+	_update_runtime_culling_process()
 	if async_runtime_preview_on_ready:
 		rebuild_runtime_preview_deferred.call_deferred()
 	else:
@@ -200,9 +224,25 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	set_process(false)
 	_editor_gizmo_update_pending = false
 	_editor_runtime_preview_batch_depth = 0
 	clear_runtime_instances()
+
+
+func _process(delta: float) -> void:
+	if Engine.is_editor_hint() or not runtime_camera_culling_enabled:
+		set_process(false)
+		return
+	if not _has_runtime_container():
+		set_process(false)
+		return
+
+	_runtime_cull_elapsed += delta
+	if _runtime_cull_elapsed < maxf(runtime_culling_interval_seconds, 0.05):
+		return
+	_runtime_cull_elapsed = 0.0
+	_apply_runtime_camera_culling(false)
 
 
 func set_forest_data(new_forest_cells: Array[Vector2i], new_cell_plant_ids: Dictionary) -> void:
@@ -375,6 +415,22 @@ func get_macro_detail_data() -> Dictionary:
 	return to_runtime_data()
 
 
+func get_runtime_render_summary() -> Dictionary:
+	return {
+		"runtime_visible_multimesh_count": _runtime_visible_multimesh_count,
+		"runtime_culled_multimesh_count": _runtime_culled_multimesh_count,
+		"runtime_camera_culling_enabled": runtime_camera_culling_enabled,
+		"runtime_cull_distance_meters": runtime_multimesh_cull_distance_meters,
+		"runtime_cull_hysteresis_meters": runtime_multimesh_cull_hysteresis_meters,
+		"runtime_min_multimesh_distance_m": _runtime_min_multimesh_distance_m,
+		"runtime_max_multimesh_distance_m": _runtime_max_multimesh_distance_m,
+		"runtime_avg_multimesh_distance_m": _runtime_avg_multimesh_distance_m,
+		"runtime_within_cull_distance_count": _runtime_within_cull_distance_count,
+		"runtime_within_hysteresis_count": _runtime_within_hysteresis_count,
+		"runtime_beyond_hysteresis_count": _runtime_beyond_hysteresis_count,
+	}
+
+
 func should_trigger_macro_overlay() -> bool:
 	return macro_overlay_enabled
 
@@ -394,6 +450,8 @@ func rebuild_runtime_preview() -> void:
 	_ensure_runtime_container()
 	_create_multimesh_groups(groups)
 	_create_dense_grass_layers(dense_layer_specs)
+	_apply_runtime_camera_culling(true)
+	_update_runtime_culling_process()
 
 
 func rebuild_runtime_preview_deferred() -> void:
@@ -454,6 +512,8 @@ func rebuild_runtime_preview_async() -> void:
 		"dense_layers": dense_layer_specs.size(),
 		"chunks": chunks.size(),
 	})
+	_apply_runtime_camera_culling(true)
+	_update_runtime_culling_process()
 
 
 func rebuild_runtime_chunks(chunks: Array[Vector2i]) -> void:
@@ -485,6 +545,8 @@ func rebuild_runtime_chunks(chunks: Array[Vector2i]) -> void:
 		var far_groups := _build_instance_groups(terrain, far_chunk_filter, {2: true, 3: true})
 		_create_multimesh_groups(far_groups)
 	_create_dense_grass_layers(_build_dense_grass_layer_specs(terrain))
+	_apply_runtime_camera_culling(true)
+	_update_runtime_culling_process()
 
 
 func clear_runtime_instances() -> void:
@@ -499,6 +561,15 @@ func clear_runtime_instances() -> void:
 		container.free()
 
 	_runtime_container = null
+	_runtime_visible_multimesh_count = 0
+	_runtime_culled_multimesh_count = 0
+	_runtime_min_multimesh_distance_m = 0.0
+	_runtime_max_multimesh_distance_m = 0.0
+	_runtime_avg_multimesh_distance_m = 0.0
+	_runtime_within_cull_distance_count = 0
+	_runtime_within_hysteresis_count = 0
+	_runtime_beyond_hysteresis_count = 0
+	_update_runtime_culling_process()
 
 
 func begin_editor_runtime_preview_batch() -> void:
@@ -949,6 +1020,7 @@ func _create_multimesh_group(group: Dictionary) -> void:
 	_ensure_runtime_container()
 	_runtime_container.add_child(instance, false, INTERNAL_MODE_BACK)
 	instance.owner = null
+	_apply_runtime_camera_culling_to_instance(instance, _get_runtime_camera(), true)
 
 
 func _configure_visibility_range(instance: GeometryInstance3D, plant_type: ForestPlantTypeData, lod_tier: int) -> void:
@@ -1083,17 +1155,35 @@ func _get_lod_tiers_for_plant_type(plant_type: ForestPlantTypeData) -> Array[int
 
 func _get_visible_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: int) -> float:
 	if not _uses_region_tree_low_poly_distance(plant_type):
-		return plant_type.get_visible_distance_for_lod(lod_tier)
+		return _cap_visible_distance_for_lod(plant_type, lod_tier, plant_type.get_visible_distance_for_lod(lod_tier))
 
 	match lod_tier:
 		1:
-			return _get_low_poly_distance_for_plant_type(plant_type)
+			return _cap_visible_distance_for_lod(plant_type, lod_tier, _get_low_poly_distance_for_plant_type(plant_type))
 		2:
-			return maxf(plant_type.far_visible_distance, _get_low_poly_distance_for_plant_type(plant_type))
+			return _cap_visible_distance_for_lod(
+				plant_type,
+				lod_tier,
+				maxf(plant_type.far_visible_distance, _get_low_poly_distance_for_plant_type(plant_type))
+			)
 		3:
-			return maxf(plant_type.billboard_visible_distance, plant_type.far_visible_distance)
+			return _cap_visible_distance_for_lod(
+				plant_type,
+				lod_tier,
+				maxf(plant_type.billboard_visible_distance, plant_type.far_visible_distance)
+			)
 		_:
-			return plant_type.get_visible_distance_for_lod(lod_tier)
+			return _cap_visible_distance_for_lod(plant_type, lod_tier, plant_type.get_visible_distance_for_lod(lod_tier))
+
+
+func _cap_visible_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: int, distance: float) -> float:
+	if not plant_type or plant_type.category != ForestPlantTypeData.PlantCategory.TREE:
+		return distance
+	if lod_tier >= 3 and runtime_tree_billboard_visible_distance_cap_m > 0.0:
+		return minf(distance, runtime_tree_billboard_visible_distance_cap_m)
+	if lod_tier >= 2 and runtime_tree_far_visible_distance_cap_m > 0.0:
+		return minf(distance, runtime_tree_far_visible_distance_cap_m)
+	return distance
 
 
 func _get_begin_distance_for_lod(plant_type: ForestPlantTypeData, lod_tier: int) -> float:
@@ -1412,6 +1502,7 @@ func _ensure_runtime_container() -> Node3D:
 	_runtime_container.name = RUNTIME_CONTAINER_NAME
 	add_child(_runtime_container, false, INTERNAL_MODE_BACK)
 	_runtime_container.owner = null
+	_update_runtime_culling_process()
 	return _runtime_container
 
 
@@ -1420,6 +1511,127 @@ func _has_runtime_container() -> bool:
 		return true
 	_runtime_container = get_node_or_null(RUNTIME_CONTAINER_NAME) as Node3D
 	return is_instance_valid(_runtime_container)
+
+
+func _update_runtime_culling_process() -> void:
+	if Engine.is_editor_hint():
+		set_process(false)
+		return
+	set_process(runtime_camera_culling_enabled and _has_runtime_container())
+
+
+func _apply_runtime_camera_culling(force: bool) -> void:
+	if not runtime_camera_culling_enabled or not is_instance_valid(_runtime_container):
+		_runtime_visible_multimesh_count = 0
+		_runtime_culled_multimesh_count = 0
+		_runtime_min_multimesh_distance_m = 0.0
+		_runtime_max_multimesh_distance_m = 0.0
+		_runtime_avg_multimesh_distance_m = 0.0
+		_runtime_within_cull_distance_count = 0
+		_runtime_within_hysteresis_count = 0
+		_runtime_beyond_hysteresis_count = 0
+		return
+
+	var camera := _get_runtime_camera()
+	if not camera:
+		return
+
+	var visible_count := 0
+	var culled_count := 0
+	var measured_count := 0
+	var min_distance := INF
+	var max_distance := 0.0
+	var total_distance := 0.0
+	var cull_distance := maxf(runtime_multimesh_cull_distance_meters, 1.0)
+	var hysteresis_distance := cull_distance + maxf(runtime_multimesh_cull_hysteresis_meters, 0.0)
+	_runtime_within_cull_distance_count = 0
+	_runtime_within_hysteresis_count = 0
+	_runtime_beyond_hysteresis_count = 0
+	for child: Node in _runtime_container.get_children(true):
+		if not (child is MultiMeshInstance3D):
+			continue
+		var instance := child as MultiMeshInstance3D
+		var distance := _get_runtime_instance_camera_distance(instance, camera)
+		measured_count += 1
+		min_distance = minf(min_distance, distance)
+		max_distance = maxf(max_distance, distance)
+		total_distance += distance
+		if distance <= cull_distance:
+			_runtime_within_cull_distance_count += 1
+		elif distance <= hysteresis_distance:
+			_runtime_within_hysteresis_count += 1
+		else:
+			_runtime_beyond_hysteresis_count += 1
+		if _apply_runtime_camera_culling_to_instance_with_distance(instance, distance, force):
+			visible_count += 1
+		else:
+			culled_count += 1
+	_runtime_visible_multimesh_count = visible_count
+	_runtime_culled_multimesh_count = culled_count
+	_runtime_min_multimesh_distance_m = min_distance if measured_count > 0 else 0.0
+	_runtime_max_multimesh_distance_m = max_distance if measured_count > 0 else 0.0
+	_runtime_avg_multimesh_distance_m = total_distance / float(measured_count) if measured_count > 0 else 0.0
+
+
+func _apply_runtime_camera_culling_to_instance(
+	instance: MultiMeshInstance3D,
+	camera: Camera3D,
+	force: bool
+) -> bool:
+	if not instance or not is_instance_valid(instance):
+		return false
+	if not runtime_camera_culling_enabled:
+		instance.visible = true
+		return true
+	if not camera:
+		instance.visible = true
+		return true
+
+	var distance := _get_runtime_instance_camera_distance(instance, camera)
+	return _apply_runtime_camera_culling_to_instance_with_distance(instance, distance, force)
+
+
+func _apply_runtime_camera_culling_to_instance_with_distance(
+	instance: MultiMeshInstance3D,
+	distance: float,
+	force: bool
+) -> bool:
+	var cull_distance := maxf(runtime_multimesh_cull_distance_meters, 1.0)
+	var hysteresis := maxf(runtime_multimesh_cull_hysteresis_meters, 0.0)
+	var threshold := cull_distance
+	if instance.visible and not force:
+		threshold += hysteresis
+
+	var should_be_visible := distance <= threshold
+	if instance.visible != should_be_visible:
+		instance.visible = should_be_visible
+	return should_be_visible
+
+
+func _get_runtime_instance_camera_distance(instance: MultiMeshInstance3D, camera: Camera3D) -> float:
+	var chunk_center := _get_runtime_instance_world_center(instance)
+	chunk_center.y = camera.global_position.y
+	return chunk_center.distance_to(camera.global_position)
+
+
+func _get_runtime_instance_world_center(instance: MultiMeshInstance3D) -> Vector3:
+	var local_center := Vector3.ZERO
+	var aabb := instance.custom_aabb
+	if aabb.size.length_squared() <= 0.0 and instance.multimesh:
+		aabb = instance.multimesh.custom_aabb
+	if aabb.size.length_squared() > 0.0:
+		local_center = aabb.get_center()
+	return instance.global_transform * local_center
+
+
+func _get_runtime_camera() -> Camera3D:
+	var terrain := _get_terrain_node()
+	if is_instance_valid(terrain) and terrain.has_method("get_camera"):
+		var terrain_camera: Variant = terrain.call("get_camera")
+		if terrain_camera is Camera3D:
+			return terrain_camera as Camera3D
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null
 
 
 func _remove_runtime_chunk(chunk_coord: Vector2i) -> void:

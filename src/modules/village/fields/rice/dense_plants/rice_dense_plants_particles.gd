@@ -19,7 +19,7 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(8.0, 256.0, 1.0) var cell_width: float = 96.0:
+@export_range(8.0, 256.0, 1.0) var cell_width: float = 48.0:
 	set(value):
 		cell_width = clamp(value, 8.0, 256.0)
 		rows = maxi(int(cell_width / instance_spacing), 1)
@@ -30,7 +30,7 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 		_set_offsets()
 		_mark_static_process_parameters_dirty()
 
-@export_range(1, 15, 2) var grid_width: int = 3:
+@export_range(1, 15, 2) var grid_width: int = 5:
 	set(value):
 		var odd_value := value if value % 2 == 1 else value + 1
 		grid_width = clampi(odd_value, 1, 15)
@@ -38,9 +38,9 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 		min_draw_distance = 1.0
 		_create_grid()
 
-@export_storage var rows: int = 96
+@export_storage var rows: int = 48
 
-@export_storage var amount: int = 9216:
+@export_storage var amount: int = 2304:
 	set(value):
 		amount = maxi(value, 1)
 		particle_count = amount * grid_width * grid_width
@@ -59,8 +59,8 @@ const PRESERVE_VISIBILITY_RANGE_META := &"village_preserve_visibility_range"
 @export var mesh: Mesh
 @export var use_procedural_rice_blade_mesh := true
 
-@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 8.0
-@export_range(0.0, 128.0, 1.0, "or_greater") var near_visibility_fade_margin: float = 32.0:
+@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 4.0
+@export_range(0.0, 128.0, 1.0, "or_greater") var near_visibility_fade_margin: float = 24.0:
 	set(value):
 		near_visibility_fade_margin = maxf(value, 0.0)
 		_update_particle_visibility_ranges()
@@ -81,13 +81,13 @@ var mesh_material_override: Material:
 			particle_node.material_override = mesh_material_override
 
 @export_group("Info")
-@export var min_draw_distance: float = 144.0:
+@export var min_draw_distance: float = 120.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
 		_update_particle_visibility_ranges()
 		_mark_static_process_parameters_dirty()
 
-@export var particle_count: int = 82944:
+@export var particle_count: int = 57600:
 	set(value):
 		particle_count = amount * grid_width * grid_width
 

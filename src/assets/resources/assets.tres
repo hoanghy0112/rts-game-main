@@ -13,7 +13,6 @@
 [ext_resource type="Texture2D" uid="uid://xq3lx7mws5qi" path="res://assets/textures/ground080_nrm_rgh.png" id="8_sand_nrm"]
 [ext_resource type="Texture2D" uid="uid://bqjp0brm7mc0" path="res://assets/textures/ground095a_alb_ht.png" id="9_mud_alb"]
 [ext_resource type="Texture2D" uid="uid://djnv2pwt8pid7" path="res://assets/textures/ground095a_nrm_rgh.png" id="10_mud_nrm"]
-[ext_resource type="PackedScene" path="res://assets/models/forest/grass/smooth_dense/forest_smooth_grass_01.tscn" id="11_smooth_grass"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_b2vqk"]
 transparency = 4
@@ -166,15 +165,6 @@ last_shadow_lod = 0
 lod0_range = 128.0
 lod1_range = 128.0
 
-[sub_resource type="Terrain3DMeshAsset" id="Terrain3DMeshAsset_forest_smooth_grass_01"]
-name = "Forest Smooth Grass 01"
-id = 8
-scene_file = ExtResource("11_smooth_grass")
-density = 0.24
-last_lod = 0
-last_shadow_lod = 0
-lod0_range = 96.0
-
 [sub_resource type="Terrain3DTextureAsset" id="Terrain3DTextureAsset_lha57"]
 name = "Cliff"
 albedo_texture = ExtResource("2_pog6b")
@@ -237,5 +227,5 @@ ao_strength = 2.0
 roughness = 0.92
 
 [resource]
-mesh_list = Array[Terrain3DMeshAsset]([SubResource("Terrain3DMeshAsset_2qf8x"), SubResource("Terrain3DMeshAsset_or12t"), SubResource("Terrain3DMeshAsset_uyhyi"), SubResource("Terrain3DMeshAsset_3wxcx"), SubResource("Terrain3DMeshAsset_3mny6"), SubResource("Terrain3DMeshAsset_forest_bamboo_01"), SubResource("Terrain3DMeshAsset_forest_banana_palm_01"), SubResource("Terrain3DMeshAsset_forest_broadleaf_canopy_01"), SubResource("Terrain3DMeshAsset_forest_smooth_grass_01")])
+mesh_list = Array[Terrain3DMeshAsset]([SubResource("Terrain3DMeshAsset_2qf8x"), SubResource("Terrain3DMeshAsset_or12t"), SubResource("Terrain3DMeshAsset_uyhyi"), SubResource("Terrain3DMeshAsset_3wxcx"), SubResource("Terrain3DMeshAsset_3mny6"), SubResource("Terrain3DMeshAsset_forest_bamboo_01"), SubResource("Terrain3DMeshAsset_forest_banana_palm_01"), SubResource("Terrain3DMeshAsset_forest_broadleaf_canopy_01")])
 texture_list = Array[Terrain3DTextureAsset]([SubResource("Terrain3DTextureAsset_lha57"), SubResource("Terrain3DTextureAsset_od0q7"), SubResource("Terrain3DTextureAsset_h06jt"), SubResource("Terrain3DTextureAsset_4psmm"), SubResource("Terrain3DTextureAsset_h7hvr"), SubResource("Terrain3DTextureAsset_sosl7")])

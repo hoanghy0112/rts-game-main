@@ -48,7 +48,7 @@ const DENSE_PARTICLE_PLANT_CONFIG := {
 		DENSE_GRASS_ID: {
 			"scene": DENSE_GRASS_SCENE,
 			"particle_scene": DENSE_GRASS_PARTICLE_SCENE,
-			"requires_terrain_asset": true,
+			"requires_terrain_asset": false,
 			"near_visible_distance": 120.0,
 			"mid_visible_distance": 240.0,
 			"far_visible_distance": 360.0,

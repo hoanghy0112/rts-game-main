@@ -289,7 +289,7 @@ month_names = PackedStringArray("Month 01", "Month 02", "Month 03", "Month 04", 
 transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -1525.148, 0, 456.124)
 troop_id = &"midlands_guard"
 display_name = "Midlands Guard"
-soldier_count = 150
+soldier_count = 50
 troop_flag_color = Color(0.82, 0.12, 0.08, 1)
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
@@ -302,8 +302,8 @@ script = ExtResource("35_enemy_spawner")
 spawn_seed = 91031
 min_enemy_troops = 1
 max_enemy_troops = 1
-min_soldiers_per_troop = 150
-max_soldiers_per_troop = 150
+min_soldiers_per_troop = 50
+max_soldiers_per_troop = 50
 spawn_radius_m = 3.0
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
@@ -312,7 +312,7 @@ movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 
 [node name="TroopManagementDrawer" parent="." unique_id=381193051 instance=ExtResource("33_troop_drawer")]
 
-[node name="TroopBackgroundJobsDebugPanel" parent="." instance=ExtResource("36_jobs_debug")]
+[node name="TroopBackgroundJobsDebugPanel" parent="." unique_id=680202900 instance=ExtResource("36_jobs_debug")]
 
 [node name="VillageSelectionController" type="Node" parent="." unique_id=532361647]
 script = ExtResource("29_food_select")
@@ -347,5 +347,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1023.6752, 52.27466, 654.493
 script = ExtResource("10_4i6rt")
 terrain_path = NodePath("../Terrain3D")
 density_multiplier = 1.3
+macro_overlay_enabled = true
+runtime_multimesh_cull_distance_meters = 450.0
+runtime_multimesh_cull_hysteresis_meters = 96.0
 region_data = SubResource("Resource_e3aux")
 metadata/_custom_type_script = "uid://bw0augew6bbft"

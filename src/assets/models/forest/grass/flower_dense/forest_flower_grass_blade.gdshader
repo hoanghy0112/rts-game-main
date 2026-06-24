@@ -8,7 +8,6 @@ uniform vec3 stem_color = vec3(0.14, 0.19, 0.06);
 uniform vec3 flower_white = vec3(0.96, 0.94, 0.84);
 uniform vec3 flower_yellow = vec3(0.95, 0.72, 0.24);
 uniform vec3 flower_red = vec3(0.82, 0.16, 0.12);
-uniform vec2 wind_direction = vec2(1.0, 1.0);
 
 varying vec4 data;
 varying vec2 part_data;
@@ -37,16 +36,7 @@ void vertex() {
 	part_data = vec2(UV2.x, UV.x);
 
 	vec3 w_vertex = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	float scale = pow(max(INSTANCE_CUSTOM[3] * INSTANCE_CUSTOM[3], 0.0), 0.707);
-	float force = INSTANCE_CUSTOM[2] * data[2] * scale;
-	force -= fract(force * 256.0) * force * 0.05;
-	force = pow(max(force, 0.0), 0.707);
-
-	float lateral_wobble = sin(TIME * 2.0 * (1.0 + data.r + data.g)) * 0.25 * (1.0 - INSTANCE_CUSTOM[2]);
-	vec2 direction = wind_direction / max(length(wind_direction), 0.0001);
-	w_vertex.xz -= (vec2(-direction.y, direction.x) * lateral_wobble + direction) * force;
-	w_vertex.y -= INSTANCE_CUSTOM[2] * force * data[2];
-	data[3] = force;
+	data[3] = 0.0;
 
 	VERTEX = (VIEW_MATRIX * vec4(w_vertex, 1.0)).xyz;
 	NORMAL = MODELVIEW_NORMAL_MATRIX * NORMAL;

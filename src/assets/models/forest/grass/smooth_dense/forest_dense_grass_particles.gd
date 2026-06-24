@@ -47,14 +47,18 @@ class_name ForestDenseGrassParticles
 		for particle_node: GPUParticles3D in particle_nodes:
 			particle_node.amount = amount
 
-@export_range(1, 256, 1) var process_fixed_fps: int = 30:
+@export_range(1, 256, 1) var process_fixed_fps: int = 1:
 	set(value):
 		process_fixed_fps = maxi(value, 1)
 		for particle_node: GPUParticles3D in particle_nodes:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
 
-@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 1.0
+@export_range(1.0, 64.0, 0.25, "or_greater") var reposition_threshold_meters: float = 8.0
+@export_range(0.0, 128.0, 1.0, "or_greater") var near_visibility_fade_margin: float = 24.0:
+	set(value):
+		near_visibility_fade_margin = maxf(value, 0.0)
+		_update_particle_visibility_ranges()
 
 @export var process_material: ShaderMaterial
 @export var mesh: Mesh
@@ -78,6 +82,7 @@ var mesh_material_override: Material:
 @export var min_draw_distance: float = 120.0:
 	set(value):
 		min_draw_distance = float(cell_width * grid_width) * 0.5
+		_update_particle_visibility_ranges()
 		_mark_static_process_parameters_dirty()
 
 @export var particle_count: int = 102400:
@@ -185,6 +190,7 @@ func _create_grid() -> void:
 			particle_node.fixed_fps = process_fixed_fps
 			particle_node.preprocess = 1.0 / float(process_fixed_fps)
 			particle_node.use_fixed_seed = true
+			_configure_particle_visibility(particle_node)
 			particle_node.set_physics_interpolation_mode(Node.PHYSICS_INTERPOLATION_MODE_OFF)
 			if mesh_material_override:
 				particle_node.material_override = mesh_material_override
@@ -341,6 +347,20 @@ func _update_particle_aabbs() -> void:
 	var particle_aabb := _get_particle_aabb()
 	for particle_node: GPUParticles3D in particle_nodes:
 		particle_node.custom_aabb = particle_aabb
+
+
+func _update_particle_visibility_ranges() -> void:
+	for particle_node: GPUParticles3D in particle_nodes:
+		if is_instance_valid(particle_node):
+			_configure_particle_visibility(particle_node)
+
+
+func _configure_particle_visibility(particle_node: GPUParticles3D) -> void:
+	particle_node.visibility_range_begin = 0.0
+	particle_node.visibility_range_begin_margin = 0.0
+	particle_node.visibility_range_end = maxf(min_draw_distance, 1.0)
+	particle_node.visibility_range_end_margin = clampf(near_visibility_fade_margin, 0.0, particle_node.visibility_range_end)
+	particle_node.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 func _get_particle_aabb() -> AABB:

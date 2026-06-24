@@ -2,7 +2,7 @@ extends Control
 
 const DRAFT_SCENE_PATH := "res://modules/draft/draft.tscn"
 const SLOW_LOAD_THRESHOLD_MS := 1000.0
-const TARGET_FPS := 100
+const TARGET_FPS := 300
 
 @onready var _status_label: Label = $StatusLabel
 
@@ -11,6 +11,8 @@ var _load_started_usec := 0
 
 func _ready() -> void:
 	Engine.max_fps = TARGET_FPS
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	_mark_startup_phase("boot_ready")
 	_load_started_usec = Time.get_ticks_usec()
 	call_deferred("_load_draft_scene")

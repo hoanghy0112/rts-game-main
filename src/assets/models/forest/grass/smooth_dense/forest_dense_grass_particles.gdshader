@@ -13,13 +13,6 @@ uniform vec3 min_scale = vec3(0.125, 0.5, 0.125);
 uniform vec3 max_scale = vec3(0.125, 1.0, 0.125);
 uniform float terrain_clearance_meters : hint_range(0.0, 0.25, 0.005) = 0.04;
 
-group_uniforms wind;
-uniform float noise_scale = 0.0041;
-uniform float wind_speed = 0.025;
-uniform float wind_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
-uniform float wind_dithering = 4.0;
-uniform vec2 wind_direction = vec2(1.0, 1.0);
-
 group_uniforms shaping;
 uniform float clod_scale_boost = 2.0;
 uniform float clod_min_threshold : hint_range(0.0, 1.0, 0.001) = 0.2;
@@ -284,7 +277,4 @@ void start() {
 
 
 void process() {
-	vec2 direction = wind_direction / max(length(wind_direction), 0.0001);
-	vec2 uv = (TRANSFORM[3].xz + CUSTOM.rg * wind_dithering) * noise_scale;
-	CUSTOM[2] = textureLod(main_noise, uv + TIME * wind_speed * direction, 0.0).r * wind_strength;
 }
