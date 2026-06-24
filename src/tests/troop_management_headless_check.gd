@@ -104,6 +104,7 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_troop_combat_resolution(failures)
 	await _check_large_combat_uses_bounded_work(failures)
 	await _check_combat_socket_targets_stay_local(failures)
+	await _check_combat_debug_lines_only_show_near_fights(failures)
 	await _check_combat_surround_sockets_and_facing(failures)
 	await _check_combat_target_capacity(failures)
 	await _check_normal_combat_assigns_all_attackers_with_capacity(failures)
@@ -1209,6 +1210,76 @@ func _check_combat_socket_targets_stay_local(failures: Array[String]) -> void:
 	_expect(
 		max_socket_distance <= float(player.get("combat_spear_range_m")) + 0.02,
 		"large combat socket targets should stay local to their defender instead of using whole-troop lateral offsets; max %.2fm" % max_socket_distance,
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_combat_debug_lines_only_show_near_fights(failures: Array[String]) -> void:
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"debug_line_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", 2)
+	player.set("formation_columns", 2)
+	player.set("troop_mode", "attack")
+	player.set("combat_spear_range_m", 3.0)
+	player.set("combat_socket_arrival_radius", 0.25)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"debug_line_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", 2)
+	enemy.set("formation_columns", 2)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_spear_range_m", 3.0)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(8.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	var attackers := _get_active_soldier_nodes(player)
+	var defenders := _get_active_soldier_nodes(enemy)
+	_expect(attackers.size() >= 2 and defenders.size() >= 2, "combat debug line setup should have two soldiers per side", failures)
+	if attackers.size() < 2 or defenders.size() < 2:
+		root.remove_child(enemy)
+		enemy.free()
+		root.remove_child(player)
+		player.free()
+		return
+
+	var near_attacker := attackers[0] as Node3D
+	var far_attacker := attackers[1] as Node3D
+	var near_defender := defenders[0] as Node3D
+	var far_defender := defenders[1] as Node3D
+	near_attacker.global_position = Vector3(0.0, 0.0, 0.0)
+	near_defender.global_position = Vector3(2.2, 0.0, 0.0)
+	far_attacker.global_position = Vector3(0.0, 0.0, 10.0)
+	far_defender.global_position = Vector3(18.0, 0.0, 10.0)
+	player.call("_set_state", &"fighting")
+	player.call("set_combat_debug_lines_enabled", true)
+	var load_by_defender := {
+		near_defender.get_instance_id(): 0,
+		far_defender.get_instance_id(): 0,
+	}
+	player.call("_assign_combat_target_to_soldier", near_attacker, near_defender, load_by_defender)
+	player.call("_lock_combat_soldier", near_attacker, near_defender)
+	player.call("_assign_combat_target_to_soldier", far_attacker, far_defender, load_by_defender)
+	player.call("_lock_combat_soldier", far_attacker, far_defender)
+	player.call("_update_combat_debug_lines")
+	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(bool(player.call("_is_combat_pair_actively_fighting", near_attacker, near_defender)), "near locked pair should count as an active fight", failures)
+	_expect(not bool(player.call("_is_combat_pair_actively_fighting", far_attacker, far_defender)), "far locked pair should not count as an active fight", failures)
+	_expect(
+		int(summary.get("combat_debug_line_pair_count", 0)) == 1,
+		"combat debug lines should draw only active near fighting pairs, not far movement assignments",
 		failures
 	)
 

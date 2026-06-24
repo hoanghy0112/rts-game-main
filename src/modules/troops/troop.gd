@@ -640,6 +640,7 @@ var _route_visual: Node
 var _combat_debug_line_mesh: MeshInstance3D
 var _combat_debug_line_material: StandardMaterial3D
 var _combat_debug_lines_enabled_value := false
+var _combat_debug_line_pair_count := 0
 var _terrain: Node3D
 var _movement_map: Resource
 var _selected := false
@@ -1857,8 +1858,9 @@ func _prewarm_soldier_batch_renderer() -> void:
 func _sync_soldier_batch_renderer(delta: float = 0.0) -> void:
 	if not _soldier_batch_renderer:
 		return
-	var render_local_space := _state == STATE_MOVING and not _combat_scatter_active and not _has_active_soldier_independent_motion()
-	if _should_throttle_active_soldier_render_sync():
+	var has_active_independent_motion := _has_active_soldier_independent_motion()
+	var render_local_space := _state == STATE_MOVING and not _combat_scatter_active and not has_active_independent_motion
+	if _should_throttle_active_soldier_render_sync(has_active_independent_motion):
 		if _soldier_render_has_synced:
 			var active_stride := 1 if (_state == STATE_FIGHTING or _combat_scatter_active) else maxi(soldier_render_active_sync_frame_stride, 1)
 			if active_stride > 1:
@@ -1872,8 +1874,8 @@ func _sync_soldier_batch_renderer(delta: float = 0.0) -> void:
 				return
 		_soldier_render_sync_remaining = _get_active_soldier_render_sync_interval()
 		_soldier_render_sync_frame_cursor = 0
-	elif _should_throttle_soldier_render_sync():
-		if _soldier_render_has_synced and not _has_active_soldier_independent_motion():
+	elif _should_throttle_soldier_render_sync(has_active_independent_motion):
+		if _soldier_render_has_synced and not has_active_independent_motion:
 			_soldier_render_sync_skip_count += 1
 			return
 		var stride := maxi(soldier_render_idle_sync_frame_stride, 1)
@@ -1894,7 +1896,7 @@ func _sync_soldier_batch_renderer(delta: float = 0.0) -> void:
 	if _soldier_batch_renderer.has_method("set_local_space_enabled"):
 		_soldier_batch_renderer.call("set_local_space_enabled", render_local_space)
 	if _soldier_batch_renderer.has_method("sync"):
-		var active_sync := _state == STATE_MOVING or _state == STATE_FIGHTING or _combat_scatter_active
+		var active_sync := _state == STATE_MOVING or _state == STATE_FIGHTING or _combat_scatter_active or has_active_independent_motion
 		var combat_partial_sync := (
 			_state == STATE_FIGHTING
 			and _soldier_render_has_synced
@@ -1939,8 +1941,8 @@ func _clear_render_dirty_soldiers_for_sync(dirty_ids: Dictionary) -> void:
 		_combat_render_dirty_soldiers.erase(key)
 
 
-func _should_throttle_active_soldier_render_sync() -> bool:
-	return _state == STATE_MOVING or _state == STATE_FIGHTING or _combat_scatter_active
+func _should_throttle_active_soldier_render_sync(has_active_independent_motion: bool = false) -> bool:
+	return _state == STATE_MOVING or _state == STATE_FIGHTING or _combat_scatter_active or has_active_independent_motion
 
 
 func _get_active_soldier_render_sync_interval() -> float:
@@ -1949,12 +1951,14 @@ func _get_active_soldier_render_sync_interval() -> float:
 	return maxf(soldier_render_active_sync_interval, 0.0)
 
 
-func _should_throttle_soldier_render_sync() -> bool:
+func _should_throttle_soldier_render_sync(has_active_independent_motion: bool = false) -> bool:
 	if soldier_render_idle_sync_interval <= 0.0:
 		return false
 	if _state == STATE_MOVING or _state == STATE_FIGHTING:
 		return false
 	if _combat_scatter_active:
+		return false
+	if has_active_independent_motion:
 		return false
 	return true
 
@@ -4077,6 +4081,7 @@ func _update_combat_debug_lines() -> void:
 	immediate.clear_surfaces()
 	mesh_instance.global_transform = Transform3D.IDENTITY
 	mesh_instance.visible = true
+	_combat_debug_line_pair_count = 0
 	if _state != STATE_FIGHTING or _combat_soldier_targets.is_empty():
 		return
 	var material := _ensure_combat_debug_line_material()
@@ -4091,6 +4096,8 @@ func _update_combat_debug_lines() -> void:
 		var defender := defender_variant as Node3D
 		if not defender.is_inside_tree():
 			continue
+		if not _is_combat_pair_actively_fighting(attacker_node as Node3D, defender):
+			continue
 		if not began_surface:
 			immediate.surface_begin(Mesh.PRIMITIVE_LINES, material)
 			began_surface = true
@@ -4100,11 +4107,13 @@ func _update_combat_debug_lines() -> void:
 		end.y += maxf(combat_debug_line_height, 0.0)
 		immediate.surface_add_vertex(start)
 		immediate.surface_add_vertex(end)
+		_combat_debug_line_pair_count += 1
 	if began_surface:
 		immediate.surface_end()
 
 
 func _clear_combat_debug_lines() -> void:
+	_combat_debug_line_pair_count = 0
 	if not is_instance_valid(_combat_debug_line_mesh):
 		return
 	var immediate := _combat_debug_line_mesh.mesh as ImmediateMesh
@@ -4710,15 +4719,14 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 		if not defender:
 			continue
 
-		var distance_to_target := _horizontal_distance(attacker_spatial.global_position, defender.global_position)
-		var in_spear_range := distance_to_target <= maxf(combat_spear_range_m, 0.2)
+		var in_spear_range := _is_combat_pair_in_fight_range(attacker_spatial, defender)
 		var locked := _is_combat_soldier_locked_to(attacker_spatial, defender)
-		if locked and distance_to_target > maxf(combat_spear_range_m * 1.55, combat_spear_range_m + 0.5):
+		if locked and not _is_combat_pair_in_break_range(attacker_spatial, defender):
 			_unlock_combat_soldier(attacker_spatial)
 			locked = false
 		if locked:
 			_update_locked_combat_shuffle(attacker_spatial, defender, combat_motion_delta)
-			in_spear_range = true
+			in_spear_range = _is_combat_pair_in_fight_range(attacker_spatial, defender)
 		else:
 			var steering_result := _get_budgeted_combat_desired_position(
 				attacker_spatial,
@@ -4734,8 +4742,7 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 			if bool(steering_result.get("refreshed", false)):
 				steering_updates_remaining -= 1
 			_move_combat_soldier_toward(attacker_spatial, defender, desired_position, combat_motion_delta)
-			distance_to_target = _horizontal_distance(attacker_spatial.global_position, defender.global_position)
-			in_spear_range = distance_to_target <= maxf(combat_spear_range_m, 0.2)
+			in_spear_range = _is_combat_pair_in_fight_range(attacker_spatial, defender)
 			if in_spear_range and _is_combat_socket_reached(attacker_spatial):
 				_lock_combat_soldier(attacker_spatial, defender)
 				locked = true
@@ -4746,7 +4753,7 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 		if attacker.has_method("set_combat_focus_target"):
 			attacker.call("set_combat_focus_target", defender)
 		_face_soldier_toward(attacker_spatial, defender, delta)
-		var settled_in_combat := locked and in_spear_range
+		var settled_in_combat := _is_combat_pair_actively_fighting(attacker_spatial, defender)
 		if attacker.has_method("set_independent_combat"):
 			attacker.call("set_independent_combat", settled_in_combat, defender if settled_in_combat else null, settled_in_combat)
 		elif attacker.has_method("set_formation_attacking"):
@@ -5702,6 +5709,32 @@ func _update_combat_perf_rate_window(delta: float) -> void:
 	_combat_perf_rate_window_seconds = 0.0
 
 
+func _is_combat_pair_actively_fighting(attacker: Node3D, defender: Node3D) -> bool:
+	return _is_combat_soldier_locked_to(attacker, defender) and _is_combat_pair_in_fight_range(attacker, defender)
+
+
+func _is_combat_pair_in_fight_range(attacker: Node3D, defender: Node3D) -> bool:
+	if not is_instance_valid(attacker) or not is_instance_valid(defender):
+		return false
+	return _horizontal_distance(attacker.global_position, defender.global_position) <= _get_combat_pair_fight_range_m()
+
+
+func _is_combat_pair_in_break_range(attacker: Node3D, defender: Node3D) -> bool:
+	if not is_instance_valid(attacker) or not is_instance_valid(defender):
+		return false
+	return _horizontal_distance(attacker.global_position, defender.global_position) <= _get_combat_pair_break_range_m()
+
+
+func _get_combat_pair_fight_range_m() -> float:
+	return maxf(combat_spear_range_m, 0.2)
+
+
+func _get_combat_pair_break_range_m() -> float:
+	var fight_range := _get_combat_pair_fight_range_m()
+	var slack := maxf(maxf(combat_socket_arrival_radius, 0.05), 0.35)
+	return maxf(fight_range + slack, fight_range * 1.12)
+
+
 func _is_combat_soldier_locked_to(soldier: Node3D, defender: Node3D) -> bool:
 	var key := soldier.get_instance_id()
 	if not _combat_soldier_lock_positions.has(key):
@@ -6127,13 +6160,9 @@ func _update_assigned_combat_visuals(delta: float) -> void:
 		var rotation_before := soldier_spatial.rotation.y
 		_face_soldier_toward(soldier_spatial, defender, 1.0)
 		var changed_for_render := absf(wrapf(soldier_spatial.rotation.y - rotation_before, -PI, PI)) > 0.002
-		var distance_to_target := _horizontal_distance(soldier_spatial.global_position, defender.global_position)
 		var moving_to_socket := soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion"))
 		var locked_in_combat := _is_combat_soldier_locked_to(soldier_spatial, defender)
-		var visual_in_range := not moving_to_socket and (
-			locked_in_combat
-			or distance_to_target <= maxf(combat_spear_range_m, 0.2)
-		)
+		var visual_in_range := not moving_to_socket and locked_in_combat and _is_combat_pair_in_fight_range(soldier_spatial, defender)
 		if moving_to_socket:
 			if soldier.has_method("is_formation_attacking") and bool(soldier.call("is_formation_attacking")):
 				changed_for_render = true
@@ -7384,6 +7413,7 @@ func _get_combat_summary() -> Dictionary:
 		"combat_socket_assignment_count": _combat_soldier_socket_indices.size(),
 		"combat_render_dirty_soldier_count": _combat_render_dirty_soldiers.size(),
 		"combat_touched_soldier_count": _combat_touched_soldiers.size(),
+		"combat_debug_line_pair_count": _combat_debug_line_pair_count,
 		"combat_visual_stance_update_count": _combat_visual_stance_update_count,
 		"combat_visual_thrust_count": _combat_visual_thrust_count,
 		"pending_departed_soldier_count": _pending_departed_soldiers.size(),

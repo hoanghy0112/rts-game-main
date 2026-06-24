@@ -152,6 +152,38 @@ func _run() -> void:
 			% [render_sync_count, sampled_moving_frames]
 		)
 
+	_free_test_node(autonomous_player)
+	_free_test_node(autonomous_enemy)
+
+	var regrouper := _make_troop(&"idle_regrouper", &"player", Vector3(24.0, 0.0, 72.0), movement_map)
+	regrouper.set("soldier_count", 48)
+	regrouper.set("formation_columns", 8)
+	root.add_child(regrouper)
+	await _wait_frames(8)
+	_scatter_soldiers_from_slots(regrouper)
+	await _wait_frames(1)
+	_reset_perf(regrouper)
+	if regrouper.has_method("_issue_idle_formation_targets"):
+		regrouper.call("_issue_idle_formation_targets")
+	var regroup_metrics := await _sample_idle_independent_regroup(regrouper, 80)
+	_print_metrics("idle_independent_regroup", regroup_metrics)
+	if int(regroup_metrics.get("sampled_independent_frames", 0)) <= 0:
+		failures.append("idle regroup setup did not start independent formation-slot motion")
+	if float(regroup_metrics.get("max_step_m", 0.0)) > MAX_MOVING_STEP_M:
+		failures.append(
+			"idle regroup soldier source step jumped %.3fm; budget %.3fm"
+			% [float(regroup_metrics["max_step_m"]), MAX_MOVING_STEP_M]
+		)
+	var regroup_frames := int(regroup_metrics.get("sampled_independent_frames", 0))
+	var regroup_sync_count := int(regroup_metrics.get("render_sync_count", 0))
+	if regroup_frames > 0 and regroup_sync_count < int(float(regroup_frames) * 0.75):
+		failures.append(
+			"idle regroup render sync was sparse (%d syncs over %d independent-motion frames)"
+			% [regroup_sync_count, regroup_frames]
+		)
+	if int(regroup_metrics.get("render_sync_skips", 0)) > 0 and regroup_sync_count <= 0:
+		failures.append("idle regroup skipped all render syncs while soldiers were walking to formation")
+
 	Engine.max_fps = _original_max_fps
 	if failures.is_empty():
 		print("Troop smoothness headless check passed.")
@@ -336,6 +368,35 @@ func _sample_autonomous_enemy_chase(enemy: Node) -> Dictionary:
 	}
 
 
+func _sample_idle_independent_regroup(troop: Node, frame_count: int) -> Dictionary:
+	var previous_positions := _get_soldier_positions(troop)
+	var max_step := 0.0
+	var sampled_independent_frames := 0
+	for _index: int in range(frame_count):
+		await _wait_frames(1)
+		var current_positions := _get_soldier_positions(troop)
+		var independent_count := _count_independent_motions(troop)
+		if independent_count > 0:
+			sampled_independent_frames += 1
+		for soldier: Node3D in current_positions.keys():
+			var previous_variant: Variant = previous_positions.get(soldier)
+			if not (previous_variant is Vector3):
+				continue
+			var delta_position: Vector3 = current_positions[soldier] - (previous_variant as Vector3)
+			delta_position.y = 0.0
+			max_step = maxf(max_step, delta_position.length())
+		previous_positions = current_positions
+	var summary := _get_summary(troop)
+	return {
+		"sampled_independent_frames": sampled_independent_frames,
+		"max_step_m": max_step,
+		"render_sync_count": int(summary.get("soldier_render_sync_count", 0)),
+		"render_sync_skips": int(summary.get("soldier_render_sync_skip_count", 0)),
+		"state": String(summary.get("state", &"")),
+		"independent_motions": _count_independent_motions(troop),
+	}
+
+
 func _assert_active_render_sync(label: String, metrics: Dictionary, failures: Array[String]) -> void:
 	var skips := int(metrics.get("render_sync_skips", 0))
 	if skips > 0 and label != "moving" and int(metrics.get("render_sync_count", 0)) <= 0:
@@ -370,6 +431,23 @@ func _free_test_node(node: Node) -> void:
 	if node.get_parent():
 		node.get_parent().remove_child(node)
 	node.free()
+
+
+func _scatter_soldiers_from_slots(troop: Node) -> void:
+	var soldiers := troop.get_node_or_null("Soldiers") if troop else null
+	if not soldiers:
+		return
+	var index := 0
+	for soldier_node: Node in soldiers.get_children():
+		if not (soldier_node is Node3D) or not _is_soldier_alive(soldier_node):
+			continue
+		var soldier := soldier_node as Node3D
+		var lateral := 7.0 if index % 2 == 0 else -7.0
+		var depth := 3.0 * float((index % 5) - 2)
+		soldier.global_position += Vector3(lateral, 0.0, depth)
+		if soldier.has_method("clear_independent_motion"):
+			soldier.call("clear_independent_motion")
+		index += 1
 
 
 func _get_summary(troop: Node) -> Dictionary:
