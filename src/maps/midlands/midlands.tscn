@@ -32,7 +32,6 @@
 [ext_resource type="PackedScene" uid="uid://bjuw3vjv5imps" path="res://modules/troops/troop.tscn" id="32_troop"]
 [ext_resource type="PackedScene" uid="uid://clbbr01uvxpan" path="res://modules/troops/troop_management_drawer.tscn" id="33_troop_drawer"]
 [ext_resource type="Script" uid="uid://c7bvixca1w0d4" path="res://modules/troops/troop_selection_controller.gd" id="34_troop_select"]
-[ext_resource type="Script" uid="uid://dwcoge18x0e8h" path="res://modules/troops/troop_enemy_spawner.gd" id="35_enemy_spawner"]
 [ext_resource type="PackedScene" path="res://modules/troops/troop_background_jobs_debug_panel.tscn" id="36_jobs_debug"]
 [ext_resource type="PackedScene" path="res://modules/teams/team_controller.tscn" id="37_team_controller"]
 [ext_resource type="PackedScene" path="res://modules/ui/map/strategic_map_hud.tscn" id="38_map_hud"]
@@ -288,7 +287,7 @@ month_names = PackedStringArray("Month 01", "Month 02", "Month 03", "Month 04", 
 [node name="GameDateDisplay" parent="." unique_id=675912049 instance=ExtResource("31_date_display")]
 
 [node name="Troop_01" parent="." unique_id=181912808 instance=ExtResource("32_troop")]
-transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -1525.148, 0, 456.124)
+transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -1473.5095, 0, 456.124)
 troop_id = &"midlands_guard"
 display_name = "Midlands Guard"
 soldier_count = 50
@@ -298,11 +297,7 @@ movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
 time_system_path = NodePath("../GameTimeSystem")
 
-[node name="PlayerTeam" parent="." instance=ExtResource("37_team_controller")]
-team_id = &"player"
-display_name = "Player Team"
-controllable = true
-team_flag_color = Color(0.1, 0.28, 0.82, 1)
+[node name="PlayerTeam" parent="." unique_id=1587399051 instance=ExtResource("37_team_controller")]
 troop_flag_color = Color(0.22, 0.48, 0.92, 1)
 default_camp_id = &"player_camp"
 default_camp_name = "Player Camp"
@@ -317,7 +312,7 @@ terrain_path = NodePath("../Terrain3D")
 time_system_path = NodePath("../GameTimeSystem")
 
 [node name="EnemyTroopSpawner" parent="." unique_id=1857000131 instance=ExtResource("37_team_controller")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1584.5186, 0, 440.65637)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1554.5186, 0, 440.65637)
 team_id = &"enemy"
 display_name = "Enemy Team"
 controllable = false
@@ -325,22 +320,19 @@ team_flag_color = Color(0.72, 0.1, 0.08, 1)
 troop_flag_color = Color(0.86, 0.18, 0.12, 1)
 default_camp_id = &"enemy_camp"
 default_camp_name = "Enemy Camp"
-default_camp_position = Vector3(-1584.5186, 0, 440.65637)
+default_camp_position = Vector3(-1554.5186, 0, 440.65637)
 starting_food_kg = 900.0
 starting_wood_kg = 650.0
-troop_scene = ExtResource("32_troop")
-spawn_seed = 91031
-min_initial_troops = 1
-max_initial_troops = 1
-min_soldiers_per_troop = 50
-max_soldiers_per_troop = 50
-spawn_radius_m = 3.0
-troop_display_prefix = "Enemy"
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 terrain_path = NodePath("../Terrain3D")
 time_system_path = NodePath("../GameTimeSystem")
 spawn_initial_troops = true
+spawn_seed = 91031
+min_soldiers_per_troop = 50
+max_soldiers_per_troop = 50
+spawn_radius_m = 3.0
+troop_display_prefix = "Enemy"
 ai_enabled = true
 ai_attack_radius_m = 160.0
 
@@ -353,14 +345,13 @@ ai_attack_radius_m = 160.0
 [node name="VillageSelectionController" type="Node" parent="." unique_id=532361647]
 script = ExtResource("29_food_select")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
-team_controller_path = NodePath("../PlayerTeam")
 
 [node name="TroopSelectionController" type="Node" parent="." unique_id=1283225157]
 script = ExtResource("34_troop_select")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
 forest_region_paths = Array[NodePath]([NodePath("../ForestRegion")])
 
-[node name="StrategicMapHud" parent="." instance=ExtResource("38_map_hud")]
+[node name="StrategicMapHud" parent="." unique_id=2062222905 instance=ExtResource("38_map_hud")]
 movement_map = ExtResource("16_oh3oi")
 movement_map_path = "res://maps/midlands/midlands_movement_map.res"
 camera_path = NodePath("../RTSCameraRig/Camera3D")
