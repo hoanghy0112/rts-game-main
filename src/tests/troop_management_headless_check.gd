@@ -216,10 +216,12 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(int(troop.get("combat_target_assignment_budget_per_tick")) > 0, "troops should expose a per-tick combat target assignment budget", failures)
 	_expect(int(troop.get("combat_separation_updates_per_tick")) > 0, "troops should expose a per-tick combat separation update budget", failures)
 	_expect(int(troop.get("combat_pair_checks_budget_per_tick")) > 0, "troops should expose a per-tick combat pair-check budget", failures)
-	_expect(float(troop.get("combat_steering_refresh_interval")) > 0.0, "troops should expose cached combat steering refresh timing", failures)
+	_expect(float(troop.get("combat_steering_refresh_interval")) >= 0.9, "combat steering target refresh should default near one second to avoid spacing churn", failures)
+	_expect(float(troop.get("combat_steering_refresh_jitter")) > 0.0, "combat steering refresh should include jitter so target updates are staggered", failures)
 	_expect(float(troop.get("formation_slot_refresh_interval")) > 0.0, "troops should expose moving formation target refresh timing", failures)
 	_expect(float(troop.get("formation_slot_target_epsilon_m")) > 0.0, "troops should expose moving formation target epsilon", failures)
 	_expect(float(troop.get("formation_turn_target_refresh_degrees")) >= 0.0, "troops should expose moving formation turn refresh threshold", failures)
+	_expect(bool(troop.get("formation_moving_separation_enabled")), "moving formation separation should be enabled by default", failures)
 	_expect(int(troop.get("formation_separation_updates_per_tick")) > 0, "troops should expose a moving formation separation update budget", failures)
 	_expect(int(troop.get("formation_pair_checks_budget_per_tick")) > 0, "troops should expose a moving formation pair-check budget", failures)
 	_expect(int(troop.get("combat_max_separation_neighbors")) >= 8, "combat separation should cap nearby neighbor checks", failures)
@@ -376,11 +378,10 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	troop.set("position", Vector3(0.5, 0.0, 0.5))
 	troop.set("formation_separation_updates_per_tick", 2)
 	troop.set("formation_pair_checks_budget_per_tick", 1)
-	troop.set("formation_moving_separation_enabled", true)
 	root.add_child(troop)
 	await process_frame
 
-	var accepted: bool = bool(troop.call("set_move_destination", Vector3(6.5, 0.0, 6.5)))
+	var accepted: bool = bool(troop.call("set_move_destination", Vector3(6.5, 0.0, 0.5)))
 	_expect(accepted, "troop should accept a reachable movement order", failures)
 	_expect(bool(troop.call("has_destination")), "troop should store a destination after a move order", failures)
 	_expect(int(troop.call("get_route_dash_count")) > 0, "troop should draw dashed route visuals", failures)
@@ -408,9 +409,12 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 		var spacing_before := _minimum_soldier_spacing(troop)
 		troop.call("_physics_process", 0.2)
 		var spacing_after := _minimum_soldier_spacing(troop)
+		var pair_delta_after := overlap_b.global_position - overlap_a.global_position
+		pair_delta_after.y = 0.0
 		var separation_summary_after: Dictionary = troop.call("get_troop_summary") as Dictionary
 		var separation_checks_delta := int(separation_summary_after.get("moving_formation_pair_checks", 0)) - separation_checks_before
 		_expect(spacing_after > spacing_before, "moving formation separation should push overlapping soldiers apart", failures)
+		_expect(absf(pair_delta_after.z) > absf(pair_delta_after.x), "moving formation separation should push sideways instead of along the movement route", failures)
 		_expect(separation_checks_delta <= int(troop.get("formation_pair_checks_budget_per_tick")), "moving formation separation should respect the pair-check budget", failures)
 	troop.call("clear_destination")
 	_expect(not bool(troop.call("has_destination")), "clear destination should remove active destination", failures)
@@ -1437,6 +1441,42 @@ func _check_combat_surround_sockets_and_facing(failures: Array[String]) -> void:
 	for index: int in range(mini(4, attackers.size())):
 		var attacker := attackers[index] as Node3D
 		player.call("_assign_combat_target_to_soldier", attacker, defender, load_by_defender)
+		player.call("_get_soldier_engagement_position", attacker, defender, index, 4)
+	if attackers.size() > 1:
+		var side_attacker := attackers[1] as Node3D
+		var approach: Vector3 = player.global_position - defender.global_position
+		approach.y = 0.0
+		if approach.length_squared() <= 0.0001:
+			approach = Vector3.LEFT
+		var wrong_in_range_position: Vector3 = defender.global_position + approach.normalized() * 1.1
+		wrong_in_range_position.y = side_attacker.global_position.y
+		side_attacker.global_position = wrong_in_range_position
+		_expect(
+			not bool(player.call("_is_combat_attack_position_good_enough", side_attacker, defender, true)),
+			"combat soldiers should not lock just because they entered spear range before reaching their assigned socket",
+			failures
+		)
+		var close_attacker := attackers[0] as Node3D
+		var close_partner := attackers[1] as Node3D
+		if close_attacker and close_partner:
+			close_attacker.global_position = wrong_in_range_position
+			close_partner.global_position = wrong_in_range_position + Vector3(0.04, 0.0, 0.0)
+			player.call("_lock_combat_soldier", close_attacker, defender)
+			player.call("_lock_combat_soldier", close_partner, defender)
+			var close_attacker_before := close_attacker.global_position
+			var close_partner_before := close_partner.global_position
+			var combat_index = player.get("_combat_attacker_spatial_index")
+			player.call("_rebuild_spatial_index", combat_index, attackers, float(player.call("_get_combat_spatial_cell_size")))
+			player.set("_separation_pair_checks_remaining", 32)
+			player.call("_refresh_close_combat_spacing_targets", attackers, combat_index, Time.get_ticks_usec())
+			_expect(
+				close_attacker.global_position.distance_to(close_attacker_before) < 0.001
+				and close_partner.global_position.distance_to(close_partner_before) < 0.001,
+				"combat spacing refresh should update targets without directly pushing soldiers away from their sockets",
+				failures
+			)
+	for index: int in range(mini(4, attackers.size())):
+		var attacker := attackers[index] as Node3D
 		var socket_position: Vector3 = player.call("_get_soldier_engagement_position", attacker, defender, index, 4)
 		player.call("_move_combat_soldier_toward", attacker, defender, socket_position, 0.2)
 	_expect(_combat_sockets_include_opposed_slots(player), "four attackers on one defender should reserve opposed surround sockets", failures)
