@@ -136,7 +136,7 @@ func _check_food_records_and_daily_math(failures: Array[String]) -> void:
 	_expect(_approx(float(after_summary.get("shortage_kg", -1.0)), 0.0, 0.001), "well-stocked village should not report shortage after one day", failures)
 	_expect(_has_selectable_metadata(region), "generated village should expose troop-style flag selection while houses stay non-clickable", failures)
 	_expect(_has_no_village_selection_ring(region), "generated village should not draw a selection ring around houses", failures)
-	_expect(_village_flag_faces_camera_without_resizing(region, scene_root), "village flag should face the camera without resizing while camera zoom changes", failures)
+	_expect(_village_flag_uses_sprite_zoom_clamp(region, scene_root), "village flag should use a fixed-size gonfalon with zoom clamps", failures)
 	_expect(_has_centered_storage_hut(region), "generated village should place a scaled hut storage at the house-region center", failures)
 	_expect(_houses_clear_centered_storage(region), "generated houses should not overlap the central village storage", failures)
 
@@ -440,30 +440,22 @@ func _has_selectable_metadata(region: VillageRegion) -> bool:
 	if actual_center.distance_to(expected_center) > 0.05:
 		return false
 
-	var pole := flag.get_node_or_null("Pole") as MeshInstance3D
-	if not pole or not (pole.mesh is CylinderMesh):
+	var sprite := flag.get_node_or_null("Gonfalon") as Sprite3D
+	if not sprite or sprite.texture == null:
 		return false
-	var pole_mesh := pole.mesh as CylinderMesh
-	if pole_mesh.height < 11.0 or pole_mesh.top_radius < 0.17:
+	if sprite.pixel_size > 0.001:
 		return false
-
-	var banner := flag.get_node_or_null("Banner") as MeshInstance3D
-	if not banner or not (banner.mesh is BoxMesh):
+	if not bool(_get_property_value(sprite, &"fixed_size", false)):
 		return false
-	var banner_mesh := banner.mesh as BoxMesh
-	if banner_mesh.size.x < 5.0 or banner_mesh.size.y < 2.9:
+	if int(_get_property_value(sprite, &"billboard", BaseMaterial3D.BILLBOARD_DISABLED)) != BaseMaterial3D.BILLBOARD_ENABLED:
+		return false
+	if bool(_get_property_value(sprite, &"shaded", true)):
 		return false
 
-	var stripe := flag.get_node_or_null("AccentStripe") as MeshInstance3D
-	if not stripe or not (stripe.mesh is BoxMesh):
+	var border := flag.get_node_or_null("VillageFlagHoverBorder") as Sprite3D
+	if not border or border.texture == null or border.visible:
 		return false
-
-	var banner_material := banner.material_override as StandardMaterial3D
-	if (
-		not banner_material
-		or banner_material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED
-		or banner_material.cull_mode != BaseMaterial3D.CULL_DISABLED
-	):
+	if not bool(_get_property_value(border, &"fixed_size", false)):
 		return false
 
 	var houses := _collect_named_children(container, "House_")
@@ -494,7 +486,7 @@ func _has_no_village_selection_ring(region: VillageRegion) -> bool:
 	return true
 
 
-func _village_flag_faces_camera_without_resizing(region: VillageRegion, scene_root: Node3D) -> bool:
+func _village_flag_uses_sprite_zoom_clamp(region: VillageRegion, scene_root: Node3D) -> bool:
 	var container := region.get_node_or_null(RUNTIME_CONTAINER_NAME)
 	if not container:
 		return false
@@ -503,30 +495,49 @@ func _village_flag_faces_camera_without_resizing(region: VillageRegion, scene_ro
 	if not icon:
 		return false
 
+	var sprite := icon.get_node_or_null("Gonfalon") as Sprite3D
+	var border := icon.get_node_or_null("VillageFlagHoverBorder") as Sprite3D
+	if not sprite or not border:
+		return false
+
+	var near_size := float(region.get("village_flag_pixel_size"))
+	var far_size := float(region.get("village_flag_min_pixel_size"))
+	if far_size >= near_size:
+		return false
+
+	region.set("village_flag_near_camera_distance_m", 10.0)
+	region.set("village_flag_far_camera_distance_m", 30.0)
+
 	var camera := Camera3D.new()
 	scene_root.add_child(camera)
 	camera.owner = null
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 64.0
 	camera.global_position = icon.global_position + Vector3(32.0, 80.0, 40.0)
 	camera.look_at(icon.global_position, Vector3.UP)
 	camera.current = true
+	camera.make_current()
 
+	camera.size = 5.0
 	region._update_village_selection_icon_camera_lock()
-	var first_scale := icon.scale.x
+	var near_pixel := sprite.pixel_size
+	var near_border_pixel := border.pixel_size
 	var first_rotation_y := icon.rotation.y
 
-	camera.size = 128.0
+	camera.size = 80.0
 	region._update_village_selection_icon_camera_lock()
-	var second_scale := icon.scale.x
+	var far_pixel := sprite.pixel_size
+	var far_border_pixel := border.pixel_size
 	var second_rotation_y := icon.rotation.y
 
 	scene_root.remove_child(camera)
 	camera.free()
 
 	return (
-		_approx(first_scale, 1.0, 0.001)
-		and _approx(second_scale, first_scale, 0.001)
+		_approx(icon.scale.x, 1.0, 0.001)
+		and _approx(near_pixel, near_size, 0.00001)
+		and _approx(far_pixel, far_size, 0.00001)
+		and far_pixel < near_pixel
+		and far_border_pixel < near_border_pixel
 		and _approx(second_rotation_y, first_rotation_y, 0.001)
 	)
 
@@ -651,6 +662,15 @@ func _make_test_house_scene() -> PackedScene:
 	var error := scene.pack(root_node)
 	root_node.free()
 	return scene if error == OK else null
+
+
+func _get_property_value(object: Object, property_name: StringName, fallback: Variant = null) -> Variant:
+	if not object:
+		return fallback
+	for property: Dictionary in object.get_property_list():
+		if StringName(property.get("name", &"")) == property_name:
+			return object.get(String(property_name))
+	return fallback
 
 
 func _approx(actual: float, expected: float, tolerance: float) -> bool:

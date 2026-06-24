@@ -17,6 +17,9 @@ const SELECTABLE_TYPE_META := &"village_selectable_type"
 const SELECTABLE_REGION_PATH_META := &"village_region_path"
 const SELECTABLE_FLAG_TYPE := &"flag"
 const SELECTABLE_VILLAGE_TYPE := &"village"
+const VILLAGE_SELECTION_FLAG_NAME := "VillageFlag"
+const VILLAGE_SELECTION_FLAG_SPRITE_NAME := "Gonfalon"
+const VILLAGE_SELECTION_FLAG_BORDER_NAME := "VillageFlagHoverBorder"
 const ROAD_NEIGHBOR_OFFSETS := [
 	Vector2i(1, 0),
 	Vector2i(-1, 0),
@@ -40,6 +43,9 @@ const VILLAGE_SELECTION_FLAG_POLE_HEIGHT := 2.45 * VILLAGE_SELECTION_FLAG_SCALE
 const VILLAGE_SELECTION_FLAG_POLE_RADIUS := 0.04 * VILLAGE_SELECTION_FLAG_SCALE
 const VILLAGE_SELECTION_FLAG_BANNER_SIZE := Vector2(1.12, 0.66) * VILLAGE_SELECTION_FLAG_SCALE
 const VILLAGE_SELECTION_ICON_LOCAL_HEIGHT := VILLAGE_SELECTION_FLAG_POLE_HEIGHT
+const VILLAGE_SELECTION_FLAG_TEXTURE_WIDTH := 96
+const VILLAGE_SELECTION_FLAG_TEXTURE_HEIGHT := 144
+const VILLAGE_SELECTION_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER := 1.08
 
 signal cells_changed
 signal resources_changed
@@ -198,6 +204,27 @@ var _cell_data: VillageCellData
 		_notify_cells_changed()
 
 @export var generation_seed: int = 0
+@export_group("Selection Flag")
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var village_flag_pixel_size: float = 0.00075:
+	set(value):
+		village_flag_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_village_selection_icon_camera_scale(true)
+@export_range(0.0001, 0.2, 0.00005, "or_greater") var village_flag_min_pixel_size: float = 0.00028:
+	set(value):
+		village_flag_min_pixel_size = maxf(value, 0.0001)
+		if is_inside_tree():
+			_update_village_selection_icon_camera_scale(true)
+@export_range(1.0, 2000.0, 1.0, "or_greater") var village_flag_near_camera_distance_m: float = 32.0:
+	set(value):
+		village_flag_near_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_village_selection_icon_camera_scale(true)
+@export_range(1.0, 4000.0, 1.0, "or_greater") var village_flag_far_camera_distance_m: float = 260.0:
+	set(value):
+		village_flag_far_camera_distance_m = maxf(value, 1.0)
+		if is_inside_tree():
+			_update_village_selection_icon_camera_scale(true)
 
 var _suspend_cell_notifications := false
 var _runtime_container: Node3D
@@ -211,6 +238,9 @@ var _village_ring_node: Node3D
 var _village_ring_material: StandardMaterial3D
 var _village_ground_highlight_material: StandardMaterial3D
 var _village_selection_icon_node: Node3D
+var _village_selection_icon_sprite: Sprite3D
+var _village_selection_icon_border_sprite: Sprite3D
+var _last_village_selection_icon_pixel_size := -1.0
 var _runtime_peasants: Array[Node3D] = []
 var _house_food_records: Array[Dictionary] = []
 var _house_food_record_lookup: Dictionary = {}
@@ -851,6 +881,9 @@ func clear_runtime_instances() -> void:
 	_village_ring_material = null
 	_village_ground_highlight_material = null
 	_village_selection_icon_node = null
+	_village_selection_icon_sprite = null
+	_village_selection_icon_border_sprite = null
+	_last_village_selection_icon_pixel_size = -1.0
 	_village_storage_node = null
 	_house_food_records.clear()
 	_house_food_record_lookup.clear()
@@ -1051,6 +1084,10 @@ func _generate_village_ring(terrain: Node3D, house_placements: Array[Dictionary]
 
 
 func set_village_hovered(hovered: bool) -> void:
+	if is_instance_valid(_village_selection_icon_border_sprite):
+		_village_selection_icon_border_sprite.visible = hovered
+		_village_selection_icon_border_sprite.modulate = Color(1.0, 0.82, 0.28, 0.96)
+
 	if not is_instance_valid(_village_ring_node) or not _village_ring_material:
 		return
 
@@ -1271,12 +1308,9 @@ func _update_village_selection_icon_camera_lock() -> void:
 	if not is_instance_valid(_village_selection_icon_node):
 		return
 
-	var viewport := get_viewport()
-	if viewport == null:
-		return
-
-	var camera := viewport.get_camera_3d()
+	var camera := _get_active_camera_3d()
 	if camera == null:
+		_update_village_selection_icon_camera_scale()
 		return
 
 	var to_camera := camera.global_position - _village_selection_icon_node.global_position
@@ -1288,6 +1322,7 @@ func _update_village_selection_icon_camera_lock() -> void:
 			atan2(-flat_direction.x, -flat_direction.z),
 			0.0
 		)
+	_update_village_selection_icon_camera_scale()
 
 
 func _generate_village_flag(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
@@ -1296,7 +1331,7 @@ func _generate_village_flag(terrain: Node3D, house_placements: Array[Dictionary]
 
 	var center := _get_village_storage_center_local_2d(house_placements)
 	var marker := Node3D.new()
-	marker.name = "VillageFlag"
+	marker.name = VILLAGE_SELECTION_FLAG_NAME
 	marker.set_meta(SELECTABLE_TYPE_META, SELECTABLE_FLAG_TYPE)
 	marker.set_meta(SELECTABLE_REGION_PATH_META, get_path() if is_inside_tree() else NodePath("."))
 	_runtime_container.add_child(marker)
@@ -1304,54 +1339,28 @@ func _generate_village_flag(terrain: Node3D, house_placements: Array[Dictionary]
 	_set_runtime_node_position(marker, center, terrain)
 	_village_selection_icon_node = marker
 
-	var pole := MeshInstance3D.new()
-	pole.name = "Pole"
-	var pole_mesh := CylinderMesh.new()
-	pole_mesh.top_radius = VILLAGE_SELECTION_FLAG_POLE_RADIUS
-	pole_mesh.bottom_radius = VILLAGE_SELECTION_FLAG_POLE_RADIUS
-	pole_mesh.height = VILLAGE_SELECTION_FLAG_POLE_HEIGHT
-	pole_mesh.radial_segments = 8
-	pole.mesh = pole_mesh
-	pole.position = Vector3(0.0, VILLAGE_SELECTION_FLAG_POLE_HEIGHT * 0.5, 0.0)
-	pole.material_override = _make_flag_material(Color(0.42, 0.28, 0.12, 1.0))
-	pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	pole.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	marker.add_child(pole)
+	var flag_center := _get_village_selection_flag_sprite_center()
+	var initial_pixel_size := _get_village_selection_icon_camera_scaled_pixel_size()
+	var border := _create_village_flag_sprite(
+		VILLAGE_SELECTION_FLAG_BORDER_NAME,
+		_build_village_gonfalon_texture(Color(1.0, 0.82, 0.28, 1.0), Color(1.0, 0.82, 0.28, 1.0)),
+		initial_pixel_size * VILLAGE_SELECTION_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER,
+		29
+	)
+	border.position = flag_center
+	border.visible = false
+	marker.add_child(border)
+	_village_selection_icon_border_sprite = border
 
-	var banner_center := Vector3(
-		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 0.5,
-		VILLAGE_SELECTION_FLAG_POLE_HEIGHT * 0.82,
-		0.0
+	var sprite := _create_village_flag_sprite(
+		VILLAGE_SELECTION_FLAG_SPRITE_NAME,
+		_build_village_gonfalon_texture(Color(0.78, 0.1, 0.08, 1.0), Color(0.1, 0.28, 0.82, 1.0)),
+		initial_pixel_size,
+		30
 	)
-	var banner := MeshInstance3D.new()
-	banner.name = "Banner"
-	var banner_mesh := BoxMesh.new()
-	banner_mesh.size = Vector3(
-		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x,
-		VILLAGE_SELECTION_FLAG_BANNER_SIZE.y,
-		0.105
-	)
-	banner.mesh = banner_mesh
-	banner.position = banner_center
-	banner.material_override = _make_flag_material(Color(0.78, 0.1, 0.08, 1.0))
-	banner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	banner.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	marker.add_child(banner)
-
-	var stripe := MeshInstance3D.new()
-	stripe.name = "AccentStripe"
-	var stripe_mesh := BoxMesh.new()
-	stripe_mesh.size = Vector3(
-		VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 1.03,
-		VILLAGE_SELECTION_FLAG_BANNER_SIZE.y * 0.22,
-		0.12
-	)
-	stripe.mesh = stripe_mesh
-	stripe.position = banner_center + Vector3(0.0, -VILLAGE_SELECTION_FLAG_BANNER_SIZE.y * 0.32, 0.072)
-	stripe.material_override = _make_flag_material(Color(0.1, 0.28, 0.82, 1.0))
-	stripe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	stripe.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	marker.add_child(stripe)
+	sprite.position = flag_center
+	marker.add_child(sprite)
+	_village_selection_icon_sprite = sprite
 
 	var proxy := StaticBody3D.new()
 	proxy.name = "VillageFlagClickProxy"
@@ -1364,10 +1373,97 @@ func _generate_village_flag(terrain: Node3D, house_placements: Array[Dictionary]
 	var box := BoxShape3D.new()
 	box.size = Vector3(VILLAGE_SELECTION_FLAG_BANNER_SIZE.x + 0.6, VILLAGE_SELECTION_ICON_LOCAL_HEIGHT, 1.2)
 	shape.shape = box
-	shape.position = Vector3(VILLAGE_SELECTION_FLAG_BANNER_SIZE.x * 0.5, VILLAGE_SELECTION_ICON_LOCAL_HEIGHT * 0.5, 0.0)
+	shape.position = flag_center
 	proxy.add_child(shape)
 	marker.add_child(proxy)
 	_update_village_selection_icon_camera_lock()
+	_update_village_selection_icon_camera_scale(true)
+
+
+func _get_village_selection_flag_sprite_center() -> Vector3:
+	return Vector3(0.0, VILLAGE_SELECTION_FLAG_POLE_HEIGHT * 0.82, 0.0)
+
+
+func _create_village_flag_sprite(
+	sprite_name: String,
+	texture: Texture2D,
+	pixel_size_value: float,
+	render_priority_value: int
+) -> Sprite3D:
+	var sprite := Sprite3D.new()
+	sprite.name = sprite_name
+	sprite.texture = texture
+	sprite.centered = true
+	sprite.pixel_size = maxf(pixel_size_value, 0.0001)
+	_set_property_if_present(sprite, &"billboard", BaseMaterial3D.BILLBOARD_ENABLED)
+	_set_property_if_present(sprite, &"fixed_size", true)
+	_set_property_if_present(sprite, &"no_depth_test", true)
+	_set_property_if_present(sprite, &"shaded", false)
+	_set_property_if_present(sprite, &"double_sided", true)
+	_set_property_if_present(sprite, &"transparent", true)
+	_set_property_if_present(sprite, &"render_priority", render_priority_value)
+	return sprite
+
+
+func _update_village_selection_icon_camera_scale(force: bool = false) -> void:
+	if not is_instance_valid(_village_selection_icon_sprite):
+		return
+	var pixel_size := _get_village_selection_icon_camera_scaled_pixel_size()
+	if (
+		not force
+		and _last_village_selection_icon_pixel_size >= 0.0
+		and absf(pixel_size - _last_village_selection_icon_pixel_size) <= 0.00000001
+	):
+		return
+	_village_selection_icon_sprite.pixel_size = pixel_size
+	if is_instance_valid(_village_selection_icon_border_sprite):
+		_village_selection_icon_border_sprite.pixel_size = (
+			pixel_size * VILLAGE_SELECTION_FLAG_BORDER_PIXEL_SIZE_MULTIPLIER
+		)
+	_last_village_selection_icon_pixel_size = pixel_size
+
+
+func _get_village_selection_icon_camera_scaled_pixel_size() -> float:
+	var near_size := maxf(village_flag_pixel_size, 0.0001)
+	var far_size := maxf(village_flag_min_pixel_size, 0.0001)
+	var lower_size := minf(near_size, far_size)
+	var upper_size := maxf(near_size, far_size)
+	var camera := _get_active_camera_3d()
+	if not camera:
+		return clampf(near_size, lower_size, upper_size)
+
+	var near_distance := maxf(village_flag_near_camera_distance_m, 0.001)
+	var far_distance := maxf(village_flag_far_camera_distance_m, 0.001)
+	var distance_span := maxf(absf(far_distance - near_distance), 0.001)
+	var distance := _get_village_selection_icon_camera_distance(camera)
+	var t := clampf((distance - near_distance) / distance_span, 0.0, 1.0)
+	if far_distance < near_distance:
+		t = 1.0 - t
+	return clampf(lerpf(near_size, far_size, t), lower_size, upper_size)
+
+
+func _get_village_selection_icon_camera_distance(camera: Camera3D) -> float:
+	if camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		return maxf(camera.size, 0.001)
+	var flag_position := _get_village_selection_icon_world_position()
+	var forward := -camera.global_transform.basis.z.normalized()
+	var depth := (flag_position - camera.global_position).dot(forward)
+	if depth > camera.near:
+		return depth
+	return camera.global_position.distance_to(flag_position)
+
+
+func _get_village_selection_icon_world_position() -> Vector3:
+	if is_instance_valid(_village_selection_icon_sprite):
+		return _village_selection_icon_sprite.global_position
+	if is_instance_valid(_village_selection_icon_node):
+		return _village_selection_icon_node.global_position
+	return global_position
+
+
+func _get_active_camera_3d() -> Camera3D:
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null
 
 
 func _generate_village_storage(terrain: Node3D, house_placements: Array[Dictionary]) -> void:
@@ -1448,6 +1544,77 @@ func _make_flag_material(color: Color, always_visible := false) -> StandardMater
 		material.no_depth_test = true
 		material.render_priority = 30
 	return material
+
+
+func _build_village_gonfalon_texture(banner_color: Color, accent_color: Color) -> Texture2D:
+	var image := Image.create(
+		VILLAGE_SELECTION_FLAG_TEXTURE_WIDTH,
+		VILLAGE_SELECTION_FLAG_TEXTURE_HEIGHT,
+		false,
+		Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+
+	_fill_village_flag_image_rect(image, Rect2i(15, 12, 5, 122), Color(0.35, 0.22, 0.1, 1.0))
+	_fill_village_flag_image_rect(image, Rect2i(10, 16, 72, 6), Color(0.42, 0.28, 0.12, 1.0))
+	_fill_village_flag_image_rect(image, Rect2i(12, 130, 12, 5), Color(0.24, 0.14, 0.06, 1.0))
+
+	var outline := banner_color.darkened(0.35)
+	var banner_top := 22
+	var banner_bottom := 130
+	var accent_top := 84
+	var accent_bottom := 101
+	for y: int in range(banner_top, banner_bottom):
+		for x: int in range(26, 82):
+			if not _is_village_gonfalon_pixel(x, y):
+				continue
+			var color := banner_color
+			if y >= accent_top and y <= accent_bottom:
+				color = accent_color
+			if _is_village_gonfalon_outline_pixel(x, y):
+				color = outline
+			image.set_pixel(x, y, color)
+
+	return ImageTexture.create_from_image(image)
+
+
+func _is_village_gonfalon_pixel(x: int, y: int) -> bool:
+	var left := 26
+	var right := 81
+	var top := 22
+	var bottom := 129
+	if x < left or x > right or y < top or y > bottom:
+		return false
+	var tail_start := 106
+	if y < tail_start:
+		return true
+	var t := float(y - tail_start) / float(maxi(bottom - tail_start, 1))
+	var notch_half_width := roundi(11.0 * t)
+	var center := 54
+	return abs(x - center) > notch_half_width
+
+
+func _is_village_gonfalon_outline_pixel(x: int, y: int) -> bool:
+	if not _is_village_gonfalon_pixel(x, y):
+		return false
+	for offset: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if not _is_village_gonfalon_pixel(x + offset.x, y + offset.y):
+			return true
+	return false
+
+
+func _fill_village_flag_image_rect(image: Image, rect: Rect2i, color: Color) -> void:
+	for y: int in range(rect.position.y, rect.position.y + rect.size.y):
+		for x: int in range(rect.position.x, rect.position.x + rect.size.x):
+			if x >= 0 and y >= 0 and x < image.get_width() and y < image.get_height():
+				image.set_pixel(x, y, color)
+
+
+func _set_property_if_present(object: Object, property_name: StringName, value: Variant) -> void:
+	for property: Dictionary in object.get_property_list():
+		if StringName(property.get("name", &"")) == property_name:
+			object.set(String(property_name), value)
+			return
 
 
 func _build_field_generation(road_polylines: Array) -> Dictionary:
