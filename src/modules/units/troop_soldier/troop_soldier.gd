@@ -9,6 +9,7 @@ const ACTIVITY_REST := &"rest"
 const ACTIVITY_TRAINING := &"training"
 const ACTIVITY_NONE := &"none"
 const CORPSE_SPEAR_SCENE: PackedScene = preload("res://modules/units/human/low_poly_spear.tscn")
+const TroopSoldierBehaviorSetScript = preload("res://modules/units/troop_soldier/logic/troop_soldier_behavior_set.gd")
 const SPEAR_TIP_LOCAL_Y := 0.526
 
 @export_group("Formation Visual")
@@ -21,6 +22,9 @@ const SPEAR_TIP_LOCAL_Y := 0.526
 @export_range(0.0, 0.2, 0.005) var active_pose_update_interval: float = 0.033
 @export var disable_corpse_processing := true
 @export var soldier_perf_monitoring_enabled := false
+
+@export_group("Dependency Injection")
+@export var behavior_set: Resource
 
 @export_group("Combat Stats")
 @export_range(1.0, 1000.0, 1.0, "or_greater") var max_strength: float = 40.0
@@ -66,6 +70,7 @@ var _held_spear: Node3D
 var _corpse_spear: Node3D
 var _combat_stats_emit_elapsed := 0.0
 var _combat_stats_emit_pending := false
+var _behavior_dependencies_ready := false
 var _perf_last_physics_usec := 0
 var _perf_max_physics_usec := 0
 var _perf_last_pose_usec := 0
@@ -80,6 +85,7 @@ var _last_visual_facing_position := Vector3.ZERO
 
 
 func _ready() -> void:
+	_ensure_behavior_dependencies()
 	_sync_combat_stats_to_human()
 	super._ready()
 	_spear_phase_seed = float(absi(hash(name)) % 1000) * 0.001 * TAU
@@ -92,6 +98,33 @@ func _ready() -> void:
 	if formation_visual_only:
 		_set_state(STATE_IDLE)
 		disable_formation_physics()
+
+
+func _ensure_behavior_dependencies() -> void:
+	if _behavior_dependencies_ready and behavior_set:
+		return
+	if behavior_set:
+		if behavior_set.has_method("duplicate_for_runtime"):
+			behavior_set = behavior_set.call("duplicate_for_runtime") as Resource
+		else:
+			behavior_set = behavior_set.duplicate(true)
+			if behavior_set.has_method("ensure_defaults"):
+				behavior_set.call("ensure_defaults")
+	else:
+		behavior_set = TroopSoldierBehaviorSetScript.new()
+		behavior_set.ensure_defaults()
+	_behavior_dependencies_ready = true
+
+
+func configure_behavior_set(next_behavior_set: Resource) -> void:
+	if next_behavior_set and next_behavior_set.has_method("duplicate_for_runtime"):
+		behavior_set = next_behavior_set.call("duplicate_for_runtime") as Resource
+	elif next_behavior_set:
+		behavior_set = next_behavior_set.duplicate(true)
+	else:
+		behavior_set = null
+	_behavior_dependencies_ready = false
+	_ensure_behavior_dependencies()
 
 
 func _physics_process(delta: float) -> void:
@@ -353,23 +386,8 @@ func _finish_perf_sample(perf_started: int) -> void:
 
 
 func set_formation_walking(active: bool, speed_mps: float = 1.0) -> void:
-	if not is_alive():
-		_formation_walking = false
-		_formation_speed_scale = 1.0
-		_formation_facing_direction = Vector3.ZERO
-		_formation_frame_motion = Vector3.ZERO
-		return
-	if active:
-		_wake_logic()
-	else:
-		_formation_facing_direction = Vector3.ZERO
-		_formation_frame_motion = Vector3.ZERO
-	_formation_walking = active
-	if active:
-		_stationary_pose_applied = false
-	_formation_speed_scale = clampf(speed_mps / maxf(walk_speed, 0.1), 0.7, 2.4)
-	if formation_visual_only:
-		_set_state(STATE_WALK if _formation_walking else STATE_IDLE)
+	_ensure_behavior_dependencies()
+	behavior_set.walk_logic.apply_formation_walking(self, active, speed_mps)
 
 
 func is_formation_walking() -> bool:
@@ -399,17 +417,24 @@ func clear_formation_facing_direction() -> void:
 
 
 func set_move_target(_world_position: Vector3, run: bool = false) -> void:
-	if not formation_visual_only:
-		super.set_move_target(_world_position, run)
-		return
-	set_formation_walking(true, run_speed if run else walk_speed)
+	_ensure_behavior_dependencies()
+	if run:
+		behavior_set.run_logic.begin_direct_move(self, _world_position, true)
+	else:
+		behavior_set.walk_logic.begin_direct_move(self, _world_position, false)
 
 
 func clear_move_target() -> void:
-	if not formation_visual_only:
-		super.clear_move_target()
-		return
-	set_formation_walking(false)
+	_ensure_behavior_dependencies()
+	behavior_set.walk_logic.clear_direct_move(self)
+
+
+func _call_human_set_move_target(world_position: Vector3, run: bool = false) -> void:
+	super.set_move_target(world_position, run)
+
+
+func _call_human_clear_move_target() -> void:
+	super.clear_move_target()
 
 
 func configure_combat_stats(
@@ -456,86 +481,27 @@ func follow_formation_path(
 	final_yaw_active: bool = false,
 	final_yaw: float = 0.0
 ) -> void:
-	if not is_alive():
-		clear_independent_motion()
-		return
-	_wake_logic()
-	_independent_path_points.clear()
-	for point_variant: Variant in path_points:
-		if point_variant is Vector3:
-			_independent_path_points.append(point_variant as Vector3)
-	_independent_path_index = (
-		clampi(initial_path_index, 0, _independent_path_points.size() - 1)
-		if not _independent_path_points.is_empty()
-		else 0
+	_ensure_behavior_dependencies()
+	behavior_set.walk_logic.follow_formation_path(
+		self,
+		path_points,
+		slot_offset,
+		speed_mps,
+		arrival_radius_m,
+		initial_path_index,
+		final_yaw_active,
+		final_yaw
 	)
-	_independent_slot_offset = slot_offset
-	_independent_final_yaw_active = final_yaw_active
-	_independent_final_yaw = final_yaw
-	_independent_speed = maxf(speed_mps, 0.1)
-	_independent_arrival_radius = maxf(arrival_radius_m, 0.05)
-	_independent_motion_active = not _independent_path_points.is_empty()
-	_has_independent_target = false
-	if _independent_motion_active:
-		_advance_completed_path_targets()
-	set_formation_walking(_independent_motion_active, _independent_speed)
 
 
 func set_independent_move_target(world_position: Vector3, speed_mps: float, arrival_radius_m: float = 0.24) -> void:
-	if not is_alive():
-		clear_independent_motion()
-		return
-	_wake_logic()
-	var arrival := maxf(arrival_radius_m, 0.05)
-	var speed := maxf(speed_mps, 0.1)
-	var to_target := world_position - global_position
-	to_target.y = 0.0
-	if to_target.length_squared() <= arrival * arrival:
-		if _independent_motion_active or _has_independent_target:
-			clear_independent_motion()
-		return
-	if _has_independent_target and _independent_motion_active and _independent_path_points.is_empty():
-		var target_delta := world_position - _independent_target
-		target_delta.y = 0.0
-		var retarget_epsilon := clampf(arrival * 0.55, 0.08, 0.36)
-		if (
-			target_delta.length_squared() <= retarget_epsilon * retarget_epsilon
-			and absf(float(_independent_speed) - speed) <= 0.08
-			and absf(float(_independent_arrival_radius) - arrival) <= 0.04
-		):
-			_independent_target = _independent_target.lerp(world_position, 0.35)
-			set_formation_walking(true, _independent_speed)
-			return
-	if (
-		_has_independent_target
-		and _independent_motion_active
-		and _independent_path_points.is_empty()
-		and _independent_target.distance_squared_to(world_position) <= 0.0004
-		and is_equal_approx(_independent_speed, speed)
-		and is_equal_approx(_independent_arrival_radius, arrival)
-	):
-		return
-	_independent_path_points.clear()
-	_independent_path_index = 0
-	_independent_final_yaw_active = false
-	_independent_final_yaw = 0.0
-	_independent_target = world_position
-	_independent_speed = speed
-	_independent_arrival_radius = arrival
-	_has_independent_target = true
-	_independent_motion_active = true
-	set_formation_walking(true, _independent_speed)
+	_ensure_behavior_dependencies()
+	behavior_set.walk_logic.set_independent_move_target(self, world_position, speed_mps, arrival_radius_m)
 
 
 func clear_independent_motion() -> void:
-	_independent_path_points.clear()
-	_independent_path_index = 0
-	_independent_final_yaw_active = false
-	_independent_final_yaw = 0.0
-	_has_independent_target = false
-	_independent_motion_active = false
-	_combat_focus_target = null
-	set_formation_walking(false)
+	_ensure_behavior_dependencies()
+	behavior_set.walk_logic.clear_independent_motion(self)
 
 
 func has_independent_motion() -> bool:
@@ -584,33 +550,8 @@ func set_formation_attacking(active: bool, target: Node3D = null) -> void:
 
 
 func set_independent_combat(active: bool, target: Node3D = null, in_range: bool = false) -> void:
-	var next_attacking := active and is_combat_active()
-	var next_target := target if next_attacking and is_instance_valid(target) else null
-	var next_in_range := next_attacking and in_range
-	if _formation_attacking == next_attacking and _combat_target == next_target and _combat_in_range == next_in_range:
-		return
-	if next_attacking or _logic_sleeping:
-		_wake_logic()
-	_formation_attacking = next_attacking
-	_combat_idle_pose_applied = false
-	if _formation_attacking and _formation_attack_time <= 0.0:
-		_formation_attack_time = float(absi(hash(name)) % 1000) * 0.001 * maxf(attack_cooldown, 0.05)
-	_combat_target = next_target
-	_combat_in_range = next_in_range
-	_combat_focus_target = next_target
-	if not _formation_attacking:
-		_spear_thrust_remaining = 0.0
-		_spear_thrust_duration = 0.0
-	else:
-		_stationary_pose_applied = false
-		_combat_idle_pose_applied = false
-	if is_instance_valid(_combat_target) and _combat_target.is_inside_tree():
-		var to_target := _combat_target.global_position - global_position
-		to_target.y = 0.0
-		if to_target.length_squared() > 0.0001:
-			_face_direction(to_target.normalized(), 1.0)
-	if formation_visual_only:
-		_set_state(STATE_TOOL_ACTION if _formation_attacking else (STATE_WALK if _formation_walking else STATE_IDLE))
+	_ensure_behavior_dependencies()
+	behavior_set.fight_logic.set_independent_combat(self, active, target, in_range)
 
 
 func is_formation_attacking() -> bool:
@@ -626,37 +567,18 @@ func get_combat_target() -> Node3D:
 
 
 func trigger_spear_thrust(target: Node3D = null, duration: float = -1.0) -> void:
-	if not is_combat_active():
-		return
-	_wake_logic()
-	if target:
-		_combat_target = target
-		if target.is_inside_tree():
-			var to_target := target.global_position - global_position
-			to_target.y = 0.0
-			if to_target.length_squared() > 0.0001:
-				_face_direction(to_target.normalized(), 1.0)
-	_spear_thrust_duration = maxf(duration if duration > 0.0 else attack_cooldown * 0.72, 0.18)
-	_spear_thrust_remaining = _spear_thrust_duration
-	_formation_attacking = true
-	_stationary_pose_applied = false
-	_combat_idle_pose_applied = false
-	if formation_visual_only:
-		_timed_state_duration = _spear_thrust_duration
-		_timed_state_remaining = _spear_thrust_remaining
-		_set_state(STATE_TOOL_ACTION)
+	_ensure_behavior_dependencies()
+	behavior_set.fight_logic.trigger_spear_thrust(self, target, duration)
 
 
 func is_spear_thrust_active() -> bool:
-	return _spear_thrust_remaining > 0.0
+	_ensure_behavior_dependencies()
+	return behavior_set.fight_logic.is_spear_thrust_active(self)
 
 
 func needs_full_rate_combat_visual() -> bool:
-	return (
-		_independent_motion_active
-		or _spear_thrust_remaining > 0.0
-		or _hit_reaction_remaining > 0.0
-	)
+	_ensure_behavior_dependencies()
+	return behavior_set.fight_logic.needs_full_rate_combat_visual(self)
 
 
 func apply_strength_damage(amount: float, reason: StringName = &"combat") -> void:
@@ -1080,95 +1002,23 @@ func _apply_static_stationary_pose(delta: float) -> void:
 
 
 func _update_independent_motion(delta: float) -> bool:
-	if _deserted or not is_alive() or not _independent_motion_active:
-		return false
-	var target: Variant = _get_current_independent_target()
-	if target == null:
-		clear_independent_motion()
-		return false
-
-	var destination := target as Vector3
-	var to_target := destination - global_position
-	to_target.y = 0.0
-	var distance := to_target.length()
-	if distance <= _independent_arrival_radius:
-		if _advance_completed_path_targets():
-			return _update_independent_motion(delta)
-		clear_independent_motion()
-		return false
-
-	var direction := to_target / distance
-	var motion_delta := minf(maxf(delta, 0.0), 0.05)
-	var step := minf(maxf(_independent_speed, 0.1) * motion_delta, distance)
-	global_position += direction * step
-	var facing_direction := _formation_frame_motion + direction * step
-	var combat_focus_active := is_instance_valid(_combat_focus_target) and _combat_focus_target.is_inside_tree()
-	if combat_focus_active:
-		var to_focus := _combat_focus_target.global_position - global_position
-		to_focus.y = 0.0
-		if to_focus.length_squared() > 0.0001:
-			facing_direction = to_focus.normalized()
-	if facing_direction.length_squared() <= 0.0001:
-		facing_direction = _formation_facing_direction if _formation_facing_direction.length_squared() > 0.0001 else direction
-	if formation_visual_only and not combat_focus_active and facing_direction.length_squared() > 0.0001:
-		var target_yaw := atan2(-facing_direction.x, -facing_direction.z)
-		rotation.y = target_yaw
-	else:
-		_face_direction(facing_direction, delta)
-	set_formation_walking(true, _independent_speed)
-	return true
+	_ensure_behavior_dependencies()
+	return behavior_set.walk_logic.update_independent_motion(self, delta)
 
 
 func _get_current_independent_target() -> Variant:
-	if not _independent_path_points.is_empty():
-		if _independent_path_index >= _independent_path_points.size():
-			return null
-		return _get_offset_path_point(_independent_path_index)
-	if _has_independent_target:
-		return _independent_target
-	return null
+	_ensure_behavior_dependencies()
+	return behavior_set.walk_logic.get_current_independent_target(self)
 
 
 func _advance_completed_path_targets() -> bool:
-	if _independent_path_points.is_empty():
-		return false
-	while _independent_path_index < _independent_path_points.size():
-		var target := _get_offset_path_point(_independent_path_index)
-		var to_target := target - global_position
-		to_target.y = 0.0
-		if to_target.length() > _independent_arrival_radius:
-			return true
-		_independent_path_index += 1
-	return false
+	_ensure_behavior_dependencies()
+	return behavior_set.walk_logic.advance_completed_path_targets(self)
 
 
 func _get_offset_path_point(path_index: int) -> Vector3:
-	var anchor := _independent_path_points[clampi(path_index, 0, _independent_path_points.size() - 1)]
-	var direction := Vector3.FORWARD
-	if _independent_final_yaw_active and path_index >= _independent_path_points.size() - 1:
-		var final_basis := Basis(Vector3.UP, _independent_final_yaw)
-		var final_offset := final_basis * _independent_slot_offset
-		var final_target := anchor + final_offset
-		final_target.y = global_position.y
-		return final_target
-	if _independent_path_points.size() > 1:
-		var next_index := mini(path_index + 1, _independent_path_points.size() - 1)
-		var previous_index := maxi(path_index - 1, 0)
-		if next_index != path_index:
-			direction = _independent_path_points[next_index] - anchor
-		else:
-			direction = anchor - _independent_path_points[previous_index]
-		direction.y = 0.0
-		if direction.length_squared() <= 0.0001:
-			direction = Vector3.FORWARD
-		else:
-			direction = direction.normalized()
-	var yaw := atan2(-direction.x, -direction.z)
-	var basis := Basis(Vector3.UP, yaw)
-	var offset := basis * _independent_slot_offset
-	var target := anchor + offset
-	target.y = global_position.y
-	return target
+	_ensure_behavior_dependencies()
+	return behavior_set.walk_logic.get_offset_path_point(self, path_index)
 
 
 func _enter_corpse_state() -> void:
