@@ -423,7 +423,7 @@ const MISSION_COMPLETE := &"complete"
 		camp_building_scale = maxf(value, 0.1)
 		if is_inside_tree() and _camp_established:
 			_sync_independent_camp_settings()
-@export_range(1.0, 256.0, 0.5, "or_greater") var camp_pack_range_m: float = 18.0
+@export_range(1.0, 256.0, 0.5, "or_greater") var camp_pack_range_m: float = 36.0
 @export_range(0.0, 10000.0, 1.0, "or_greater") var camp_food_kg: float = 0.0
 @export_range(0.0, 10000.0, 1.0, "or_greater") var camp_wood_kg: float = 0.0
 @export_range(0.1, 20.0, 0.1, "or_greater") var carrier_speed_mps: float = 3.2
@@ -1581,7 +1581,7 @@ func add_recruited_soldiers(count: int, spawn_world_position: Vector3 = Vector3(
 
 	_refresh_transferred_formation()
 	if _camp_established:
-		_rebuild_camp_visual()
+		_sync_independent_camp_settings()
 	_mark_combat_stats_dirty()
 	_emit_logistics_changed()
 	_emit_combat_changed()
@@ -1603,7 +1603,13 @@ func continue_mission() -> bool:
 
 func take_food_from_nearby_camp(amount_kg: float) -> float:
 	var camp := _get_primary_in_range_camp()
+	return take_food_from_camp(camp, amount_kg)
+
+
+func take_food_from_camp(camp: Node, amount_kg: float) -> float:
 	if not camp or not camp.has_method("withdraw_food_kg"):
+		return 0.0
+	if not _is_friendly_camp_in_range(camp):
 		return 0.0
 	var amount := minf(maxf(amount_kg, 0.0), get_free_carry_capacity_kg())
 	if amount <= 0.0:
@@ -1617,7 +1623,13 @@ func take_food_from_nearby_camp(amount_kg: float) -> float:
 
 func deposit_food_to_nearby_camp(amount_kg: float) -> float:
 	var camp := _get_primary_in_range_camp()
+	return deposit_food_to_camp(camp, amount_kg)
+
+
+func deposit_food_to_camp(camp: Node, amount_kg: float) -> float:
 	if not camp or not camp.has_method("deposit_food_kg"):
+		return 0.0
+	if not _is_friendly_camp_in_range(camp):
 		return 0.0
 	var amount := minf(maxf(amount_kg, 0.0), maxf(carried_food_kg, 0.0))
 	if amount <= 0.0:
@@ -1631,7 +1643,13 @@ func deposit_food_to_nearby_camp(amount_kg: float) -> float:
 
 func take_wood_from_nearby_camp(amount_kg: float) -> float:
 	var camp := _get_primary_in_range_camp()
+	return take_wood_from_camp(camp, amount_kg)
+
+
+func take_wood_from_camp(camp: Node, amount_kg: float) -> float:
 	if not camp or not camp.has_method("withdraw_wood_kg"):
+		return 0.0
+	if not _is_friendly_camp_in_range(camp):
 		return 0.0
 	var amount := minf(maxf(amount_kg, 0.0), get_free_carry_capacity_kg())
 	if amount <= 0.0:
@@ -1645,7 +1663,13 @@ func take_wood_from_nearby_camp(amount_kg: float) -> float:
 
 func deposit_wood_to_nearby_camp(amount_kg: float) -> float:
 	var camp := _get_primary_in_range_camp()
+	return deposit_wood_to_camp(camp, amount_kg)
+
+
+func deposit_wood_to_camp(camp: Node, amount_kg: float) -> float:
 	if not camp or not camp.has_method("deposit_wood_kg"):
+		return 0.0
+	if not _is_friendly_camp_in_range(camp):
 		return 0.0
 	var amount := minf(maxf(amount_kg, 0.0), maxf(carried_wood_kg, 0.0))
 	if amount <= 0.0:
@@ -2347,6 +2371,19 @@ func _get_nearby_camps_in_range() -> Array[Node]:
 		return global_position.distance_squared_to((a as Node3D).global_position) < global_position.distance_squared_to((b as Node3D).global_position)
 	)
 	return camps
+
+
+func _is_friendly_camp_in_range(camp: Node) -> bool:
+	if not camp or not is_instance_valid(camp) or camp.is_queued_for_deletion():
+		return false
+	var camp_team: Variant = camp.get("team_id")
+	if camp_team == null or str(camp_team) != str(team_id):
+		return false
+	if camp.has_method("is_troop_in_range"):
+		return bool(camp.call("is_troop_in_range", self))
+	if camp is Node3D:
+		return global_position.distance_to((camp as Node3D).global_position) <= maxf(camp_pack_range_m, 0.1)
+	return false
 
 
 func _get_primary_in_range_camp() -> Node:

@@ -21,7 +21,7 @@ const CampScript = preload("res://modules/troops/camp.gd")
 @export var default_camp_position := Vector3.ZERO
 @export_range(0.0, 100000.0, 1.0, "or_greater") var starting_food_kg: float = 240.0
 @export_range(0.0, 100000.0, 1.0, "or_greater") var starting_wood_kg: float = 180.0
-@export_range(1.0, 512.0, 0.5, "or_greater") var default_camp_range_m: float = 28.0
+@export_range(1.0, 512.0, 0.5, "or_greater") var default_camp_range_m: float = 56.0
 
 @export_group("Owned Assets")
 @export_node_path("Node") var primary_village_path: NodePath

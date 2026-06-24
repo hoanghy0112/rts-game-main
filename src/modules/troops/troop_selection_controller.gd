@@ -9,6 +9,14 @@ const TEAM_PLAYER := &"player"
 const VILLAGE_SELECTABLE_TYPE_META := &"village_selectable_type"
 const VILLAGE_SELECTABLE_REGION_PATH_META := &"village_region_path"
 const FORMATION_PREVIEW_NODE_NAME := "FormationDragPreview"
+const CONTEXT_ACTION_MOVE_TO_CAMP := 1
+const CONTEXT_ACTION_TAKE_CAMP_FOOD := 2
+const CONTEXT_ACTION_GIVE_CAMP_FOOD := 3
+const CONTEXT_ACTION_TAKE_CAMP_WOOD := 4
+const CONTEXT_ACTION_GIVE_CAMP_WOOD := 5
+const CONTEXT_ACTION_MOVE_TO_VILLAGE := 20
+const CONTEXT_ACTION_COLLECT_VILLAGE_FOOD := 21
+const DEFAULT_CONTEXT_TRANSFER_KG := 20.0
 
 @export var troop_drawer_path: NodePath = NodePath("../TroopManagementDrawer")
 @export var background_jobs_debug_panel_path: NodePath = NodePath("../TroopBackgroundJobsDebugPanel")
@@ -24,6 +32,7 @@ const FORMATION_PREVIEW_NODE_NAME := "FormationDragPreview"
 @export var formation_preview_color: Color = Color(0.42, 0.88, 1.0, 0.68)
 @export var formation_preview_chevron_color: Color = Color(0.86, 1.0, 1.0, 0.9)
 @export_range(1.0, 96.0, 1.0, "or_greater") var unit_screen_pick_radius_px: float = 28.0
+@export_range(1.0, 160.0, 1.0, "or_greater") var camp_flag_screen_pick_radius_px: float = 44.0
 @export_flags_3d_physics var troop_collision_mask: int = 1 << 5
 @export_flags_3d_physics var destination_collision_mask: int = 0xFFFFFFFF
 @export_flags_3d_physics var village_selection_collision_mask: int = 1
@@ -41,10 +50,14 @@ var _formation_drag_current_world: Variant = null
 var _formation_preview: MeshInstance3D
 var _food_collection_troop: Node
 var _food_collection_amount_kg := 0.0
+var _context_menu: PopupMenu
+var _context_target: Node
+var _context_target_type: StringName = &""
 
 
 func _ready() -> void:
 	_bind_drawer_signals()
+	_ensure_context_menu()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -78,6 +91,7 @@ func _physics_process(_delta: float) -> void:
 
 func _exit_tree() -> void:
 	_clear_formation_drag_preview()
+	_clear_context_menu_target()
 	_set_hovered_troop(null)
 	_select_troop(null)
 	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
@@ -130,6 +144,10 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if drag_distance > command_click_drag_threshold:
 		return
 	if not _selected_troop:
+		return
+
+	if _try_show_context_menu(event.position):
+		get_viewport().set_input_as_handled()
 		return
 
 	_pending_command_position = event.position
@@ -462,6 +480,159 @@ func _issue_food_collection(screen_position: Vector2) -> void:
 		drawer.call("refresh")
 
 
+func _try_show_context_menu(screen_position: Vector2) -> bool:
+	if not _is_commandable_troop(_selected_troop):
+		return false
+
+	var camp := _get_camp_at(screen_position)
+	if camp and _is_friendly_camp(camp):
+		_show_camp_context_menu(camp, screen_position)
+		return true
+
+	var village := _get_village_at(screen_position)
+	if village:
+		_show_village_context_menu(village, screen_position)
+		return true
+
+	return false
+
+
+func _show_camp_context_menu(camp: Node, screen_position: Vector2) -> void:
+	var menu := _ensure_context_menu()
+	if not menu:
+		return
+	_context_target = camp
+	_context_target_type = &"camp"
+	menu.clear()
+	_add_context_item("Move to Camp", CONTEXT_ACTION_MOVE_TO_CAMP)
+	menu.add_separator()
+
+	var in_range := _is_selected_troop_in_camp_range(camp)
+	var summary := _get_selected_troop_summary()
+	var free_capacity := float(summary.get("free_capacity_kg", 0.0))
+	var carried_food := float(summary.get("carried_food_kg", 0.0))
+	var carried_wood := float(summary.get("carried_wood_kg", 0.0))
+	var camp_food := _get_object_float(camp, &"food_kg")
+	var camp_wood := _get_object_float(camp, &"wood_kg")
+	_add_context_item("Take Food", CONTEXT_ACTION_TAKE_CAMP_FOOD, not in_range or free_capacity <= 0.0 or camp_food <= 0.0)
+	_add_context_item("Give Food", CONTEXT_ACTION_GIVE_CAMP_FOOD, not in_range or carried_food <= 0.0)
+	_add_context_item("Take Wood", CONTEXT_ACTION_TAKE_CAMP_WOOD, not in_range or free_capacity <= 0.0 or camp_wood <= 0.0)
+	_add_context_item("Give Wood", CONTEXT_ACTION_GIVE_CAMP_WOOD, not in_range or carried_wood <= 0.0)
+	_popup_context_menu(screen_position)
+
+
+func _show_village_context_menu(village: Node, screen_position: Vector2) -> void:
+	var menu := _ensure_context_menu()
+	if not menu:
+		return
+	_context_target = village
+	_context_target_type = &"village"
+	menu.clear()
+	_add_context_item("Move to Village", CONTEXT_ACTION_MOVE_TO_VILLAGE)
+	var summary := _get_selected_troop_summary()
+	var free_capacity := float(summary.get("free_capacity_kg", 0.0))
+	var food_available := _get_village_food_available_kg(village)
+	_add_context_item("Collect Food", CONTEXT_ACTION_COLLECT_VILLAGE_FOOD, free_capacity <= 0.0 or food_available <= 0.0)
+	_popup_context_menu(screen_position)
+
+
+func _add_context_item(label: String, action_id: int, disabled: bool = false) -> void:
+	if not _context_menu:
+		return
+	_context_menu.add_item(label, action_id)
+	var index := _context_menu.item_count - 1
+	_context_menu.set_item_disabled(index, disabled)
+
+
+func _popup_context_menu(screen_position: Vector2) -> void:
+	if not _context_menu:
+		return
+	var popup_position := Vector2i(roundi(screen_position.x), roundi(screen_position.y))
+	_context_menu.popup(Rect2i(popup_position, Vector2i(1, 1)))
+
+
+func _on_context_menu_id_pressed(action_id: int) -> void:
+	var target := _context_target
+	var target_type := _context_target_type
+	_clear_context_menu_target()
+	if not is_instance_valid(target) or not _is_commandable_troop(_selected_troop):
+		return
+
+	match action_id:
+		CONTEXT_ACTION_MOVE_TO_CAMP:
+			if target_type == &"camp":
+				_issue_move_to_context_target(target)
+		CONTEXT_ACTION_TAKE_CAMP_FOOD:
+			if target_type == &"camp" and _selected_troop.has_method("take_food_from_camp"):
+				_selected_troop.call("take_food_from_camp", target, _get_context_transfer_amount_kg())
+		CONTEXT_ACTION_GIVE_CAMP_FOOD:
+			if target_type == &"camp" and _selected_troop.has_method("deposit_food_to_camp"):
+				_selected_troop.call("deposit_food_to_camp", target, _get_context_transfer_amount_kg())
+		CONTEXT_ACTION_TAKE_CAMP_WOOD:
+			if target_type == &"camp" and _selected_troop.has_method("take_wood_from_camp"):
+				_selected_troop.call("take_wood_from_camp", target, _get_context_transfer_amount_kg())
+		CONTEXT_ACTION_GIVE_CAMP_WOOD:
+			if target_type == &"camp" and _selected_troop.has_method("deposit_wood_to_camp"):
+				_selected_troop.call("deposit_wood_to_camp", target, _get_context_transfer_amount_kg())
+		CONTEXT_ACTION_MOVE_TO_VILLAGE:
+			if target_type == &"village":
+				_issue_move_to_context_target(target)
+		CONTEXT_ACTION_COLLECT_VILLAGE_FOOD:
+			if target_type == &"village" and _selected_troop.has_method("begin_food_collection"):
+				_selected_troop.call("begin_food_collection", target, _get_context_food_amount_kg())
+
+	var drawer := _get_troop_drawer()
+	if drawer and drawer.has_method("refresh"):
+		drawer.call("refresh")
+
+
+func _issue_move_to_context_target(target: Node) -> bool:
+	if not _is_commandable_troop(_selected_troop) or not _selected_troop.has_method("set_move_destination"):
+		return false
+	var position := _get_context_target_world_position(target)
+	return bool(_selected_troop.call("set_move_destination", position))
+
+
+func _get_context_target_world_position(target: Node) -> Vector3:
+	if target and target.has_method("get_village_storage_world_position"):
+		var value: Variant = target.call("get_village_storage_world_position")
+		if value is Vector3:
+			return value as Vector3
+	if target and target.has_method("get_management_flag_world_position"):
+		var flag_position: Variant = target.call("get_management_flag_world_position")
+		if flag_position is Vector3:
+			var flag := flag_position as Vector3
+			return Vector3(flag.x, 0.0, flag.z)
+	if target is Node3D:
+		return (target as Node3D).global_position
+	return Vector3.ZERO
+
+
+func _get_context_food_amount_kg() -> float:
+	var drawer := _get_troop_drawer()
+	if drawer and drawer.has_method("get_food_collection_amount_kg"):
+		return maxf(float(drawer.call("get_food_collection_amount_kg")), 1.0)
+	return DEFAULT_CONTEXT_TRANSFER_KG
+
+
+func _get_context_transfer_amount_kg() -> float:
+	var drawer := _get_troop_drawer()
+	if drawer and drawer.has_method("get_camp_transfer_amount_kg"):
+		return maxf(float(drawer.call("get_camp_transfer_amount_kg")), 1.0)
+	return DEFAULT_CONTEXT_TRANSFER_KG
+
+
+func _get_selected_troop_summary() -> Dictionary:
+	if _selected_troop and _selected_troop.has_method("get_troop_summary"):
+		return _selected_troop.call("get_troop_summary") as Dictionary
+	return {}
+
+
+func _clear_context_menu_target() -> void:
+	_context_target = null
+	_context_target_type = &""
+
+
 func _try_issue_forest_logistics(world_position: Vector3) -> bool:
 	if not _is_commandable_troop(_selected_troop):
 		return false
@@ -560,7 +731,7 @@ func _get_troop_at(screen_position: Vector2) -> Node:
 	for _attempt: int in range(12):
 		var result := space_state.intersect_ray(query)
 		if result.is_empty():
-			return _get_nearest_troop_screen_target(screen_position, camera)
+			return _get_nearest_selectable_screen_target(screen_position, camera)
 
 		var collider := result.get("collider") as Object
 		var selectable := _find_selectable_node(collider)
@@ -572,7 +743,45 @@ func _get_troop_at(screen_position: Vector2) -> Node:
 			query.exclude.append(rid)
 		else:
 			return null
-	return _get_nearest_troop_screen_target(screen_position, camera)
+	return _get_nearest_selectable_screen_target(screen_position, camera)
+
+
+func _get_camp_at(screen_position: Vector2) -> Node:
+	var camera := _get_camera()
+	if not camera:
+		return null
+
+	var world := camera.get_world_3d()
+	if not world:
+		return null
+
+	var query := _make_ray_query(camera, screen_position, troop_collision_mask)
+	query.collide_with_areas = true
+	query.collide_with_bodies = true
+
+	var space_state := world.direct_space_state
+	for _attempt: int in range(12):
+		var result := space_state.intersect_ray(query)
+		if result.is_empty():
+			return _get_nearest_camp_screen_target(screen_position, camera)
+
+		var collider := result.get("collider") as Object
+		var selectable := _find_selectable_node(collider)
+		if selectable and str(selectable.get_meta(SELECTABLE_TYPE_META, "")) == str(SELECTABLE_CAMP_TYPE):
+			var camp := _get_troop_for_selectable(selectable)
+			return camp if _is_camp_node(camp) else null
+
+		var rid: RID = result.get("rid", RID())
+		if rid.is_valid():
+			query.exclude.append(rid)
+		else:
+			return null
+	return _get_nearest_camp_screen_target(screen_position, camera)
+
+
+func _get_nearest_selectable_screen_target(screen_position: Vector2, camera: Camera3D) -> Node:
+	var nearest_troop := _get_nearest_troop_screen_target(screen_position, camera)
+	return nearest_troop if nearest_troop else _get_nearest_camp_screen_target(screen_position, camera)
 
 
 func _get_nearest_troop_screen_target(screen_position: Vector2, camera: Camera3D) -> Node:
@@ -596,6 +805,34 @@ func _get_nearest_troop_screen_target(screen_position: Vector2, camera: Camera3D
 				best_troop = troop
 				best_distance_squared = distance_squared
 	return best_troop
+
+
+func _get_nearest_camp_screen_target(screen_position: Vector2, camera: Camera3D) -> Node:
+	if not camera or camp_flag_screen_pick_radius_px <= 0.0:
+		return null
+	var tree := get_tree()
+	if not tree:
+		return null
+
+	var best_camp: Node
+	var best_distance_squared := camp_flag_screen_pick_radius_px * camp_flag_screen_pick_radius_px
+	for camp: Node in tree.get_nodes_in_group(&"camps"):
+		if not _is_camp_node(camp):
+			continue
+		var flag_position_variant: Variant = null
+		if camp.has_method("get_management_flag_world_position"):
+			flag_position_variant = camp.call("get_management_flag_world_position")
+		if not (flag_position_variant is Vector3):
+			continue
+		var flag_position := flag_position_variant as Vector3
+		if not _is_world_position_projectable(camera, flag_position):
+			continue
+		var projected := camera.unproject_position(flag_position)
+		var distance_squared := projected.distance_squared_to(screen_position)
+		if distance_squared <= best_distance_squared:
+			best_camp = camp
+			best_distance_squared = distance_squared
+	return best_camp
 
 
 func _get_troop_screen_pick_points(troop: Node) -> Array[Vector3]:
@@ -761,6 +998,33 @@ func _try_issue_attack_target(target_troop: Node) -> bool:
 	return accepted
 
 
+func _is_camp_node(node: Node) -> bool:
+	if not node or not node.has_method("get_troop_summary"):
+		return false
+	var summary: Dictionary = node.call("get_troop_summary") as Dictionary
+	return str(summary.get("entity_type", "")) == "camp"
+
+
+func _is_friendly_camp(camp: Node) -> bool:
+	if not _is_camp_node(camp) or not _selected_troop:
+		return false
+	var camp_team: Variant = camp.get("team_id")
+	var troop_team: Variant = _selected_troop.get("team_id")
+	if camp_team == null or troop_team == null:
+		return false
+	return str(camp_team) == str(troop_team)
+
+
+func _is_selected_troop_in_camp_range(camp: Node) -> bool:
+	if not _selected_troop or not camp:
+		return false
+	if camp.has_method("is_troop_in_range"):
+		return bool(camp.call("is_troop_in_range", _selected_troop))
+	if camp is Node3D and _selected_troop is Node3D:
+		return (camp as Node3D).global_position.distance_to((_selected_troop as Node3D).global_position) <= 0.1
+	return false
+
+
 func _is_enemy_troop(source: Node, target: Node) -> bool:
 	if not source or not target or source == target:
 		return false
@@ -823,6 +1087,15 @@ func _get_village_for_selectable(selectable: Node) -> Node:
 	return null
 
 
+func _get_object_float(object: Object, property_name: StringName, fallback: float = 0.0) -> float:
+	if not object:
+		return fallback
+	for property: Dictionary in object.get_property_list():
+		if str(property.get("name", "")) == str(property_name):
+			return maxf(float(object.get(str(property_name))), 0.0)
+	return fallback
+
+
 func _get_forest_region_and_cell(world_position: Vector3) -> Dictionary:
 	for region: Node in _get_forest_regions():
 		if not region.has_method("world_to_cell"):
@@ -873,6 +1146,19 @@ func _collect_forest_regions(node: Node, regions: Array[Node]) -> void:
 func _is_pointer_over_ui() -> bool:
 	var viewport := get_viewport()
 	return viewport != null and viewport.gui_get_hovered_control() != null
+
+
+func _ensure_context_menu() -> PopupMenu:
+	if _context_menu and is_instance_valid(_context_menu):
+		return _context_menu
+	_context_menu = PopupMenu.new()
+	_context_menu.name = "TroopContextMenu"
+	_context_menu.hide_on_item_selection = true
+	add_child(_context_menu)
+	_context_menu.owner = null
+	if not _context_menu.id_pressed.is_connected(_on_context_menu_id_pressed):
+		_context_menu.id_pressed.connect(_on_context_menu_id_pressed)
+	return _context_menu
 
 
 func _get_troop_drawer() -> Node:

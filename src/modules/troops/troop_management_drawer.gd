@@ -234,12 +234,12 @@ func refresh() -> void:
 	else:
 		_camp_label.text = "Camp  Packed"
 
-	_camp_transfer_label.visible = nearby_camp_in_range
+	_camp_transfer_label.visible = false
 	_camp_transfer_label.text = "Nearby camp  %s food   %s wood" % [_format_kg(nearby_camp_food), _format_kg(nearby_camp_wood)]
 	var camp_transfer_row: Control = null
 	if _camp_transfer_spin_box:
 		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
-	_set_control_visible(camp_transfer_row, nearby_camp_in_range)
+	_set_control_visible(camp_transfer_row, false)
 	if nearby_camp_in_range and _camp_transfer_spin_box:
 		var max_transfer := maxf(maxf(nearby_camp_food, nearby_camp_wood), maxf(carried_food, carried_wood))
 		max_transfer = maxf(max_transfer, 20.0)
@@ -301,6 +301,12 @@ func get_food_collection_amount_kg() -> float:
 	if not _cache_control_nodes():
 		return 20.0
 	return maxf(float(_food_amount_spin_box.value), 1.0)
+
+
+func get_camp_transfer_amount_kg() -> float:
+	if not _camp_transfer_spin_box:
+		return 20.0
+	return maxf(float(_camp_transfer_spin_box.value), 1.0)
 
 
 func _bind_troop(troop: Node) -> void:
@@ -387,12 +393,12 @@ func _apply_read_only_visibility(read_only: bool) -> void:
 	_set_control_visible(_assets_label, show_controls)
 	_set_control_visible(_carrier_label, show_controls)
 	_set_control_visible(_camp_label, show_controls)
-	_set_control_visible(food_row, show_controls)
+	_set_control_visible(food_row, false)
 	_set_control_visible(wood_row, show_controls)
 	_set_control_visible(_craft_trolley_button, show_controls)
 	_set_control_visible(camp_buttons, show_controls)
-	_set_control_visible(_camp_transfer_label, show_controls)
-	_set_control_visible(camp_transfer_row, show_controls)
+	_set_control_visible(_camp_transfer_label, false)
+	_set_control_visible(camp_transfer_row, false)
 	_set_control_visible(_persuade_deserters_button, show_controls)
 
 
