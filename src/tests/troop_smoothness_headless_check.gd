@@ -64,6 +64,34 @@ func _run() -> void:
 				failures.append("stand-by soldier drift/jump %.3fm; budget %.3fm" % [float(idle_metrics["max_step_m"]), MAX_IDLE_STEP_M])
 			if int(idle_metrics.get("independent_motions", 0)) > 0:
 				failures.append("stand-by formation kept %d independent soldier motions" % int(idle_metrics["independent_motions"]))
+			var formation_drag_accepted := false
+			if mover.has_method("set_formation_destination"):
+				formation_drag_accepted = bool(mover.call(
+					"set_formation_destination",
+					Vector3(68.0, 0.0, 56.0),
+					Vector3(0.72, 0.0, 0.69),
+					36.0
+				))
+			if not formation_drag_accepted:
+				failures.append("smoothness troop rejected reachable formation drag destination")
+			else:
+				await _wait_frames(4)
+				_reset_perf(mover)
+				var formation_drag_metrics := await _sample_motion(mover, MOVE_SAMPLE_FRAMES, true)
+				_print_metrics("formation_drag", formation_drag_metrics)
+				_assert_active_render_sync("formation_drag", formation_drag_metrics, failures)
+				if float(formation_drag_metrics.get("max_step_m", 0.0)) > MAX_MOVING_STEP_M:
+					failures.append(
+						"formation-drag soldier source step jumped %.3fm; budget %.3fm"
+						% [float(formation_drag_metrics["max_step_m"]), MAX_MOVING_STEP_M]
+					)
+				var drag_facing_checks := int(formation_drag_metrics.get("facing_checks", 0))
+				var drag_facing_errors := int(formation_drag_metrics.get("facing_errors", 0))
+				if drag_facing_checks > 0 and float(drag_facing_errors) / float(drag_facing_checks) > MAX_FACING_ERROR_RATIO:
+					failures.append(
+						"formation-drag facing error ratio %.3f exceeded %.3f"
+						% [float(drag_facing_errors) / float(drag_facing_checks), MAX_FACING_ERROR_RATIO]
+					)
 
 	var attacker := _make_troop(&"smooth_attacker", &"player", Vector3(18.0, 0.0, 24.0), movement_map)
 	var defender := _make_troop(&"smooth_defender", &"enemy", Vector3(76.0, 0.0, 24.0), movement_map)
@@ -81,6 +109,47 @@ func _run() -> void:
 		failures.append(
 			"combat-start soldier source step jumped %.3fm; budget %.3fm"
 			% [float(combat_metrics["max_transition_step_m"]), MAX_COMBAT_TRANSITION_STEP_M]
+		)
+
+	_free_test_node(mover)
+	_free_test_node(attacker)
+	_free_test_node(defender)
+
+	var autonomous_player := _make_troop(&"auto_chase_player", &"player", Vector3(20.0, 0.0, 40.0), movement_map)
+	var autonomous_enemy := _make_troop(&"auto_chase_enemy", &"enemy", Vector3(110.0, 0.0, 40.0), movement_map)
+	autonomous_player.set("soldier_count", 24)
+	autonomous_player.set("formation_columns", 6)
+	autonomous_enemy.set("soldier_count", 24)
+	autonomous_enemy.set("formation_columns", 6)
+	autonomous_enemy.set("controllable", false)
+	autonomous_enemy.set("troop_mode", "attack")
+	autonomous_enemy.set("detection_range_m", 34.0)
+	autonomous_enemy.set("chase_repath_interval", 0.05)
+	root.add_child(autonomous_player)
+	root.add_child(autonomous_enemy)
+	await _wait_frames(8)
+	var autonomous_metrics := await _sample_autonomous_enemy_chase(autonomous_enemy)
+	_print_metrics("autonomous_enemy_chase", autonomous_metrics)
+	if not bool(autonomous_metrics.get("acquired_target", false)):
+		failures.append("autonomous enemy did not acquire a player troop beyond normal detection range")
+	if not bool(autonomous_metrics.get("started_moving", false)):
+		failures.append("autonomous enemy did not start moving toward the acquired player troop")
+	if float(autonomous_metrics.get("max_moving_step_m", 0.0)) > MAX_MOVING_STEP_M:
+		failures.append(
+			"autonomous enemy soldier source step jumped %.3fm; budget %.3fm"
+			% [float(autonomous_metrics["max_moving_step_m"]), MAX_MOVING_STEP_M]
+		)
+	if float(autonomous_metrics.get("max_fighting_step_m", 0.0)) > MAX_COMBAT_TRANSITION_STEP_M:
+		failures.append(
+			"autonomous enemy combat transition step jumped %.3fm; budget %.3fm"
+			% [float(autonomous_metrics["max_fighting_step_m"]), MAX_COMBAT_TRANSITION_STEP_M]
+		)
+	var sampled_moving_frames := int(autonomous_metrics.get("sampled_moving_frames", 0))
+	var render_sync_count := int(autonomous_metrics.get("render_sync_count", 0))
+	if sampled_moving_frames > 0 and render_sync_count < int(float(sampled_moving_frames) * 0.75):
+		failures.append(
+			"autonomous enemy moving render sync was sparse (%d syncs over %d moving frames)"
+			% [render_sync_count, sampled_moving_frames]
 		)
 
 	Engine.max_fps = _original_max_fps
@@ -216,6 +285,57 @@ func _sample_attack_transition(attacker: Node, defender: Node) -> Dictionary:
 	}
 
 
+func _sample_autonomous_enemy_chase(enemy: Node) -> Dictionary:
+	var previous_positions := _get_soldier_positions(enemy)
+	var started_moving := false
+	var acquired_target := false
+	var sampled_moving_frames := 0
+	var max_step := 0.0
+	var max_moving_step := 0.0
+	var max_fighting_step := 0.0
+	for _index: int in range(420):
+		await _wait_frames(1)
+		var summary := _get_summary(enemy)
+		var state := StringName(summary.get("state", &""))
+		var target_path := NodePath(summary.get("combat_target", NodePath("")))
+		acquired_target = acquired_target or not target_path.is_empty()
+		if state == &"moving" or state == &"fighting":
+			if not started_moving:
+				started_moving = true
+				_reset_perf(enemy)
+				previous_positions = _get_soldier_positions(enemy)
+			else:
+				var current_positions := _get_soldier_positions(enemy)
+				for soldier: Node3D in current_positions.keys():
+					var previous_variant: Variant = previous_positions.get(soldier)
+					if not (previous_variant is Vector3):
+						continue
+					var delta_position: Vector3 = current_positions[soldier] - (previous_variant as Vector3)
+					delta_position.y = 0.0
+					var step := delta_position.length()
+					max_step = maxf(max_step, step)
+					if state == &"moving":
+						max_moving_step = maxf(max_moving_step, step)
+					elif state == &"fighting":
+						max_fighting_step = maxf(max_fighting_step, step)
+				previous_positions = current_positions
+			sampled_moving_frames += 1
+			if sampled_moving_frames >= 120:
+				break
+	var final_summary := _get_summary(enemy)
+	return {
+		"acquired_target": acquired_target,
+		"started_moving": started_moving,
+		"sampled_moving_frames": sampled_moving_frames,
+		"max_step_m": max_step,
+		"max_moving_step_m": max_moving_step,
+		"max_fighting_step_m": max_fighting_step,
+		"render_sync_count": int(final_summary.get("soldier_render_sync_count", 0)),
+		"render_sync_skips": int(final_summary.get("soldier_render_sync_skip_count", 0)),
+		"state": String(final_summary.get("state", &"")),
+	}
+
+
 func _assert_active_render_sync(label: String, metrics: Dictionary, failures: Array[String]) -> void:
 	var skips := int(metrics.get("render_sync_skips", 0))
 	if skips > 0 and label != "moving" and int(metrics.get("render_sync_count", 0)) <= 0:
@@ -242,6 +362,14 @@ func _wait_frames(frames: int) -> void:
 func _reset_perf(troop: Node) -> void:
 	if troop.has_method("reset_perf_debug_counters"):
 		troop.call("reset_perf_debug_counters")
+
+
+func _free_test_node(node: Node) -> void:
+	if not is_instance_valid(node):
+		return
+	if node.get_parent():
+		node.get_parent().remove_child(node)
+	node.free()
 
 
 func _get_summary(troop: Node) -> Dictionary:

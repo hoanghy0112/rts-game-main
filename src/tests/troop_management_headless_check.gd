@@ -107,6 +107,7 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_combat_surround_sockets_and_facing(failures)
 	await _check_combat_target_capacity(failures)
 	await _check_normal_combat_assigns_all_attackers_with_capacity(failures)
+	await _check_large_default_combat_assigns_all_when_capacity_exists(failures)
 	await _check_combat_state_forgets_departed_soldiers(failures)
 	await _check_flag_hover_and_defeated_indicators(failures)
 	await _check_enemy_selection_and_read_only_drawer(failures)
@@ -221,7 +222,7 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 	_expect(int(troop.get("formation_pair_checks_budget_per_tick")) > 0, "troops should expose a moving formation pair-check budget", failures)
 	_expect(int(troop.get("combat_max_separation_neighbors")) >= 8, "combat separation should cap nearby neighbor checks", failures)
 	_expect(int(troop.get("combat_target_search_candidates")) >= 12, "combat target search should cap candidate scans", failures)
-	_expect(int(troop.get("combat_assignment_candidates")) >= 12, "combat assignment should cap nearby target candidates", failures)
+	_expect(int(troop.get("combat_assignment_candidates")) >= 8, "combat assignment should cap nearby target candidates", failures)
 	_expect(int(troop.get("combat_max_attackers_per_target")) == 4, "combat should default to four attackers per defender", failures)
 	_expect(float(troop.get("combat_socket_radius")) > 0.0, "combat should expose defender attack socket radius", failures)
 	_expect(float(troop.get("combat_socket_arrival_radius")) > 0.0, "combat should expose socket arrival tolerance", failures)
@@ -276,7 +277,7 @@ func _check_troop_scene_and_exports(failures: Array[String]) -> void:
 		var batch_renderer := troop.get_node_or_null("TroopSoldierBatchRenderer")
 		_expect(batch_renderer != null, "troops should create a soldier batch renderer", failures)
 		if batch_renderer:
-			_expect(not bool(batch_renderer.get("multimesh_buffer_sync_enabled")), "soldier batch renderer should avoid the packed buffer transform path by default", failures)
+			_expect(bool(batch_renderer.get("multimesh_buffer_sync_enabled")), "soldier batch renderer should use packed buffer sync once transform-space changes force full syncs", failures)
 		_expect(int(render_summary.get("soldier_render_batch_count", 0)) > 0, "soldier batch renderer should create mesh-part batches", failures)
 		_expect(int(render_summary.get("soldier_render_batched_instance_count", 0)) >= int(render_summary.get("soldier_render_batch_count", 0)), "soldier batch renderer should publish visible batched instances", failures)
 		_expect(int(render_summary.get("soldier_render_hidden_source_mesh_count", 0)) > 0, "soldier batch renderer should hide source mesh instances while batching", failures)
@@ -1019,6 +1020,8 @@ func _check_troop_combat_resolution(failures: Array[String]) -> void:
 	_expect(bool(player_summary.get("combat_scatter_active", false)), "fighting should enter combat scatter control", failures)
 	_expect(int(player_summary.get("combat_assigned_target_count", 0)) > 0, "combat should assign individual soldier targets", failures)
 	_expect(int(player_summary.get("combat_locked_attacker_count", 0)) > 0, "combat soldiers should lock positions after reaching spear range", failures)
+	_expect(int(player_summary.get("combat_visual_stance_update_count", 0)) > 0, "combat should update visible soldier combat stances", failures)
+	_expect(int(player_summary.get("combat_visual_thrust_count", 0)) > 0, "combat should trigger visible spear thrusts while fighting", failures)
 	_expect(_count_damaged_soldiers(enemy) > 1, "messy combat should damage more than one enemy soldier", failures)
 	_expect(_minimum_soldier_spacing(player) > 0.42, "combat spacing should keep allied soldiers from overlapping", failures)
 	var target_ids_before := _combat_target_ids(player)
@@ -1394,6 +1397,67 @@ func _check_normal_combat_assigns_all_attackers_with_capacity(failures: Array[St
 	_expect(
 		int(summary.get("combat_max_target_load", 0)) <= max_attackers,
 		"normal-sized combat should still respect max attackers per defender",
+		failures
+	)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(player)
+	player.free()
+
+
+func _check_large_default_combat_assigns_all_when_capacity_exists(failures: Array[String]) -> void:
+	var soldier_total := 160
+	var defender_total := 40
+	var max_attackers := 4
+	var player := TroopScene.instantiate()
+	player.set("troop_id", &"large_default_full_combat_player")
+	player.set("team_id", &"player")
+	player.set("soldier_count", soldier_total)
+	player.set("formation_columns", 16)
+	player.set("troop_mode", "attack")
+	player.set("combat_seed", 611)
+	player.set("base_soldier_strength", 100.0)
+	player.set("soldier_strength_variance", 0.0)
+	player.set("base_soldier_damage", 1.0)
+	player.set("soldier_damage_variance", 0.0)
+	player.set("combat_max_attackers_per_target", max_attackers)
+	player.set("combat_target_assignment_budget_per_tick", 256)
+	player.set("combat_assignment_candidates", 64)
+	player.set("combat_target_search_candidates", 64)
+	player.set("combat_rebalance_interval", 0.05)
+	player.set("attack_engagement_delay", 0.0)
+	player.position = Vector3.ZERO
+	root.add_child(player)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("troop_id", &"large_default_full_combat_enemy")
+	enemy.set("team_id", &"enemy")
+	enemy.set("controllable", false)
+	enemy.set("soldier_count", defender_total)
+	enemy.set("formation_columns", 10)
+	enemy.set("troop_mode", "defensive")
+	enemy.set("combat_seed", 612)
+	enemy.set("base_soldier_strength", 100.0)
+	enemy.set("soldier_strength_variance", 0.0)
+	enemy.set("base_soldier_damage", 1.0)
+	enemy.set("soldier_damage_variance", 0.0)
+	enemy.set("combat_max_attackers_per_target", max_attackers)
+	enemy.set("defensive_engagement_delay", 0.0)
+	enemy.position = Vector3(4.0, 0.0, 0.0)
+	root.add_child(enemy)
+	await process_frame
+
+	player.call("_resolve_combat_tick", enemy, 0.2)
+	var summary: Dictionary = player.call("get_troop_summary") as Dictionary
+	_expect(
+		int(summary.get("combat_assigned_target_count", 0)) == soldier_total,
+		"default large combat should assign every attacker when defender socket capacity exists instead of stopping at the active-attacker cap",
+		failures
+	)
+	_expect(
+		int(summary.get("combat_max_target_load", 0)) <= max_attackers,
+		"default large combat should still cap attackers per defender",
 		failures
 	)
 

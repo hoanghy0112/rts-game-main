@@ -5,6 +5,8 @@ const MIDLANDS_SCENE: PackedScene = preload("res://maps/midlands/midlands.tscn")
 const WARMUP_FRAMES := 24
 const PHASE_WARMUP_FRAMES := 20
 const SAMPLE_FRAMES := 120
+const COMBAT_SNAPSHOT_FRAMES := 120
+const COMBAT_END_TIMEOUT_FRAMES := 10800
 const ARRIVAL_TIMEOUT_FRAMES := 720
 const SCENE_SETTLE_TIMEOUT_FRAMES := 1800
 const SCENE_SETTLE_STABLE_FRAMES := 90
@@ -29,6 +31,7 @@ func _run() -> void:
 	root.add_child(scene)
 	await _wait_for_scene_runtime_settled(scene)
 	await _wait_frames(WARMUP_FRAMES)
+	await _check_midlands_forest_culling(scene, failures)
 
 	var player := scene.get_node_or_null("Troop_01")
 	var spawner := scene.get_node_or_null("EnemyTroopSpawner")
@@ -49,7 +52,7 @@ func _run() -> void:
 		failures.append("Midlands enemy troop was not spawned")
 
 	if not failures.is_empty():
-		_finish(failures)
+		await _finish(failures)
 		return
 
 	var enemy := enemies[0]
@@ -105,9 +108,9 @@ func _run() -> void:
 		await _wait_for_fighting(player)
 		_reset_perf(player)
 		_reset_perf(enemy)
-		await _sample_phase("combat", player, enemy)
+		await _sample_combat_until_end(player, enemy)
 
-	_finish(failures)
+	await _finish(failures)
 
 
 func _enable_perf(troop: Node) -> void:
@@ -122,8 +125,15 @@ func _reset_perf(troop: Node) -> void:
 		troop.call("reset_perf_debug_counters")
 
 
-func _sample_phase(label: String, player: Node, enemy: Node) -> Dictionary:
-	for _warmup_index: int in range(PHASE_WARMUP_FRAMES):
+func _sample_phase(
+	label: String,
+	player: Node,
+	enemy: Node,
+	sample_frames: int = SAMPLE_FRAMES,
+	warmup_frames: int = PHASE_WARMUP_FRAMES,
+	print_prefix: String = "[MIDLANDS_PROFILE] "
+) -> Dictionary:
+	for _warmup_index: int in range(warmup_frames):
 		await physics_frame
 	_reset_perf(player)
 	_reset_perf(enemy)
@@ -132,20 +142,35 @@ func _sample_phase(label: String, player: Node, enemy: Node) -> Dictionary:
 	var total_physics_ms := 0.0
 	var max_process_ms := 0.0
 	var max_physics_ms := 0.0
+	var total_draw_calls := 0
+	var total_render_objects := 0
+	var total_primitives := 0
+	var max_draw_calls := 0
+	var max_render_objects := 0
+	var max_primitives := 0
 	var facing_checks := 0
 	var facing_errors := 0
 	var idle_jump_count := 0
 	var max_idle_jump := 0.0
 	var max_soldier_step := 0.0
 
-	for _index: int in range(SAMPLE_FRAMES):
+	for _index: int in range(sample_frames):
 		await physics_frame
 		var process_ms := Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
 		var physics_ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		var draw_calls := _get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
+		var render_objects := _get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME)
+		var primitives := _get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
 		total_process_ms += process_ms
 		total_physics_ms += physics_ms
 		max_process_ms = maxf(max_process_ms, process_ms)
 		max_physics_ms = maxf(max_physics_ms, physics_ms)
+		total_draw_calls += draw_calls
+		total_render_objects += render_objects
+		total_primitives += primitives
+		max_draw_calls = maxi(max_draw_calls, draw_calls)
+		max_render_objects = maxi(max_render_objects, render_objects)
+		max_primitives = maxi(max_primitives, primitives)
 
 		var current_positions := _get_soldier_positions(player)
 		var state := _get_troop_state(player)
@@ -170,17 +195,60 @@ func _sample_phase(label: String, player: Node, enemy: Node) -> Dictionary:
 
 	var player_summary := _get_summary(player)
 	var enemy_summary := _get_summary(enemy)
+	var map_summary := _get_map_render_summary()
 	var metrics := {
 		"label": label,
-		"avg_process_ms": total_process_ms / float(SAMPLE_FRAMES),
+		"sample_frames": sample_frames,
+		"avg_process_ms": total_process_ms / float(maxi(sample_frames, 1)),
 		"max_process_ms": max_process_ms,
-		"avg_physics_ms": total_physics_ms / float(SAMPLE_FRAMES),
+		"avg_physics_ms": total_physics_ms / float(maxi(sample_frames, 1)),
 		"max_physics_ms": max_physics_ms,
 		"fps": Engine.get_frames_per_second(),
+		"avg_draw_calls": total_draw_calls / maxi(sample_frames, 1),
+		"max_draw_calls": max_draw_calls,
+		"avg_render_objects": total_render_objects / maxi(sample_frames, 1),
+		"max_render_objects": max_render_objects,
+		"avg_primitives": total_primitives / maxi(sample_frames, 1),
+		"max_primitives": max_primitives,
+		"video_mem_mb": _bytes_to_mb(_get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED)),
+		"texture_mem_mb": _bytes_to_mb(_get_rendering_info(RenderingServer.RENDERING_INFO_TEXTURE_MEM_USED)),
+		"buffer_mem_mb": _bytes_to_mb(_get_rendering_info(RenderingServer.RENDERING_INFO_BUFFER_MEM_USED)),
+		"forest_visible_multimeshes": int(map_summary.get("forest_visible_multimeshes", 0)),
+		"forest_culled_multimeshes": int(map_summary.get("forest_culled_multimeshes", 0)),
+		"forest_culling_enabled": bool(map_summary.get("forest_culling_enabled", false)),
+		"forest_cull_distance_m": float(map_summary.get("forest_cull_distance_m", 0.0)),
+		"forest_min_distance_m": float(map_summary.get("forest_min_distance_m", 0.0)),
+		"forest_max_distance_m": float(map_summary.get("forest_max_distance_m", 0.0)),
+		"forest_avg_distance_m": float(map_summary.get("forest_avg_distance_m", 0.0)),
+		"forest_within_cull_distance": int(map_summary.get("forest_within_cull_distance", 0)),
+		"forest_within_hysteresis": int(map_summary.get("forest_within_hysteresis", 0)),
+		"forest_beyond_hysteresis": int(map_summary.get("forest_beyond_hysteresis", 0)),
 		"player_state": String(_get_troop_state(player)),
 		"enemy_state": String(_get_troop_state(enemy)),
+		"player_active_soldiers": int(player_summary.get("active_soldier_count", 0)),
+		"enemy_active_soldiers": int(enemy_summary.get("active_soldier_count", 0)),
+		"player_dead_soldiers": int(player_summary.get("dead_soldier_count", 0)),
+		"enemy_dead_soldiers": int(enemy_summary.get("dead_soldier_count", 0)),
+		"corpse_count": int(player_summary.get("corpse_count", 0)),
+		"corpse_batch_count": int(player_summary.get("corpse_batch_count", 0)),
+		"corpse_mesh_part_count": int(player_summary.get("corpse_mesh_part_count", 0)),
+		"corpse_skipped_count": int(player_summary.get("corpse_skipped_count", 0)),
+		"corpse_skipped_mesh_part_count": int(player_summary.get("corpse_skipped_mesh_part_count", 0)),
+		"corpse_max_visible_count": int(player_summary.get("corpse_max_visible_count", 0)),
+		"corpse_max_visible_mesh_part_count": int(player_summary.get("corpse_max_visible_mesh_part_count", 0)),
+		"corpse_max_visible_batch_count": int(player_summary.get("corpse_max_visible_batch_count", 0)),
 		"player_troop_physics_ms": float(player_summary.get("perf_max_physics_usec", 0.0)) / 1000.0,
 		"enemy_troop_physics_ms": float(enemy_summary.get("perf_max_physics_usec", 0.0)) / 1000.0,
+		"player_combat_tick_max_ms": float(player_summary.get("perf_max_combat_tick_usec", 0.0)) / 1000.0,
+		"enemy_combat_tick_max_ms": float(enemy_summary.get("perf_max_combat_tick_usec", 0.0)) / 1000.0,
+		"player_combat_collect_max_ms": float(player_summary.get("perf_max_combat_collect_usec", 0.0)) / 1000.0,
+		"enemy_combat_collect_max_ms": float(enemy_summary.get("perf_max_combat_collect_usec", 0.0)) / 1000.0,
+		"player_combat_spatial_max_ms": float(player_summary.get("perf_max_combat_spatial_usec", 0.0)) / 1000.0,
+		"enemy_combat_spatial_max_ms": float(enemy_summary.get("perf_max_combat_spatial_usec", 0.0)) / 1000.0,
+		"player_combat_assign_max_ms": float(player_summary.get("perf_max_combat_assign_usec", 0.0)) / 1000.0,
+		"enemy_combat_assign_max_ms": float(enemy_summary.get("perf_max_combat_assign_usec", 0.0)) / 1000.0,
+		"player_combat_motion_max_ms": float(player_summary.get("perf_max_combat_motion_usec", 0.0)) / 1000.0,
+		"enemy_combat_motion_max_ms": float(enemy_summary.get("perf_max_combat_motion_usec", 0.0)) / 1000.0,
 		"render_sync_max_ms": float(player_summary.get("soldier_render_max_sync_ms", 0.0)),
 		"render_sync_count": int(player_summary.get("soldier_render_sync_count", 0)),
 		"render_sync_skips": int(player_summary.get("soldier_render_sync_skip_count", 0)),
@@ -198,6 +266,10 @@ func _sample_phase(label: String, player: Node, enemy: Node) -> Dictionary:
 		"enemy_assigned_targets": int(enemy_summary.get("combat_assigned_target_count", 0)),
 		"player_locked_attackers": int(player_summary.get("combat_locked_attacker_count", 0)),
 		"enemy_locked_attackers": int(enemy_summary.get("combat_locked_attacker_count", 0)),
+		"player_visual_stance_updates": int(player_summary.get("combat_visual_stance_update_count", 0)),
+		"enemy_visual_stance_updates": int(enemy_summary.get("combat_visual_stance_update_count", 0)),
+		"player_visual_thrusts": int(player_summary.get("combat_visual_thrust_count", 0)),
+		"enemy_visual_thrusts": int(enemy_summary.get("combat_visual_thrust_count", 0)),
 		"player_max_target_load": int(player_summary.get("combat_max_target_load", 0)),
 		"enemy_max_target_load": int(enemy_summary.get("combat_max_target_load", 0)),
 		"sleeping_soldiers": int(player_summary.get("logic_sleeping_soldier_count", 0)),
@@ -209,8 +281,114 @@ func _sample_phase(label: String, player: Node, enemy: Node) -> Dictionary:
 		"max_soldier_step": max_soldier_step,
 		"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
 	}
-	print("[MIDLANDS_PROFILE] ", JSON.stringify(metrics))
+	print(print_prefix, JSON.stringify(metrics))
 	return metrics
+
+
+func _sample_combat_until_end(player: Node, enemy: Node) -> Dictionary:
+	var elapsed_frames := 0
+	var snapshot_index := 0
+	var latest_metrics := {}
+	var combat_finished := _is_combat_finished(player, enemy)
+	while not combat_finished and elapsed_frames < COMBAT_END_TIMEOUT_FRAMES:
+		var metrics := await _sample_phase(
+			"combat_%03d" % snapshot_index,
+			player,
+			enemy,
+			COMBAT_SNAPSHOT_FRAMES,
+			0,
+			"[MIDLANDS_COMBAT_SNAPSHOT] "
+		)
+		elapsed_frames += COMBAT_SNAPSHOT_FRAMES
+		metrics["combat_elapsed_seconds"] = float(elapsed_frames) / float(Engine.physics_ticks_per_second)
+		metrics["combat_finished"] = _is_combat_finished(player, enemy)
+		print("[MIDLANDS_COMBAT_STATE] ", JSON.stringify(metrics))
+		latest_metrics = metrics
+		snapshot_index += 1
+		combat_finished = bool(metrics.get("combat_finished", false))
+
+	if latest_metrics.is_empty():
+		latest_metrics = await _sample_phase("combat", player, enemy)
+	latest_metrics["label"] = "combat"
+	latest_metrics["combat_finished"] = combat_finished
+	latest_metrics["combat_elapsed_seconds"] = float(elapsed_frames) / float(Engine.physics_ticks_per_second)
+	print("[MIDLANDS_PROFILE] ", JSON.stringify(latest_metrics))
+	return latest_metrics
+
+
+func _is_combat_finished(player: Node, enemy: Node) -> bool:
+	var player_summary := _get_summary(player)
+	var enemy_summary := _get_summary(enemy)
+	return (
+		int(player_summary.get("active_soldier_count", 1)) <= 0
+		or int(enemy_summary.get("active_soldier_count", 1)) <= 0
+		or (_get_troop_state(player) != &"fighting" and _get_troop_state(enemy) != &"fighting")
+	)
+
+
+func _get_rendering_info(counter: int) -> int:
+	return int(RenderingServer.get_rendering_info(counter))
+
+
+func _bytes_to_mb(value: int) -> float:
+	return snappedf(float(maxi(value, 0)) / (1024.0 * 1024.0), 0.01)
+
+
+func _get_map_render_summary() -> Dictionary:
+	var summary := {}
+	var scene := _scene
+	if not scene:
+		return summary
+
+	var forest_region := scene.get_node_or_null("ForestRegion")
+	if forest_region and forest_region.has_method("get_runtime_render_summary"):
+		var forest_summary := forest_region.call("get_runtime_render_summary") as Dictionary
+		summary["forest_visible_multimeshes"] = int(forest_summary.get("runtime_visible_multimesh_count", 0))
+		summary["forest_culled_multimeshes"] = int(forest_summary.get("runtime_culled_multimesh_count", 0))
+		summary["forest_culling_enabled"] = bool(forest_summary.get("runtime_camera_culling_enabled", false))
+		summary["forest_cull_distance_m"] = float(forest_summary.get("runtime_cull_distance_meters", 0.0))
+		summary["forest_min_distance_m"] = float(forest_summary.get("runtime_min_multimesh_distance_m", 0.0))
+		summary["forest_max_distance_m"] = float(forest_summary.get("runtime_max_multimesh_distance_m", 0.0))
+		summary["forest_avg_distance_m"] = float(forest_summary.get("runtime_avg_multimesh_distance_m", 0.0))
+		summary["forest_within_cull_distance"] = int(forest_summary.get("runtime_within_cull_distance_count", 0))
+		summary["forest_within_hysteresis"] = int(forest_summary.get("runtime_within_hysteresis_count", 0))
+		summary["forest_beyond_hysteresis"] = int(forest_summary.get("runtime_beyond_hysteresis_count", 0))
+
+	return summary
+
+
+func _check_midlands_forest_culling(scene: Node, failures: Array[String]) -> void:
+	var forest_region := scene.get_node_or_null("ForestRegion")
+	if not forest_region or not forest_region.has_method("get_runtime_render_summary"):
+		failures.append("Midlands forest culling check could not find ForestRegion summary")
+		return
+	if forest_region.has_method("_apply_runtime_camera_culling"):
+		forest_region.call("_apply_runtime_camera_culling", true)
+	await _wait_frames(4)
+	if forest_region.has_method("_apply_runtime_camera_culling"):
+		forest_region.call("_apply_runtime_camera_culling", true)
+	var raw_summary := forest_region.call("get_runtime_render_summary") as Dictionary
+	var summary := {
+		"forest_visible_multimeshes": int(raw_summary.get("runtime_visible_multimesh_count", 0)),
+		"forest_culled_multimeshes": int(raw_summary.get("runtime_culled_multimesh_count", 0)),
+		"forest_culling_enabled": bool(raw_summary.get("runtime_camera_culling_enabled", false)),
+		"forest_cull_distance_m": float(raw_summary.get("runtime_cull_distance_meters", 0.0)),
+		"forest_min_distance_m": float(raw_summary.get("runtime_min_multimesh_distance_m", 0.0)),
+		"forest_max_distance_m": float(raw_summary.get("runtime_max_multimesh_distance_m", 0.0)),
+		"forest_avg_distance_m": float(raw_summary.get("runtime_avg_multimesh_distance_m", 0.0)),
+		"forest_within_cull_distance": int(raw_summary.get("runtime_within_cull_distance_count", 0)),
+		"forest_within_hysteresis": int(raw_summary.get("runtime_within_hysteresis_count", 0)),
+		"forest_beyond_hysteresis": int(raw_summary.get("runtime_beyond_hysteresis_count", 0)),
+	}
+	print("[MIDLANDS_CULLING_CHECK] ", JSON.stringify(summary))
+	if not bool(summary.get("forest_culling_enabled", false)):
+		failures.append("Midlands forest camera culling should be enabled")
+	if int(summary.get("forest_visible_multimeshes", 0)) <= 0:
+		failures.append("Midlands forest culling check found no visible forest multimeshes")
+	if int(summary.get("forest_culled_multimeshes", 0)) <= 0:
+		failures.append("Midlands forest culling should hide far runtime multimeshes at the starting camera")
+	if int(summary.get("forest_beyond_hysteresis", 0)) <= 0:
+		failures.append("Midlands forest culling should have runtime multimeshes beyond the culling hysteresis band")
 
 
 func _wait_for_idle(troop: Node) -> void:
@@ -321,8 +499,11 @@ func _object_has_property(object: Object, property_name: StringName) -> bool:
 func _finish(failures: Array[String]) -> void:
 	Engine.max_fps = _original_max_fps
 	if is_instance_valid(_scene):
-		root.remove_child(_scene)
-		_scene.free()
+		_scene.queue_free()
+		_scene = null
+		for _index: int in range(4):
+			await process_frame
+			await physics_frame
 	if failures.is_empty():
 		print("Midlands troop scene profile completed.")
 		quit(0)

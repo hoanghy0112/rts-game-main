@@ -9,6 +9,8 @@ const WARMUP_FRAMES := 20
 const FIGHTING_TIMEOUT_FRAMES := 900
 const SAMPLE_FRAMES := 120
 const MAX_SOLDIER_STEP_M := 0.75
+const MAX_RENDER_SYNC_MS := 12.0
+const MAX_TROOP_PHYSICS_MS := 35.0
 
 var _original_max_fps := 0
 
@@ -44,6 +46,36 @@ func _run() -> void:
 		print("[PROFILE_500V500] ", JSON.stringify(metrics))
 		if int(metrics.get("player_render_sync_count", 0)) <= 0 or int(metrics.get("enemy_render_sync_count", 0)) <= 0:
 			failures.append("500v500 active combat did not sync dirty soldier transforms")
+		if int(metrics.get("player_visual_thrusts", 0)) <= 0 or int(metrics.get("enemy_visual_thrusts", 0)) <= 0:
+			failures.append("500v500 active combat did not produce visible spear thrusts")
+		if int(metrics.get("player_assigned_targets", 0)) < int(metrics.get("player_active_soldiers", 0)):
+			failures.append(
+				"500v500 player only assigned %d/%d active soldiers"
+				% [int(metrics.get("player_assigned_targets", 0)), int(metrics.get("player_active_soldiers", 0))]
+			)
+		if int(metrics.get("enemy_assigned_targets", 0)) < int(metrics.get("enemy_active_soldiers", 0)):
+			failures.append(
+				"500v500 enemy only assigned %d/%d active soldiers"
+				% [int(metrics.get("enemy_assigned_targets", 0)), int(metrics.get("enemy_active_soldiers", 0))]
+			)
+		var max_render_sync := maxf(
+			float(metrics.get("player_render_sync_max_ms", 0.0)),
+			float(metrics.get("enemy_render_sync_max_ms", 0.0))
+		)
+		if max_render_sync > MAX_RENDER_SYNC_MS:
+			failures.append(
+				"500v500 render sync %.3fms exceeded %.3fms"
+				% [max_render_sync, MAX_RENDER_SYNC_MS]
+			)
+		var max_troop_physics := maxf(
+			float(metrics.get("player_troop_max_physics_ms", 0.0)),
+			float(metrics.get("enemy_troop_max_physics_ms", 0.0))
+		)
+		if max_troop_physics > MAX_TROOP_PHYSICS_MS:
+			failures.append(
+				"500v500 troop physics %.3fms exceeded %.3fms"
+				% [max_troop_physics, MAX_TROOP_PHYSICS_MS]
+			)
 		if float(metrics.get("max_soldier_step_m", 0.0)) > MAX_SOLDIER_STEP_M:
 			failures.append(
 				"500v500 combat step %.3fm exceeded %.3fm"
@@ -79,7 +111,7 @@ func _make_troop(troop_id: StringName, team_id: StringName, position: Vector3, m
 	troop.set("combat_spear_range_m", 9.4)
 	troop.set("attack_engagement_delay", 0.0)
 	troop.set("defensive_engagement_delay", 0.0)
-	troop.set("combat_logic_interval", 0.16)
+	troop.set("combat_logic_interval", 0.08)
 	troop.set("troop_perf_monitoring_enabled", true)
 	troop.set("soldier_perf_monitoring_enabled", false)
 	troop.set("survivor_rout_enabled", false)
@@ -184,10 +216,16 @@ func _sample_combat(player: Node, enemy: Node) -> Dictionary:
 		"enemy_spatial_rebuilds": int(enemy_summary.get("spatial_grid_rebuilds", 0)),
 		"player_sleeping_soldiers": int(player_summary.get("logic_sleeping_soldier_count", 0)),
 		"enemy_sleeping_soldiers": int(enemy_summary.get("logic_sleeping_soldier_count", 0)),
+		"player_active_soldiers": int(player_summary.get("active_soldier_count", 0)),
+		"enemy_active_soldiers": int(enemy_summary.get("active_soldier_count", 0)),
 		"player_assigned_targets": int(player_summary.get("combat_assigned_target_count", 0)),
 		"enemy_assigned_targets": int(enemy_summary.get("combat_assigned_target_count", 0)),
 		"player_locked_attackers": int(player_summary.get("combat_locked_attacker_count", 0)),
 		"enemy_locked_attackers": int(enemy_summary.get("combat_locked_attacker_count", 0)),
+		"player_visual_stance_updates": int(player_summary.get("combat_visual_stance_update_count", 0)),
+		"enemy_visual_stance_updates": int(enemy_summary.get("combat_visual_stance_update_count", 0)),
+		"player_visual_thrusts": int(player_summary.get("combat_visual_thrust_count", 0)),
+		"enemy_visual_thrusts": int(enemy_summary.get("combat_visual_thrust_count", 0)),
 		"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
 	}
 
