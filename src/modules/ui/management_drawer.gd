@@ -1,8 +1,9 @@
 extends CanvasLayer
-class_name TroopManagementDrawer
+class_name ManagementDrawer
 
 signal collect_food_requested(troop: Node, amount_kg: float)
 signal collect_wood_requested(troop: Node, soldier_count: int)
+signal recruit_soldiers_requested(count: int)
 
 const TROOP_MODE_OPTIONS := [
 	{"label": "Rest", "value": &"rest"},
@@ -15,6 +16,8 @@ const MOVEMENT_MODE_OPTIONS := [
 	{"label": "Running", "value": &"running"},
 ]
 const TEAM_PLAYER := &"player"
+
+@export var village_region_path: NodePath = NodePath("../VillageRegion")
 
 @onready var _root_control: Control = %Root
 @onready var _title_label: Label = %TitleLabel
@@ -47,8 +50,16 @@ const TEAM_PLAYER := &"player"
 @onready var _take_wood_button: Button = %TakeWoodButton
 @onready var _give_wood_button: Button = %GiveWoodButton
 @onready var _persuade_deserters_button: Button = %PersuadeDesertersButton
+@onready var _village_recruit_separator: Control = %VillageRecruitSeparator
+@onready var _recruit_spin_box: SpinBox = %RecruitSpinBox
+@onready var _recruit_button: Button = %RecruitButton
+@onready var _recruit_status_label: Label = %RecruitStatusLabel
 
 var _troop: Node
+var _village_region: VillageRegion
+var _selected_house_id: StringName = &""
+var _drawer_mode: StringName = &""
+var _pending_village_summary: Dictionary = {}
 
 
 func _ready() -> void:
@@ -84,18 +95,55 @@ func _ready() -> void:
 		_give_wood_button.pressed.connect(_on_give_wood_pressed)
 	if _persuade_deserters_button and not _persuade_deserters_button.pressed.is_connected(_on_persuade_deserters_pressed):
 		_persuade_deserters_button.pressed.connect(_on_persuade_deserters_pressed)
+	if _recruit_button and not _recruit_button.pressed.is_connected(_on_recruit_pressed):
+		_recruit_button.pressed.connect(_on_recruit_pressed)
+
+	var region_node := get_node_or_null(village_region_path)
+	if region_node is VillageRegion:
+		bind_to_village_region(region_node as VillageRegion)
 	hide_drawer()
 
 
 func _exit_tree() -> void:
 	_unbind_troop()
+	if _village_region and _village_region.food_state_changed.is_connected(_on_food_state_changed):
+		_village_region.food_state_changed.disconnect(_on_food_state_changed)
 
 
 func show_troop(troop: Node) -> void:
+	_drawer_mode = &"troop"
+	_selected_house_id = &""
 	_bind_troop(troop)
 	if _cache_control_nodes():
 		_root_control.visible = true
 	refresh()
+
+
+func bind_to_village_region(region: VillageRegion) -> void:
+	if _village_region == region:
+		return
+	if _village_region and _village_region.food_state_changed.is_connected(_on_food_state_changed):
+		_village_region.food_state_changed.disconnect(_on_food_state_changed)
+
+	_village_region = region
+	if _village_region and not _village_region.food_state_changed.is_connected(_on_food_state_changed):
+		_village_region.food_state_changed.connect(_on_food_state_changed)
+
+
+func show_village_summary() -> void:
+	_unbind_troop()
+	_drawer_mode = &"village"
+	_selected_house_id = &""
+	_show_root()
+	_refresh_village()
+
+
+func show_house_detail(house_id: Variant) -> void:
+	_unbind_troop()
+	_drawer_mode = &"house"
+	_selected_house_id = StringName(str(house_id))
+	_show_root()
+	_refresh_village()
 
 
 func hide_drawer() -> void:
@@ -103,7 +151,15 @@ func hide_drawer() -> void:
 		_root_control.visible = false
 
 
+func _show_root() -> void:
+	if _cache_control_nodes():
+		_root_control.visible = true
+
+
 func refresh() -> void:
+	if _drawer_mode == &"village" or _drawer_mode == &"house":
+		_refresh_village()
+		return
 	if not _cache_control_nodes() or not _troop or not _troop.has_method("get_troop_summary"):
 		return
 
@@ -291,6 +347,86 @@ func refresh() -> void:
 	_pack_camp_button.disabled = not camp_established or not camp_pack_in_range
 
 
+func _refresh_village() -> void:
+	if not _village_region:
+		return
+
+	var summary := _village_region.get_village_food_summary()
+	if _drawer_mode == &"house" and _selected_house_id != &"":
+		var record := _village_region.get_house_food_record(_selected_house_id)
+		if not record.is_empty():
+			_apply_house_detail(record, summary)
+			return
+	_apply_village_summary(summary)
+
+
+func _on_food_state_changed(summary: Dictionary) -> void:
+	_pending_village_summary = summary.duplicate(true)
+	if not _root_control or not _root_control.visible:
+		return
+	if _drawer_mode == &"house":
+		_refresh_village()
+	elif _drawer_mode == &"village":
+		_apply_village_summary(summary)
+
+
+func _apply_village_summary(summary: Dictionary) -> void:
+	if not _cache_control_nodes():
+		_pending_village_summary = summary.duplicate(true)
+		return
+
+	_apply_village_visibility()
+	_title_label.text = "Village Food"
+	_subtitle_label.text = "%d houses, %d residents" % [
+		int(summary.get("house_count", 0)),
+		int(summary.get("resident_count", 0)),
+	]
+	_state_label.text = "Storage  %s" % [_format_village_kg(float(summary.get("storage_food_kg", summary.get("total_reserve_kg", 0.0))))]
+	_combat_label.text = "Farmers  %d" % [int(summary.get("farmer_count", 0))]
+	_stats_label.text = "Production/day  %s" % [_format_village_kg(float(summary.get("daily_production_kg", 0.0)))]
+	_load_label.text = "Consumption/day  %s" % [_format_village_kg(float(summary.get("daily_consumption_kg", 0.0)))]
+	_assets_label.text = "Net/day  %s" % [_format_signed_village_kg(float(summary.get("daily_net_kg", 0.0)))]
+	_carrier_label.text = "Field area  %s" % [_format_area(float(summary.get("field_area_m2", 0.0)))]
+	_camp_label.text = "Food days  %s" % [_format_days(float(summary.get("food_days_remaining", 0.0)))]
+	_apply_recruitment_summary(summary)
+
+
+func _apply_house_detail(record: Dictionary, summary: Dictionary) -> void:
+	if not _cache_control_nodes():
+		return
+
+	_apply_village_visibility()
+	_title_label.text = String(record.get("display_name", "House"))
+	_subtitle_label.text = String(record.get("house_id", record.get("id", "")))
+	_state_label.text = "Reserve  %s" % [_format_village_kg(float(record.get("food_reserve_kg", 0.0)))]
+	_combat_label.text = "Residents  %d" % [int(record.get("resident_count", 0))]
+	_stats_label.text = "Production/day  %s" % [_format_village_kg(float(record.get("daily_production_share_kg", 0.0)))]
+	_load_label.text = "Consumption/day  %s" % [_format_village_kg(float(record.get("daily_consumption_share_kg", 0.0)))]
+	_assets_label.text = "Net/day  %s" % [_format_signed_village_kg(float(record.get("daily_net_kg", 0.0)))]
+	_carrier_label.text = "Village fields  %s" % [_format_area(float(summary.get("field_area_m2", 0.0)))]
+	_camp_label.text = "Food days  %s" % [_format_days(float(record.get("food_days_remaining", 0.0)))]
+	_apply_recruitment_summary(summary)
+
+
+func _apply_recruitment_summary(summary: Dictionary) -> void:
+	var available := maxi(int(summary.get("available_villagers", summary.get("farmer_count", 0))), 0)
+	var full_productivity := maxi(int(summary.get("full_productivity_villagers", max(available, 1))), 1)
+	var recruited := maxi(int(summary.get("recruited_soldier_count", 0)), 0)
+	var ratio := clampf(float(summary.get("productivity_ratio", 1.0)), 0.0, 1.0)
+	if _recruit_status_label:
+		_recruit_status_label.text = "Recruit pool  %d / %d   Rice output %.0f%%   Soldiers %d" % [
+			available,
+			full_productivity,
+			ratio * 100.0,
+			recruited,
+		]
+	if _recruit_spin_box:
+		_recruit_spin_box.max_value = maxf(float(maxi(available, 1)), 1.0)
+		_recruit_spin_box.value = clampf(float(_recruit_spin_box.value), 1.0, _recruit_spin_box.max_value)
+	if _recruit_button:
+		_recruit_button.disabled = available <= 0
+
+
 func get_wood_collection_soldiers() -> int:
 	if not _cache_control_nodes():
 		return 1
@@ -382,6 +518,9 @@ func _apply_read_only_visibility(read_only: bool) -> void:
 	var camp_transfer_row: Control = null
 	if _camp_transfer_spin_box:
 		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
+	var recruit_row: Control = null
+	if _recruit_spin_box:
+		recruit_row = _recruit_spin_box.get_parent() as Control
 	_set_control_visible(mode_rows, show_controls)
 	_set_control_visible(_combat_label, true)
 	_set_control_visible(_stats_label, true)
@@ -400,6 +539,9 @@ func _apply_read_only_visibility(read_only: bool) -> void:
 	_set_control_visible(_camp_transfer_label, false)
 	_set_control_visible(camp_transfer_row, false)
 	_set_control_visible(_persuade_deserters_button, show_controls)
+	_set_control_visible(_village_recruit_separator, false)
+	_set_control_visible(_recruit_status_label, false)
+	_set_control_visible(recruit_row, false)
 
 
 func _apply_camp_visibility() -> void:
@@ -421,6 +563,9 @@ func _apply_camp_visibility() -> void:
 	var camp_transfer_row: Control = null
 	if _camp_transfer_spin_box:
 		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
+	var recruit_row: Control = null
+	if _recruit_spin_box:
+		recruit_row = _recruit_spin_box.get_parent() as Control
 	_set_control_visible(mode_rows, false)
 	_set_control_visible(_combat_label, false)
 	_set_control_visible(_stats_label, false)
@@ -439,6 +584,56 @@ func _apply_camp_visibility() -> void:
 	_set_control_visible(_camp_transfer_label, false)
 	_set_control_visible(camp_transfer_row, false)
 	_set_control_visible(_persuade_deserters_button, false)
+	_set_control_visible(_village_recruit_separator, false)
+	_set_control_visible(_recruit_status_label, false)
+	_set_control_visible(recruit_row, false)
+
+
+func _apply_village_visibility() -> void:
+	var mode_rows: Control = null
+	if _troop_mode_option:
+		mode_rows = _troop_mode_option.get_parent() as Control
+	var buttons_row: Control = null
+	if _stop_button:
+		buttons_row = _stop_button.get_parent() as Control
+	var food_row: Control = null
+	if _food_amount_spin_box:
+		food_row = _food_amount_spin_box.get_parent() as Control
+	var wood_row: Control = null
+	if _wood_soldiers_spin_box:
+		wood_row = _wood_soldiers_spin_box.get_parent() as Control
+	var camp_buttons: Control = null
+	if _establish_camp_button:
+		camp_buttons = _establish_camp_button.get_parent() as Control
+	var camp_transfer_row: Control = null
+	if _camp_transfer_spin_box:
+		camp_transfer_row = _camp_transfer_spin_box.get_parent() as Control
+	var recruit_row: Control = null
+	if _recruit_spin_box:
+		recruit_row = _recruit_spin_box.get_parent() as Control
+
+	_set_control_visible(mode_rows, false)
+	_set_control_visible(_state_label, true)
+	_set_control_visible(_combat_label, true)
+	_set_control_visible(_stats_label, true)
+	_set_control_visible(_mission_label, false)
+	_set_control_visible(_continue_mission_button, false)
+	_set_control_visible(_failure_label, false)
+	_set_control_visible(buttons_row, false)
+	_set_control_visible(_load_label, true)
+	_set_control_visible(_assets_label, true)
+	_set_control_visible(_carrier_label, true)
+	_set_control_visible(_camp_label, true)
+	_set_control_visible(food_row, false)
+	_set_control_visible(wood_row, false)
+	_set_control_visible(_craft_trolley_button, false)
+	_set_control_visible(camp_buttons, false)
+	_set_control_visible(_camp_transfer_label, false)
+	_set_control_visible(camp_transfer_row, false)
+	_set_control_visible(_persuade_deserters_button, false)
+	_set_control_visible(_village_recruit_separator, true)
+	_set_control_visible(_recruit_status_label, true)
+	_set_control_visible(recruit_row, true)
 
 
 func _set_control_visible(control: Control, visible: bool) -> void:
@@ -611,6 +806,14 @@ func _cache_control_nodes() -> bool:
 		_give_wood_button = get_node_or_null("Root/Panel/Margin/Rows/CampTransferRow/GiveWoodButton") as Button
 	if not _persuade_deserters_button:
 		_persuade_deserters_button = get_node_or_null("Root/Panel/Margin/Rows/PersuadeDesertersButton") as Button
+	if not _village_recruit_separator:
+		_village_recruit_separator = get_node_or_null("Root/Panel/Margin/Rows/VillageRecruitSeparator") as Control
+	if not _recruit_spin_box:
+		_recruit_spin_box = get_node_or_null("Root/Panel/Margin/Rows/RecruitRow/RecruitSpinBox") as SpinBox
+	if not _recruit_button:
+		_recruit_button = get_node_or_null("Root/Panel/Margin/Rows/RecruitRow/RecruitButton") as Button
+	if not _recruit_status_label:
+		_recruit_status_label = get_node_or_null("Root/Panel/Margin/Rows/RecruitStatusLabel") as Label
 	return (
 		_root_control != null
 		and _title_label != null
@@ -643,7 +846,21 @@ func _cache_control_nodes() -> bool:
 		and _take_wood_button != null
 		and _give_wood_button != null
 		and _persuade_deserters_button != null
+		and _village_recruit_separator != null
+		and _recruit_spin_box != null
+		and _recruit_button != null
+		and _recruit_status_label != null
 	)
+
+
+func get_recruit_count() -> int:
+	if not _cache_control_nodes():
+		return 1
+	return maxi(roundi(float(_recruit_spin_box.value)), 1)
+
+
+func _on_recruit_pressed() -> void:
+	recruit_soldiers_requested.emit(get_recruit_count())
 
 
 func _setup_mode_options() -> void:
@@ -691,3 +908,22 @@ func _format_seconds(value: float) -> String:
 	if value >= 60.0:
 		return "%.1f min" % (value / 60.0)
 	return "%.0f sec" % value
+
+
+func _format_village_kg(value: float) -> String:
+	return "%.1f kg" % [value]
+
+
+func _format_signed_village_kg(value: float) -> String:
+	var prefix := "+" if value >= 0.0 else ""
+	return "%s%.1f kg" % [prefix, value]
+
+
+func _format_area(value: float) -> String:
+	return "%.0f m2" % [value]
+
+
+func _format_days(value: float) -> String:
+	if value <= 0.0:
+		return "0.0"
+	return "%.1f" % [value]

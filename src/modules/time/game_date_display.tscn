@@ -30,13 +30,10 @@ mouse_filter = 2
 
 [node name="Panel" type="PanelContainer" parent="Root"]
 layout_mode = 0
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -236.0
+offset_left = 16.0
 offset_top = 16.0
-offset_right = -16.0
+offset_right = 236.0
 offset_bottom = 76.0
-grow_horizontal = 0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 

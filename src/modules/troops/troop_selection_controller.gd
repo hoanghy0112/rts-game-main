@@ -18,7 +18,7 @@ const CONTEXT_ACTION_MOVE_TO_VILLAGE := 20
 const CONTEXT_ACTION_COLLECT_VILLAGE_FOOD := 21
 const DEFAULT_CONTEXT_TRANSFER_KG := 20.0
 
-@export var troop_drawer_path: NodePath = NodePath("../TroopManagementDrawer")
+@export var troop_drawer_path: NodePath = NodePath("../ManagementDrawer")
 @export var background_jobs_debug_panel_path: NodePath = NodePath("../TroopBackgroundJobsDebugPanel")
 @export var camera_path: NodePath = NodePath("")
 @export var forest_region_paths: Array[NodePath] = []
@@ -435,9 +435,14 @@ func _cancel_camera_right_drag_rotation() -> void:
 
 func _pick_troop(screen_position: Vector2) -> void:
 	var troop := _get_troop_at(screen_position)
-	_select_troop(troop)
 	if troop:
+		_select_troop(troop)
 		get_viewport().set_input_as_handled()
+		return
+	if _get_village_at(screen_position):
+		_select_troop(null, false)
+		return
+	_select_troop(null)
 
 
 func _issue_move_command(screen_position: Vector2) -> void:
@@ -661,7 +666,7 @@ func _try_issue_forest_logistics(world_position: Vector3) -> bool:
 	return false
 
 
-func _select_troop(troop: Node) -> void:
+func _select_troop(troop: Node, hide_drawer_when_empty: bool = true) -> void:
 	if troop and not _is_selectable_troop(troop):
 		troop = null
 	if _selected_troop == troop:
@@ -681,9 +686,10 @@ func _select_troop(troop: Node) -> void:
 		_show_drawer(_selected_troop)
 		_update_background_jobs_debug_panel(_selected_troop)
 	else:
-		var drawer := _get_troop_drawer()
-		if drawer and drawer.has_method("hide_drawer"):
-			drawer.call("hide_drawer")
+		if hide_drawer_when_empty:
+			var drawer := _get_troop_drawer()
+			if drawer and drawer.has_method("hide_drawer"):
+				drawer.call("hide_drawer")
 		_update_background_jobs_debug_panel(null)
 
 

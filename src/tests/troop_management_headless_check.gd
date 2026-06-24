@@ -6,7 +6,7 @@ const ForestRegionScript = preload("res://addons/forest_brush/forest_region.gd")
 const TroopSelectionControllerScript = preload("res://modules/troops/troop_selection_controller.gd")
 const TroopEnemySpawnerScript = preload("res://modules/troops/troop_enemy_spawner.gd")
 const TroopScene: PackedScene = preload("res://modules/troops/troop.tscn")
-const TroopDrawerScene: PackedScene = preload("res://modules/troops/troop_management_drawer.tscn")
+const ManagementDrawerScene: PackedScene = preload("res://modules/ui/management_drawer.tscn")
 const TroopJobsDebugPanelScene: PackedScene = preload("res://modules/troops/troop_background_jobs_debug_panel.tscn")
 const RTSCameraScene: PackedScene = preload("res://modules/camera/rts_camera.tscn")
 
@@ -1832,7 +1832,7 @@ func _check_flag_hover_and_defeated_indicators(failures: Array[String]) -> void:
 
 
 func _check_enemy_selection_and_read_only_drawer(failures: Array[String]) -> void:
-	var drawer := TroopDrawerScene.instantiate()
+	var drawer := ManagementDrawerScene.instantiate()
 	root.add_child(drawer)
 	var controller := TroopSelectionControllerScript.new()
 	controller.troop_drawer_path = drawer.get_path()
@@ -2329,13 +2329,26 @@ func _check_camera_recovers_from_consumed_right_release(failures: Array[String])
 
 
 func _check_drawer_loads(failures: Array[String]) -> void:
-	var drawer := TroopDrawerScene.instantiate()
-	_expect(drawer is CanvasLayer, "troop drawer scene should instantiate a CanvasLayer", failures)
-	_expect(drawer.has_method("show_troop"), "troop drawer should expose show_troop", failures)
-	_expect(drawer.has_signal(&"collect_wood_requested"), "troop drawer should expose collect wood command signal", failures)
-	_expect(drawer.find_child("CollectWoodButton", true, false) != null, "troop drawer should show a collect wood button", failures)
-	_expect(drawer.find_child("TroopModeOption", true, false) != null, "troop drawer should show a troop mode selector", failures)
-	_expect(drawer.find_child("MovementModeOption", true, false) != null, "troop drawer should show a movement mode selector", failures)
+	var drawer := ManagementDrawerScene.instantiate()
+	_expect(drawer is CanvasLayer, "management drawer scene should instantiate a CanvasLayer", failures)
+	_expect(drawer.has_method("show_troop"), "management drawer should expose show_troop", failures)
+	_expect(drawer.has_method("show_village_summary"), "management drawer should expose village summary", failures)
+	_expect(drawer.has_signal(&"collect_wood_requested"), "management drawer should expose collect wood command signal", failures)
+	_expect(drawer.has_signal(&"recruit_soldiers_requested"), "management drawer should expose recruitment signal", failures)
+	_expect(drawer.find_child("CollectWoodButton", true, false) != null, "management drawer should show a collect wood button", failures)
+	_expect(drawer.find_child("RecruitButton", true, false) != null, "management drawer should show a recruit button", failures)
+	_expect(drawer.find_child("TroopModeOption", true, false) != null, "management drawer should show a troop mode selector", failures)
+	_expect(drawer.find_child("MovementModeOption", true, false) != null, "management drawer should show a movement mode selector", failures)
+	var panel := drawer.find_child("Panel", true, false) as Control
+	_expect(
+		panel != null
+		and is_equal_approx(panel.anchor_top, 0.0)
+		and is_equal_approx(panel.anchor_bottom, 1.0)
+		and is_equal_approx(panel.offset_top, 16.0)
+		and is_equal_approx(panel.offset_bottom, -16.0),
+		"management drawer panel should span the screen height with margins",
+		failures
+	)
 	drawer.free()
 
 
@@ -2392,8 +2405,8 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		failures
 	)
 	_expect(
-		instance.find_child("TroopManagementDrawer", true, false) != null,
-		"%s should include a troop management drawer" % scene_path,
+		instance.find_child("ManagementDrawer", true, false) != null,
+		"%s should include the shared management drawer" % scene_path,
 		failures
 	)
 	_expect(

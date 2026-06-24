@@ -19,7 +19,6 @@
 [ext_resource type="Resource" uid="uid://tknebxuix320" path="res://modules/village/fields/crops/rice_crop.tres" id="16_qox2p"]
 [ext_resource type="Script" uid="uid://bw0augew6bbft" path="res://addons/forest_brush/forest_region.gd" id="17_forest"]
 [ext_resource type="Resource" path="res://addons/waterways/river_styles/water_river.tres" id="18_river_style"]
-[ext_resource type="PackedScene" path="res://modules/village/village_info_drawer.tscn" id="21_food_drawer"]
 [ext_resource type="Script" path="res://modules/village/village_selection_controller.gd" id="22_food_select"]
 [ext_resource type="PackedScene" path="res://modules/time/game_time_system.tscn" id="23_game_time"]
 [ext_resource type="PackedScene" path="res://modules/time/game_date_display.tscn" id="24_date_display"]
@@ -27,7 +26,7 @@
 [ext_resource type="Script" path="res://modules/map/movement_map_generator.gd" id="26_move_generator"]
 [ext_resource type="Script" path="res://modules/map/movement_map_overlay.gd" id="27_move_overlay"]
 [ext_resource type="PackedScene" path="res://modules/troops/troop.tscn" id="28_troop"]
-[ext_resource type="PackedScene" path="res://modules/troops/troop_management_drawer.tscn" id="29_troop_drawer"]
+[ext_resource type="PackedScene" path="res://modules/ui/management_drawer.tscn" id="29_troop_drawer"]
 [ext_resource type="Script" path="res://modules/troops/troop_selection_controller.gd" id="30_troop_select"]
 [ext_resource type="Script" path="res://modules/troops/troop_enemy_spawner.gd" id="31_enemy_spawner"]
 [ext_resource type="PackedScene" path="res://modules/troops/troop_background_jobs_debug_panel.tscn" id="32_jobs_debug"]
@@ -275,23 +274,21 @@ spawn_initial_troops = true
 ai_enabled = true
 ai_attack_radius_m = 95.0
 
-[node name="VillageInfoDrawer" parent="." instance=ExtResource("21_food_drawer")]
+[node name="ManagementDrawer" parent="." instance=ExtResource("29_troop_drawer")]
 village_region_path = NodePath("../VillageRegion")
-
-[node name="TroopManagementDrawer" parent="." instance=ExtResource("29_troop_drawer")]
 
 [node name="TroopBackgroundJobsDebugPanel" parent="." instance=ExtResource("32_jobs_debug")]
 
 [node name="VillageSelectionController" type="Node" parent="."]
 script = ExtResource("22_food_select")
 village_region_path = NodePath("../VillageRegion")
-info_drawer_path = NodePath("../VillageInfoDrawer")
+info_drawer_path = NodePath("../ManagementDrawer")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
 team_controller_path = NodePath("../PlayerTeam")
 
 [node name="TroopSelectionController" type="Node" parent="."]
 script = ExtResource("30_troop_select")
-troop_drawer_path = NodePath("../TroopManagementDrawer")
+troop_drawer_path = NodePath("../ManagementDrawer")
 camera_path = NodePath("../RTSCameraRig/Camera3D")
 forest_region_paths = Array[NodePath]([NodePath("../ForestRegion")])
 

@@ -5,7 +5,7 @@ const DefaultVillageBalance: Resource = preload("res://modules/village/default_v
 const VillageCellData = preload("res://addons/village_brush/village_cell_data.gd")
 const VillageRegionScript = preload("res://addons/village_brush/village_region.gd")
 const PeasantScene: PackedScene = preload("res://modules/units/peasant/peasant.tscn")
-const VillageInfoDrawerScene: PackedScene = preload("res://modules/village/village_info_drawer.tscn")
+const ManagementDrawerScene: PackedScene = preload("res://modules/ui/management_drawer.tscn")
 const VillageSelectionControllerScript = preload("res://modules/village/village_selection_controller.gd")
 const TeamControllerScript = preload("res://modules/teams/team_controller.gd")
 const GameTimeSystemScene: PackedScene = preload("res://modules/time/game_time_system.tscn")
@@ -266,14 +266,27 @@ func _check_time_system_advances_food(failures: Array[String]) -> void:
 
 
 func _check_ui_and_controller_load(failures: Array[String]) -> void:
-	var drawer := VillageInfoDrawerScene.instantiate()
-	_expect(drawer != null and drawer.has_method("show_village_summary"), "VillageInfoDrawer scene should expose summary API", failures)
-	_expect(drawer != null and drawer.has_signal("recruit_soldiers_requested"), "VillageInfoDrawer should expose recruitment signal", failures)
+	var drawer := ManagementDrawerScene.instantiate()
+	_expect(drawer != null and drawer.has_method("show_village_summary"), "ManagementDrawer scene should expose village summary API", failures)
+	_expect(drawer != null and drawer.has_method("show_troop"), "ManagementDrawer scene should expose troop/camp API", failures)
+	_expect(drawer != null and drawer.has_signal("recruit_soldiers_requested"), "ManagementDrawer should expose recruitment signal", failures)
 	if drawer:
 		drawer.free()
 
 	var date_display := GameDateDisplayScene.instantiate()
 	_expect(date_display != null and date_display.has_method("bind_to_time_system"), "GameDateDisplay scene should expose time binding API", failures)
+	var date_panel: Control = null
+	if date_display:
+		date_panel = date_display.find_child("Panel", true, false) as Control
+	_expect(
+		date_panel != null
+		and is_equal_approx(date_panel.anchor_left, 0.0)
+		and is_equal_approx(date_panel.anchor_right, 0.0)
+		and is_equal_approx(date_panel.offset_left, 16.0)
+		and is_equal_approx(date_panel.offset_right, 236.0),
+		"GameDateDisplay panel should be anchored to the left side",
+		failures
+	)
 	if date_display:
 		date_display.free()
 
@@ -309,7 +322,7 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		return
 
 	var region := scene.get_node_or_null("VillageRegion")
-	var drawer := scene.get_node_or_null("VillageInfoDrawer")
+	var drawer := scene.get_node_or_null("ManagementDrawer")
 	var controller := scene.get_node_or_null("VillageSelectionController")
 	var time_system := scene.get_node_or_null("GameTimeSystem")
 	var date_display := scene.get_node_or_null("GameDateDisplay")
@@ -317,7 +330,7 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 	var enemy_team := scene.get_node_or_null("EnemyTroopSpawner")
 	var map_hud := scene.get_node_or_null("StrategicMapHud")
 	_expect(region is VillageRegion, "%s should contain VillageRegion" % scene_path, failures)
-	_expect(drawer != null and drawer.has_method("show_village_summary"), "%s should contain VillageInfoDrawer" % scene_path, failures)
+	_expect(drawer != null and drawer.has_method("show_village_summary") and drawer.has_method("show_troop"), "%s should contain the shared ManagementDrawer" % scene_path, failures)
 	_expect(controller != null and controller.has_method("_pick_selectable"), "%s should contain VillageSelectionController" % scene_path, failures)
 	_expect(time_system != null and time_system.has_method("get_current_snapshot"), "%s should contain GameTimeSystem" % scene_path, failures)
 	_expect(date_display != null and date_display.has_method("bind_to_time_system"), "%s should contain GameDateDisplay" % scene_path, failures)
@@ -332,7 +345,7 @@ func _check_scene_wiring(scene_path: String, failures: Array[String]) -> void:
 		_expect(date_display.get("time_system_path") == NodePath("../GameTimeSystem"), "%s date display should point at GameTimeSystem" % scene_path, failures)
 	if controller:
 		_expect(controller.get("village_region_path") == NodePath("../VillageRegion"), "%s controller should point at VillageRegion" % scene_path, failures)
-		_expect(controller.get("info_drawer_path") == NodePath("../VillageInfoDrawer"), "%s controller should point at VillageInfoDrawer" % scene_path, failures)
+		_expect(controller.get("info_drawer_path") == NodePath("../ManagementDrawer"), "%s controller should point at ManagementDrawer" % scene_path, failures)
 		_expect(controller.get("camera_path") == NodePath("../RTSCameraRig/Camera3D"), "%s controller should point at the RTS camera" % scene_path, failures)
 		_expect(controller.get("team_controller_path") == NodePath("../PlayerTeam"), "%s controller should point at PlayerTeam for recruitment" % scene_path, failures)
 	if player_team:
