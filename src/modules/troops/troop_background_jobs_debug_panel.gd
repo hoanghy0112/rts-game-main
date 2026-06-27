@@ -3,6 +3,9 @@ class_name TroopBackgroundJobsDebugPanel
 
 @export var force_visible := false
 @export_range(0.05, 2.0, 0.05, "or_greater") var refresh_interval_seconds: float = 0.25
+@export var movement_map_overlay_enabled := false
+@export var route_visuals_enabled := true
+@export var tile_grid_enabled := true
 
 @onready var _root_control: Control = %Root
 @onready var _title_label: Label = %TitleLabel
@@ -14,12 +17,18 @@ class_name TroopBackgroundJobsDebugPanel
 @onready var _selected_only_check_box: CheckBox = %SelectedOnlyCheckBox
 @onready var _soldier_perf_check_box: CheckBox = %SoldierPerfCheckBox
 @onready var _combat_lines_check_box: CheckBox = %CombatLinesCheckBox
+@onready var _movement_map_check_box: CheckBox = %MovementMapCheckBox
+@onready var _route_visuals_check_box: CheckBox = %RouteVisualsCheckBox
+@onready var _tile_grid_check_box: CheckBox = %TileGridCheckBox
 
 var _selected_troop: Node
 var _refresh_remaining := 0.0
 var _paused := false
 var _soldier_perf_enabled := false
 var _combat_lines_enabled := false
+var _movement_map_overlay_enabled := false
+var _route_visuals_enabled := true
+var _tile_grid_enabled := true
 
 
 func _ready() -> void:
@@ -43,6 +52,24 @@ func _ready() -> void:
 		if not _combat_lines_check_box.toggled.is_connected(_on_combat_lines_toggled):
 			_combat_lines_check_box.toggled.connect(_on_combat_lines_toggled)
 		_sync_combat_debug_lines()
+	if _movement_map_check_box:
+		_movement_map_check_box.button_pressed = movement_map_overlay_enabled
+		_movement_map_overlay_enabled = _movement_map_check_box.button_pressed
+		if not _movement_map_check_box.toggled.is_connected(_on_movement_map_toggled):
+			_movement_map_check_box.toggled.connect(_on_movement_map_toggled)
+		_sync_movement_map_overlay()
+	if _route_visuals_check_box:
+		_route_visuals_check_box.button_pressed = route_visuals_enabled
+		_route_visuals_enabled = _route_visuals_check_box.button_pressed
+		if not _route_visuals_check_box.toggled.is_connected(_on_route_visuals_toggled):
+			_route_visuals_check_box.toggled.connect(_on_route_visuals_toggled)
+		_sync_route_visuals()
+	if _tile_grid_check_box:
+		_tile_grid_check_box.button_pressed = tile_grid_enabled
+		_tile_grid_enabled = _tile_grid_check_box.button_pressed
+		if not _tile_grid_check_box.toggled.is_connected(_on_tile_grid_toggled):
+			_tile_grid_check_box.toggled.connect(_on_tile_grid_toggled)
+		_sync_tile_grid()
 	refresh()
 
 
@@ -79,6 +106,9 @@ func refresh() -> void:
 func _collect_summaries() -> Array[Dictionary]:
 	_sync_soldier_perf_monitoring()
 	_sync_combat_debug_lines()
+	_sync_route_visuals()
+	_sync_movement_map_overlay()
+	_sync_tile_grid()
 	var summaries: Array[Dictionary] = []
 	var tree := get_tree()
 	if not tree:
@@ -380,6 +410,24 @@ func _on_combat_lines_toggled(enabled: bool) -> void:
 	refresh()
 
 
+func _on_movement_map_toggled(enabled: bool) -> void:
+	_movement_map_overlay_enabled = enabled
+	_sync_movement_map_overlay()
+	refresh()
+
+
+func _on_route_visuals_toggled(enabled: bool) -> void:
+	_route_visuals_enabled = enabled
+	_sync_route_visuals()
+	refresh()
+
+
+func _on_tile_grid_toggled(enabled: bool) -> void:
+	_tile_grid_enabled = enabled
+	_sync_tile_grid()
+	refresh()
+
+
 func _sync_soldier_perf_monitoring() -> void:
 	var tree := get_tree()
 	if not tree or not _soldier_perf_check_box:
@@ -420,6 +468,42 @@ func _set_troop_combat_debug_lines_enabled(troop: Node, enabled: bool) -> void:
 			troop.set("combat_debug_lines_enabled", enabled)
 
 
+func _sync_movement_map_overlay() -> void:
+	var tree := get_tree()
+	if not tree or not _movement_map_check_box:
+		return
+	_movement_map_overlay_enabled = _movement_map_check_box.button_pressed
+	for node: Node in tree.get_nodes_in_group(&"movement_map_overlays"):
+		if _object_has_property(node, &"overlay_visible"):
+			if bool(node.get("overlay_visible")) != _movement_map_overlay_enabled:
+				node.set("overlay_visible", _movement_map_overlay_enabled)
+		elif _object_has_property(node, &"show_movement_map"):
+			if bool(node.get("show_movement_map")) != _movement_map_overlay_enabled:
+				node.set("show_movement_map", _movement_map_overlay_enabled)
+
+
+func _sync_route_visuals() -> void:
+	var tree := get_tree()
+	if not tree or not _route_visuals_check_box:
+		return
+	_route_visuals_enabled = _route_visuals_check_box.button_pressed
+	for node: Node in tree.get_nodes_in_group(&"troops"):
+		if _object_has_property(node, &"route_debug_visuals_enabled"):
+			if bool(node.get("route_debug_visuals_enabled")) != _route_visuals_enabled:
+				node.set("route_debug_visuals_enabled", _route_visuals_enabled)
+
+
+func _sync_tile_grid() -> void:
+	var tree := get_tree()
+	if not tree or not _tile_grid_check_box:
+		return
+	_tile_grid_enabled = _tile_grid_check_box.button_pressed
+	for node: Node in tree.get_nodes_in_group(&"simplified_terrain_debug"):
+		if _object_has_property(node, &"show_tile_grid"):
+			if bool(node.get("show_tile_grid")) != _tile_grid_enabled:
+				node.set("show_tile_grid", _tile_grid_enabled)
+
+
 func _object_has_property(object: Object, property_name: StringName) -> bool:
 	if object == null:
 		return false
@@ -450,4 +534,10 @@ func _cache_nodes() -> bool:
 		_soldier_perf_check_box = get_node_or_null("Root/Panel/Margin/Rows/SoldierPerfCheckBox") as CheckBox
 	if not _combat_lines_check_box:
 		_combat_lines_check_box = get_node_or_null("Root/Panel/Margin/Rows/CombatLinesCheckBox") as CheckBox
+	if not _movement_map_check_box:
+		_movement_map_check_box = get_node_or_null("Root/Panel/Margin/Rows/MovementMapCheckBox") as CheckBox
+	if not _route_visuals_check_box:
+		_route_visuals_check_box = get_node_or_null("Root/Panel/Margin/Rows/RouteVisualsCheckBox") as CheckBox
+	if not _tile_grid_check_box:
+		_tile_grid_check_box = get_node_or_null("Root/Panel/Margin/Rows/TileGridCheckBox") as CheckBox
 	return _root_control != null and _title_label != null and _frame_label != null and _aggregate_label != null and _selected_label != null

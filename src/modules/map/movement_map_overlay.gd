@@ -55,6 +55,7 @@ var overlay_visible: bool:
 
 
 func _ready() -> void:
+	add_to_group(&"movement_map_overlays")
 	set_process(false)
 	if not movement_map and not movement_map_path.is_empty():
 		reload_movement_map(false)
@@ -65,6 +66,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	remove_from_group(&"movement_map_overlays")
 	_set_waiting_for_terrain_height(false)
 	_clear_chunks()
 

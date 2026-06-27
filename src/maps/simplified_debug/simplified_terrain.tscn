@@ -1,0 +1,109 @@
+[gd_scene load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://maps/simplified_debug/simplified_terrain_scene.gd" id="1_scene"]
+[ext_resource type="PackedScene" uid="uid://dcinyv7uv2phl" path="res://modules/camera/rts_camera.tscn" id="2_camera"]
+[ext_resource type="PackedScene" uid="uid://bebbp34ry4xy" path="res://modules/environment/environment_rig.tscn" id="3_environment"]
+[ext_resource type="Script" path="res://modules/map/movement_map_overlay.gd" id="4_movement_overlay"]
+[ext_resource type="PackedScene" path="res://modules/time/game_time_system.tscn" id="5_game_time"]
+[ext_resource type="PackedScene" path="res://modules/time/game_date_display.tscn" id="6_date_display"]
+[ext_resource type="PackedScene" uid="uid://bjuw3vjv5imps" path="res://modules/troops/troop.tscn" id="7_troop"]
+[ext_resource type="PackedScene" path="res://modules/teams/team_controller.tscn" id="8_team_controller"]
+[ext_resource type="PackedScene" path="res://modules/ui/management_drawer.tscn" id="9_management_drawer"]
+[ext_resource type="PackedScene" path="res://modules/troops/troop_background_jobs_debug_panel.tscn" id="10_debug_panel"]
+[ext_resource type="Script" uid="uid://c7bvixca1w0d4" path="res://modules/troops/troop_selection_controller.gd" id="11_troop_selection"]
+[ext_resource type="PackedScene" path="res://modules/ui/map/strategic_map_hud.tscn" id="12_map_hud"]
+
+[node name="SimplifiedTerrain" type="Node3D"]
+script = ExtResource("1_scene")
+width_cells = 48
+height_cells = 32
+cell_size_meters = 4.0
+show_tile_grid = true
+
+[node name="RTSCameraRig" parent="." instance=ExtResource("2_camera")]
+move_speed = 72.0
+fast_move_multiplier = 2.8
+zoom_step = 8.0
+max_distance = 260.0
+
+[node name="EnvironmentRig" parent="." instance=ExtResource("3_environment")]
+
+[node name="MovementMapOverlay" type="Node3D" parent="."]
+script = ExtResource("4_movement_overlay")
+show_movement_map = true
+chunk_size_meters = 128.0
+fallback_mesh_spacing = 4.0
+surface_offset = 0.08
+overlay_strength = 0.72
+max_visual_speed_multiplier = 1.0
+
+[node name="GameTimeSystem" parent="." instance=ExtResource("5_game_time")]
+
+[node name="GameDateDisplay" parent="." instance=ExtResource("6_date_display")]
+
+[node name="Troop_01" parent="." instance=ExtResource("7_troop")]
+transform = Transform3D(0.996195, 0, 0.0871557, 0, 1, 0, -0.0871557, 0, 0.996195, -58, 0, -28)
+troop_id = &"simplified_guard"
+display_name = "Simplified Guard"
+soldier_count = 32
+team_id = &"player"
+controllable = true
+team_flag_color = Color(0.1, 0.28, 0.82, 1)
+troop_flag_color = Color(0.82, 0.12, 0.08, 1)
+time_system_path = NodePath("../GameTimeSystem")
+
+[node name="PlayerTeam" parent="." instance=ExtResource("8_team_controller")]
+team_id = &"player"
+display_name = "Player Team"
+controllable = true
+team_flag_color = Color(0.1, 0.28, 0.82, 1)
+troop_flag_color = Color(0.22, 0.48, 0.92, 1)
+default_camp_id = &"player_simplified_camp"
+default_camp_name = "Player Debug Camp"
+default_camp_position = Vector3(-68, 0, -34)
+starting_food_kg = 900.0
+starting_wood_kg = 600.0
+primary_troop_paths = Array[NodePath]([NodePath("../Troop_01")])
+time_system_path = NodePath("../GameTimeSystem")
+
+[node name="EnemyTroopSpawner" parent="." instance=ExtResource("8_team_controller")]
+team_id = &"enemy"
+display_name = "Enemy Team"
+controllable = false
+team_flag_color = Color(0.72, 0.1, 0.08, 1)
+troop_flag_color = Color(0.86, 0.18, 0.12, 1)
+default_camp_id = &"enemy_simplified_camp"
+default_camp_name = "Enemy Debug Camp"
+default_camp_position = Vector3(62, 0, 30)
+starting_food_kg = 800.0
+starting_wood_kg = 520.0
+spawn_initial_troops = true
+spawn_seed = 62031
+min_initial_troops = 1
+max_initial_troops = 1
+min_soldiers_per_troop = 22
+max_soldiers_per_troop = 22
+spawn_radius_m = 6.0
+troop_display_prefix = "Enemy"
+ai_enabled = true
+ai_tick_seconds = 1.2
+ai_attack_radius_m = 170.0
+time_system_path = NodePath("../GameTimeSystem")
+
+[node name="ManagementDrawer" parent="." instance=ExtResource("9_management_drawer")]
+
+[node name="TroopBackgroundJobsDebugPanel" parent="." instance=ExtResource("10_debug_panel")]
+force_visible = true
+movement_map_overlay_enabled = true
+route_visuals_enabled = true
+tile_grid_enabled = true
+
+[node name="TroopSelectionController" type="Node" parent="."]
+script = ExtResource("11_troop_selection")
+troop_drawer_path = NodePath("../ManagementDrawer")
+background_jobs_debug_panel_path = NodePath("../TroopBackgroundJobsDebugPanel")
+camera_path = NodePath("../RTSCameraRig/Camera3D")
+
+[node name="StrategicMapHud" parent="." instance=ExtResource("12_map_hud")]
+camera_path = NodePath("../RTSCameraRig/Camera3D")
+camera_rig_path = NodePath("../RTSCameraRig")

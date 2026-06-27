@@ -33,7 +33,7 @@ layout_mode = 0
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
-offset_top = -486.0
+offset_top = -560.0
 offset_right = 494.0
 offset_bottom = -16.0
 grow_horizontal = 1
@@ -96,6 +96,23 @@ text = "Soldier profiling"
 unique_name_in_owner = true
 layout_mode = 2
 text = "Combat lines"
+
+[node name="MovementMapCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Movement map"
+
+[node name="RouteVisualsCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+text = "Route markers"
+
+[node name="TileGridCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+text = "Tile grid"
 
 [node name="SelectedOnlyCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true

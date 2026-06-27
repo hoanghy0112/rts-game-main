@@ -388,6 +388,14 @@ const MISSION_COMPLETE := &"complete"
 @export_range(0.0, 8.0, 0.05, "or_greater") var formation_collision_distance: float = 2.64
 @export_range(0.0, 16.0, 0.05, "or_greater") var formation_collision_push_speed: float = 3.2
 @export_range(0.05, 2.0, 0.05, "or_greater") var route_refresh_interval: float = 0.25
+@export var route_debug_visuals_enabled: bool = true:
+	set(value):
+		route_debug_visuals_enabled = value
+		if is_inside_tree():
+			if route_debug_visuals_enabled:
+				_update_route_visual()
+			else:
+				_clear_route_visual()
 
 @export_group("Combat Debug")
 @export var combat_debug_lines_enabled: bool = false:
@@ -4361,7 +4369,7 @@ func _clear_combat_debug_lines() -> void:
 
 
 func _can_show_route_visual() -> bool:
-	return controllable and team_id != TEAM_ENEMY and _state != STATE_FIGHTING and not is_defeated()
+	return route_debug_visuals_enabled and controllable and team_id != TEAM_ENEMY and _state != STATE_FIGHTING and not is_defeated()
 
 
 func _apply_route_visual_settings() -> void:
@@ -8173,6 +8181,7 @@ func _copy_configuration_to_child_troop(child: Troop) -> void:
 		"movement_speed_mps", "running_speed_multiplier", "arrival_radius",
 		"nearest_walkable_search_radius_cells", "path_smoothing_enabled",
 		"path_corner_radius_cells", "path_corner_samples", "route_steering_lookahead_m",
+		"route_debug_visuals_enabled",
 		"movement_map", "movement_map_path", "terrain_path", "time_system_path",
 		"soldier_carry_capacity_kg", "cargo_trolley_capacity_kg", "cow_trolley_capacity_kg",
 		"cargo_trolley_required_soldiers", "carrier_speed_mps", "carrier_arrival_radius",
