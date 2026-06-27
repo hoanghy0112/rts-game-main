@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="RTS Game"
-run/main_scene="res://modules/loading/boot.tscn"
+run/main_scene="uid://dc1f6hpcmbc68"
 config/features=PackedStringArray("4.7", "Forward Plus")
 run/max_fps=300
 config/icon="res://icon.svg"

@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://c3008b1s2f8o5"]
+
+[ext_resource type="PackedScene" uid="uid://sqw8p7drfmqo" path="res://modules/units/human/person_animated.tscn" id="1_person"]
+
+[node name="AnimatedHumanoid" type="Node3D" unique_id=1944289426]
+
+[node name="PersonAnimated" parent="." unique_id=801725992 instance=ExtResource("1_person")]
+transform = Transform3D(0.38, 0, 0, 0, 0.38, 0, 0, 0, 0.38, 0, 0.54, 0)
+
+[node name="Lamp" parent="PersonAnimated" index="1"]
+visible = false
+light_energy = 0.0
+
+[node name="Camera" parent="PersonAnimated" index="2"]
+visible = false
+current = false

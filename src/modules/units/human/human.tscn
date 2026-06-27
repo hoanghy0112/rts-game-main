@@ -1,6 +1,8 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=15 format=3]
 
 [ext_resource type="Script" path="res://modules/units/human/human_npc.gd" id="1_human_npc"]
+[ext_resource type="PackedScene" uid="uid://c3008b1s2f8o5" path="res://assets/models/characters/animated_humanoid/animated_humanoid.tscn" id="2_animated_humanoid"]
+[ext_resource type="Script" path="res://modules/units/human/human_imported_skeleton_sync.gd" id="3_skeleton_sync"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_skin"]
 albedo_color = Color(0.86, 0.62, 0.42, 1)
@@ -61,6 +63,7 @@ shape = SubResource("CapsuleShape3D_body")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.92, 0)
 
 [node name="TorsoMesh" type="MeshInstance3D" parent="VisualRoot/Armature/Torso"]
+visible = false
 mesh = SubResource("BoxMesh_torso")
 surface_material_override/0 = SubResource("StandardMaterial3D_tunic")
 
@@ -68,11 +71,13 @@ surface_material_override/0 = SubResource("StandardMaterial3D_tunic")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.38, 0)
 
 [node name="HeadMesh" type="MeshInstance3D" parent="VisualRoot/Armature/Head"]
+visible = false
 mesh = SubResource("SphereMesh_head")
 surface_material_override/0 = SubResource("StandardMaterial3D_skin")
 
 [node name="Hair" type="MeshInstance3D" parent="VisualRoot/Armature/Head"]
 transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.105, -0.025)
+visible = false
 mesh = SubResource("SphereMesh_hair")
 surface_material_override/0 = SubResource("StandardMaterial3D_hair")
 
@@ -81,6 +86,7 @@ transform = Transform3D(0.992809, 0, -0.119712, 0, 1, 0, 0.119712, 0, 0.992809, 
 
 [node name="LeftArmMesh" type="MeshInstance3D" parent="VisualRoot/Armature/LeftArm"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+visible = false
 mesh = SubResource("BoxMesh_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_skin")
 
@@ -89,6 +95,7 @@ transform = Transform3D(0.992809, 0, 0.119712, 0, 1, 0, -0.119712, 0, 0.992809, 
 
 [node name="RightArmMesh" type="MeshInstance3D" parent="VisualRoot/Armature/RightArm"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+visible = false
 mesh = SubResource("BoxMesh_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_skin")
 
@@ -100,11 +107,13 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, 0.62, 0)
 
 [node name="LeftLegMesh" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+visible = false
 mesh = SubResource("BoxMesh_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
 
 [node name="LeftFoot" type="MeshInstance3D" parent="VisualRoot/Armature/LeftLeg"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.58, -0.05)
+visible = false
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
 
@@ -113,15 +122,22 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, 0.62, 0)
 
 [node name="RightLegMesh" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.28, 0)
+visible = false
 mesh = SubResource("BoxMesh_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
 
 [node name="RightFoot" type="MeshInstance3D" parent="VisualRoot/Armature/RightLeg"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.58, -0.05)
+visible = false
 mesh = SubResource("BoxMesh_foot")
 surface_material_override/0 = SubResource("StandardMaterial3D_cloth")
 
 [node name="ExternalModelSocket" type="Node3D" parent="VisualRoot"]
+
+[node name="AnimatedHumanoid" parent="VisualRoot/ExternalModelSocket" instance=ExtResource("2_animated_humanoid")]
+
+[node name="ImportedSkeletonSync" type="Node" parent="VisualRoot"]
+script = ExtResource("3_skeleton_sync")
 
 [node name="AnimationPlayer" type="AnimationPlayer" parent="."]
 

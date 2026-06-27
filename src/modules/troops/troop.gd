@@ -11,16 +11,15 @@ signal combat_changed(summary: Dictionary)
 const DEFAULT_SOLDIER_SCENE: PackedScene = preload("res://modules/units/troop_soldier/troop_soldier.tscn")
 const CampScript = preload("res://modules/troops/camp.gd")
 const TroopStatWorkerScript = preload("res://modules/troops/troop_stat_worker.gd")
-const TroopRouteVisualScript = preload("res://modules/troops/troop_route_visual.gd")
-const TroopSoldierBatchRendererScript = preload("res://modules/troops/troop_soldier_batch_renderer.gd")
 const TroopCorpseManagerScript = preload("res://modules/troops/troop_corpse_manager.gd")
 const TroopSpatialIndexScript = preload("res://modules/troops/troop_spatial_index.gd")
-const MovementMapPathfinderScript = preload("res://modules/troops/movement_map_pathfinder.gd")
 const DefaultTroopFormationStrategyScript = preload("res://modules/troops/logic/troop_grid_formation_strategy.gd")
 const DefaultTroopMovementLogicScript = preload("res://modules/troops/logic/troop_movement_logic.gd")
 const DefaultTroopCombatPositioningLogicScript = preload("res://modules/troops/logic/troop_combat_positioning_logic.gd")
 const DefaultTroopSummaryBuilderScript = preload("res://modules/troops/logic/troop_summary_builder.gd")
 const DefaultTroopSoldierBehaviorSetScript = preload("res://modules/units/troop_soldier/logic/troop_soldier_behavior_set.gd")
+const DefaultTroopRuntimeContextScript = preload("res://modules/troops/logic/troop_runtime_context.gd")
+const DefaultTroopServiceSetScript = preload("res://modules/troops/logic/troop_service_set.gd")
 
 const STATE_IDLE := &"idle"
 const STATE_MOVING := &"moving"
@@ -135,6 +134,7 @@ const MISSION_COMPLETE := &"complete"
 @export var combat_positioning_logic: Resource
 @export var summary_builder: Resource
 @export var soldier_behavior_set: Resource
+@export var service_set: Resource
 
 @export_group("Soldier Outfit")
 @export var soldier_robe_color: Color = Color(0.34, 0.52, 0.54, 1.0):
@@ -204,7 +204,7 @@ const MISSION_COMPLETE := &"complete"
 		carried_flag_banner_size = Vector2(maxf(value.x, 0.1), maxf(value.y, 0.1))
 		if is_inside_tree():
 			rebuild_formation()
-@export var hand_flags_enabled := true:
+@export var hand_flags_enabled := false:
 	set(value):
 		hand_flags_enabled = value
 		if is_inside_tree():
@@ -601,7 +601,7 @@ const MISSION_COMPLETE := &"complete"
 @export_range(0.05, 2.0, 0.05, "or_greater") var combat_visual_thrust_duration: float = 0.42
 @export_range(0, 4096, 1, "or_greater") var combat_source_corpse_limit: int = 0
 @export_range(1, 128, 1, "or_greater") var departed_soldier_removal_budget_per_frame: int = 3
-@export var soldier_render_batching_enabled := true:
+@export var soldier_render_batching_enabled := false:
 	set(value):
 		soldier_render_batching_enabled = value
 		if is_inside_tree():
@@ -910,6 +910,13 @@ var _mission_work_remaining := 0.0
 var _mission_repath_remaining := 0.0
 var _mission_child_troops: Array[Node] = []
 var _troop_dependencies_ready := false
+var _troop_context: RefCounted
+var _troop_services: Resource
+var _troop_presentation_service: Resource
+var _troop_formation_service: Resource
+var _troop_movement_service: Resource
+var _troop_combat_service: Resource
+var _troop_summary_service: Resource
 
 
 func _ensure_troop_dependencies() -> void:
@@ -931,7 +938,13 @@ func _ensure_troop_dependencies() -> void:
 			soldier_behavior_set = soldier_behavior_set.duplicate(true)
 			if soldier_behavior_set.has_method("ensure_defaults"):
 				soldier_behavior_set.call("ensure_defaults")
+	if service_set:
+		if service_set.has_method("duplicate_for_runtime"):
+			service_set = service_set.call("duplicate_for_runtime") as Resource
+		else:
+			service_set = service_set.duplicate(true)
 	_ensure_dependency_defaults()
+	_configure_troop_services()
 	_troop_dependencies_ready = true
 
 
@@ -947,6 +960,77 @@ func _ensure_dependency_defaults() -> void:
 	if not soldier_behavior_set:
 		soldier_behavior_set = DefaultTroopSoldierBehaviorSetScript.new()
 		soldier_behavior_set.ensure_defaults()
+	if not service_set:
+		service_set = DefaultTroopServiceSetScript.new()
+	if service_set.has_method("ensure_defaults"):
+		service_set.call("ensure_defaults")
+
+
+func _configure_troop_services() -> void:
+	_ensure_dependency_defaults()
+	_troop_services = service_set
+	if not _troop_context:
+		_troop_context = DefaultTroopRuntimeContextScript.new()
+	if _troop_context.has_method("setup"):
+		_troop_context.call("setup", self)
+	if _troop_services and _troop_services.has_method("configure_legacy_dependencies"):
+		_troop_services.call(
+			"configure_legacy_dependencies",
+			formation_strategy,
+			movement_logic,
+			combat_positioning_logic,
+			summary_builder
+		)
+	if _troop_services and _troop_services.has_method("configure"):
+		_troop_services.call("configure", _troop_context)
+	if _troop_services:
+		_troop_presentation_service = _troop_services.get("presentation_service") as Resource
+		_troop_formation_service = _troop_services.get("formation_service") as Resource
+		_troop_movement_service = _troop_services.get("movement_service") as Resource
+		_troop_combat_service = _troop_services.get("combat_service") as Resource
+		_troop_summary_service = _troop_services.get("summary_service") as Resource
+	else:
+		_troop_presentation_service = null
+		_troop_formation_service = null
+		_troop_movement_service = null
+		_troop_combat_service = null
+		_troop_summary_service = null
+
+
+func _get_troop_services() -> Resource:
+	if not _troop_services:
+		_configure_troop_services()
+	return _troop_services
+
+
+func _get_presentation_service() -> Resource:
+	if not _troop_presentation_service:
+		_configure_troop_services()
+	return _troop_presentation_service
+
+
+func _get_formation_service() -> Resource:
+	if not _troop_formation_service:
+		_configure_troop_services()
+	return _troop_formation_service
+
+
+func _get_movement_service() -> Resource:
+	if not _troop_movement_service:
+		_configure_troop_services()
+	return _troop_movement_service
+
+
+func _get_combat_service() -> Resource:
+	if not _troop_combat_service:
+		_configure_troop_services()
+	return _troop_combat_service
+
+
+func _get_summary_service() -> Resource:
+	if not _troop_summary_service:
+		_configure_troop_services()
+	return _troop_summary_service
 
 
 func _get_formation_strategy() -> Resource:
@@ -978,7 +1062,9 @@ func _ready() -> void:
 	_ensure_troop_dependencies()
 	_rng.seed = _get_combat_seed()
 	_resolve_dependencies()
-	_ensure_scene_nodes()
+	var services := _get_troop_services()
+	if services and services.has_method("ready"):
+		services.call("ready")
 	_load_movement_map()
 	_combat_scan_remaining = _get_combat_scan_phase_seconds()
 	_stat_update_remaining = _get_stat_update_phase_seconds()
@@ -997,134 +1083,30 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	var perf_started := Time.get_ticks_usec() if troop_perf_monitoring_enabled else 0
-	_update_combat_perf_rate_window(delta)
-	_poll_completed_stat_job()
-	_apply_pending_stat_results()
-	_update_cargo_trolley_crafting(delta)
-	_update_carrier_tasks(delta)
-	_update_food_and_modes(delta)
-	_update_combat_ai(delta)
-	_process_pending_departed_soldier_removals()
-	_refresh_unit_selection_proxies_if_needed(delta)
-	_update_defeated_presentation()
-
-	if _state == STATE_MOVING:
-		_follow_path(delta)
-		_route_refresh_remaining -= delta
-		if _route_refresh_remaining <= 0.0:
-			_route_refresh_remaining = maxf(route_refresh_interval, 0.05)
-			_update_route_visual()
-	else:
-		_last_turn_delta = 0.0
-		_last_turn_intensity = 0.0
-	_update_formation_soldier_slots(delta)
-	_update_mission_task(delta)
-	_update_management_flag_position()
-	_update_attack_zone_indicator()
-	_update_combat_soldier_animation(delta)
-	_step_formation_soldier_logic(delta)
-	_align_moving_soldiers_to_frame_displacement()
-	_update_stat_jobs(delta)
-	_maybe_emit_combat_changed(delta)
-	_update_combat_debug_lines()
-	_update_soldier_logic_sleeping(delta)
-	if not Engine.is_in_physics_frame():
-		_step_child_mission_troops_for_manual_call(delta)
-	if troop_perf_monitoring_enabled:
-		_perf_last_physics_usec = Time.get_ticks_usec() - perf_started
-		_perf_max_physics_usec = maxi(_perf_max_physics_usec, _perf_last_physics_usec)
+	var services := _get_troop_services()
+	if services and services.has_method("physics_tick"):
+		services.call("physics_tick", delta)
 
 
 func _process(delta: float) -> void:
-	_update_management_flag_position()
-	_update_attack_zone_indicator()
-	_update_management_flag_facing()
-	_update_management_flag_camera_scale()
-	_sync_soldier_batch_renderer(delta)
+	var services := _get_troop_services()
+	if services and services.has_method("process_tick"):
+		services.call("process_tick", delta)
 
 
 func _exit_tree() -> void:
-	_wait_for_stat_worker()
+	var services := _get_troop_services()
+	if services and services.has_method("exit_tree"):
+		services.call("exit_tree")
 	remove_from_group(&"troops")
 	remove_from_group(&"mission_troops")
 	remove_from_group(&"deserter_troops")
-	_clear_combat_debug_lines()
-	_clear_independent_camp()
 
 
 func rebuild_formation() -> void:
-	_ensure_scene_nodes()
-	_combat_soldier_targets.clear()
-	_combat_soldier_target_statuses.clear()
-	_combat_target_attackers.clear()
-	_combat_soldier_offsets.clear()
-	_combat_soldier_lock_positions.clear()
-	_combat_soldier_shuffle_offsets.clear()
-	_combat_soldier_shuffle_timers.clear()
-	_combat_soldier_attack_timers.clear()
-	_combat_visual_thrust_timers.clear()
-	_combat_soldier_steering_cache.clear()
-	_combat_soldier_spacing_refresh_times.clear()
-	_combat_soldier_socket_indices.clear()
-	_combat_soldier_socket_positions.clear()
-	_combat_soldier_socket_directions.clear()
-	_combat_soldier_move_targets.clear()
-	_combat_touched_soldiers.clear()
-	_combat_render_dirty_soldiers.clear()
-	_soldier_motion_facing_positions.clear()
-	_combat_attacker_spatial_rebuild_remaining = 0.0
-	_combat_attacker_spatial_cached_count = -1
-	_combat_defender_spatial_rebuild_remaining = 0.0
-	_combat_defender_spatial_cached_count = -1
-	_combat_defender_spatial_cached_enemy_id = 0
-	_clear_formation_target_cache()
-	_combat_assignment_cursor = 0
-	_combat_update_cursor = 0
-	_combat_visual_stance_cursor = 0
-	_combat_source_corpse_count = 0
-	_combat_scatter_active = false
-	_survivor_rout_triggered = false
-	_clear_children(_soldier_container)
-	_invalidate_soldier_cache()
-
-	var scene := soldier_scene if soldier_scene else DEFAULT_SOLDIER_SCENE
-	var columns := mini(maxi(formation_columns, 1), soldier_count)
-	var rows := ceili(float(soldier_count) / float(columns))
-	for index: int in range(soldier_count):
-		var soldier := scene.instantiate()
-		if not (soldier is Node3D):
-			soldier.free()
-			continue
-
-		var spatial := soldier as Node3D
-		spatial.name = "Soldier_%03d" % index
-		_configure_visual_soldier(spatial, index)
-		_soldier_container.add_child(spatial)
-		spatial.owner = null
-		var slot := _get_formation_slot_for_index(index, columns, rows)
-		spatial.top_level = true
-		spatial.global_position = _snap_world_point(_formation_slot_to_world(slot))
-		spatial.set_meta(&"troop_formation_slot", slot)
-		spatial.set_meta(&"troop_formation_index", index)
-		spatial.set_meta(&"troop_formation_phase", float(index) * 1.618)
-		spatial.rotation.y = rotation.y
-		spatial.scale = Vector3.ONE * soldier_scale
-		_add_unit_selection_proxy(spatial)
-
-		if hand_flags_enabled:
-			if index == 0:
-				_attach_flag_to_soldier(spatial, "TeamFlag", team_flag_color, troop_flag_color)
-			elif index == 1:
-				_attach_flag_to_soldier(spatial, "TroopFlag", troop_flag_color, team_flag_color)
-
-	_invalidate_soldier_cache()
-	_refresh_soldier_batch_renderer_soldiers()
-	_unit_selection_proxy_dirty = false
-	_rebuild_management_flag()
-	_update_hover_visuals()
-	_update_formation_soldier_locomotion()
-	_emit_destination_changed()
+	var service := _get_formation_service()
+	if service and service.has_method("rebuild_formation"):
+		service.call("rebuild_formation")
 
 
 func set_selected(selected: bool) -> void:
@@ -1154,96 +1136,16 @@ func is_hovered() -> bool:
 
 
 func set_move_destination(world_position: Vector3, manual_command: bool = true) -> bool:
-	var was_moving_with_destination := _state == STATE_MOVING and _has_destination and not _path_points.is_empty()
-	var should_regroup_scattered_positions := manual_command and _hold_scattered_positions_after_combat
-	if manual_command:
-		if is_mission_troop and _is_mission_active() and not _mission_internal_command:
-			_mission_paused = true
-		_manual_attack_target = null
-		_clear_independent_combat(true)
-		should_regroup_scattered_positions = should_regroup_scattered_positions or _hold_scattered_positions_after_combat
-		_hold_scattered_positions_after_combat = false
-		_sync_movement_anchor_to_flag_point()
-	_load_movement_map()
-	if not _movement_map:
-		_last_path_result = MovementMapPathfinderScript.find_path(null, global_position, world_position)
-		_set_state(STATE_BLOCKED)
-		if not _explicit_formation_destination_yaw_for_next_move:
-			_formation_destination_yaw_active = false
-		_manual_move_override_active = false
-		_emit_destination_changed()
+	var service = _get_movement_service()
+	if not service:
 		return false
-
-	var result: Dictionary = MovementMapPathfinderScript.find_path(
-		_movement_map,
-		global_position,
-		world_position,
-		maxf(_get_current_movement_speed_mps(), 0.1),
-		nearest_walkable_search_radius_cells,
-		path_smoothing_enabled,
-		path_corner_radius_cells,
-		path_corner_samples
-	)
-	_last_path_result = result
-	if not bool(result.get("reachable", false)):
-		_path_points.clear()
-		_current_path_index = 0
-		_has_destination = false
-		if not _explicit_formation_destination_yaw_for_next_move:
-			_formation_destination_yaw_active = false
-		_clear_route_visual()
-		_set_state(STATE_BLOCKED)
-		_manual_move_override_active = false
-		_emit_destination_changed()
-		return false
-
-	_path_points = _snap_path_points(result.get("points", []) as Array)
-	_current_path_index = 1 if _path_points.size() > 1 else 0
-	_destination = _snap_world_point(result.get("resolved_destination", world_position) as Vector3)
-	_refresh_active_formation_slot_metas()
-	var had_explicit_formation_yaw := _formation_destination_yaw_active
-	if manual_command:
-		if _explicit_formation_destination_yaw_for_next_move and _formation_destination_yaw_active:
-			var reassignment_path_index := _get_moving_retarget_formation_path_index()
-			_prepare_formation_for_manual_move_command(reassignment_path_index)
-		elif not _explicit_formation_destination_yaw_for_next_move and had_explicit_formation_yaw:
-			_formation_destination_yaw_active = false
-			var override_path_index := _get_moving_retarget_formation_path_index()
-			_set_formation_anchor_yaw_for_command(_get_yaw_for_direction(_get_formation_path_direction(override_path_index)))
-			_last_turn_delta = 0.0
-			_last_turn_intensity = 0.0
-		elif not _explicit_formation_destination_yaw_for_next_move:
-			_formation_destination_yaw_active = false
-	elif not _explicit_formation_destination_yaw_for_next_move:
-		_formation_destination_yaw_active = false
-	_has_destination = true
-	_route_refresh_remaining = 0.0
-	_manual_move_override_active = manual_command
-	_update_route_visual()
-	_set_state(STATE_MOVING)
-	_hold_scattered_positions_after_combat = false
-	_regroup_scattered_positions_on_move = should_regroup_scattered_positions
-	_issue_formation_path_to_soldiers(was_moving_with_destination)
-	_prime_formation_motion_facing(_get_formation_path_direction(_get_moving_retarget_formation_path_index()))
-	_emit_destination_changed()
-	return true
+	return service.set_move_destination(world_position, manual_command)
 
 
 func stop_movement() -> void:
-	if is_mission_troop and _is_mission_active() and not _mission_internal_command:
-		_mission_paused = true
-	_manual_attack_target = null
-	_path_points.clear()
-	_current_path_index = 0
-	_has_destination = false
-	_manual_move_override_active = false
-	_last_path_result.clear()
-	_clear_route_visual()
-	_clear_formation_motion_commands()
-	_hold_scattered_positions_after_combat = false
-	_regroup_scattered_positions_on_move = false
-	_set_state(STATE_IDLE)
-	_emit_destination_changed()
+	var service = _get_movement_service()
+	if service and service.has_method("stop_movement"):
+		service.stop_movement()
 
 
 func clear_destination() -> void:
@@ -1264,53 +1166,17 @@ func set_formation_destination(
 	width_m: float,
 	manual_command: bool = true
 ) -> bool:
-	var horizontal_right := right_axis
-	horizontal_right.y = 0.0
-	if horizontal_right.length_squared() <= 0.0001:
-		return set_move_destination(world_center, manual_command)
-
-	horizontal_right = horizontal_right.normalized()
-	var previous_columns := formation_columns
-	var next_columns := _get_formation_columns_for_width(width_m)
-	_set_formation_columns_preserving_soldiers(next_columns)
-	_formation_destination_yaw = _get_yaw_for_formation_right_axis(horizontal_right)
-	_formation_destination_yaw_active = true
-
-	_explicit_formation_destination_yaw_for_next_move = true
-	var accepted := set_move_destination(world_center, manual_command)
-	_explicit_formation_destination_yaw_for_next_move = false
-	if not accepted:
-		_formation_destination_yaw_active = false
-		_set_formation_columns_preserving_soldiers(previous_columns)
-	return accepted
+	var service = _get_movement_service()
+	if not service:
+		return false
+	return service.set_formation_destination(world_center, right_axis, width_m, manual_command)
 
 
 func command_attack_troop(enemy: Node) -> bool:
-	if not _is_valid_enemy(enemy):
+	var service = _get_combat_service()
+	if not service:
 		return false
-	if is_mission_troop and _is_mission_active():
-		_mission_paused = true
-	_manual_attack_target = enemy
-	_active_enemy = enemy
-	_manual_move_override_active = false
-	_chase_repath_remaining = 0.0
-	_engagement_windup_remaining = 0.0
-	_engagement_zone_check_remaining = 0.0
-	_engagement_zone_cached_enemy_id = 0
-	_engagement_zone_cached_result = false
-	_last_target_instance_id = enemy.get_instance_id()
-	_combat_logic_accumulator = 0.0
-	_combat_target_reassign_remaining = 0.0
-	_clear_independent_combat(true)
-	_regroup_scattered_positions_on_move = false
-	if not _is_enemy_inside_engagement_zone(enemy):
-		return _repath_to_attack_target(enemy)
-	_clear_formation_motion_commands()
-	_hold_scattered_positions_after_combat = false
-	_clear_route_visual()
-	_set_state(STATE_FIGHTING)
-	_emit_combat_changed()
-	return true
+	return service.command_attack_troop(enemy)
 
 
 func has_attack_target() -> bool:
@@ -1561,60 +1427,10 @@ func get_camp_summary() -> Dictionary:
 
 
 func get_troop_summary() -> Dictionary:
-	_sync_camp_storage_from_node()
-	var mission_summary := _get_mission_summary()
-	var camp_transfer_summary := _get_nearby_camp_transfer_summary()
-	var deserter_summary := _get_nearby_deserter_summary()
-	var summary := {
-		"entity_type": &"troop",
-		"troop_id": troop_id,
-		"display_name": display_name,
-		"team_id": team_id,
-		"controllable": controllable,
-		"soldier_count": get_soldier_count(),
-		"state": _state,
-		"troop_mode": get_troop_mode(),
-		"movement_mode": get_movement_mode(),
-		"selected": _selected,
-		"has_destination": _has_destination,
-		"destination": _destination,
-		"path_distance_m": float(_last_path_result.get("distance_m", 0.0)),
-		"estimated_seconds": float(_last_path_result.get("estimated_seconds", 0.0)),
-		"failure_reason": StringName(_last_path_result.get("failure_reason", &"")),
-		"carried_food_kg": carried_food_kg,
-		"carried_wood_kg": carried_wood_kg,
-		"cargo_trolley_count": cargo_trolley_count,
-		"cow_count": cow_count,
-		"carry_capacity_kg": get_total_carry_capacity_kg(),
-		"current_load_kg": get_current_load_kg(),
-		"free_capacity_kg": get_free_carry_capacity_kg(),
-		"active_soldier_count": _get_formation_soldier_count(),
-		"busy_carrier_soldiers": get_busy_carrier_soldiers(),
-		"available_carrier_soldiers": get_available_carrier_soldiers(),
-		"camp_established": _camp_established,
-		"camp_food_kg": camp_food_kg,
-		"camp_wood_kg": camp_wood_kg,
-		"camp_wood_invested_kg": _camp_wood_invested_kg,
-		"camp_total_wood_cost_kg": get_camp_total_wood_cost_kg(),
-		"camp_soldiers_per_living_hut": camp_soldiers_per_living_hut,
-		"camp_living_hut_count": get_camp_living_hut_count(),
-		"camp_living_hut_wood_cost_kg": camp_living_hut_wood_cost_kg,
-		"camp_pack_range_m": camp_pack_range_m,
-		"camp_pack_in_range": is_camp_pack_in_range(),
-		"camp_position": get_camp_world_position(),
-		"cargo_trolley_wood_cost_kg": cargo_trolley_wood_cost_kg,
-		"cargo_trolley_craft_seconds": cargo_trolley_craft_seconds,
-		"cargo_trolley_crafting": _cargo_trolley_crafting,
-		"cargo_trolley_craft_remaining_seconds": _cargo_trolley_craft_remaining_seconds,
-		"cargo_trolley_craft_total_seconds": _cargo_trolley_craft_total_seconds,
-		"idle_cargo_trolley_count": _get_idle_cargo_trolley_count(),
-	}
-	summary.merge(mission_summary, true)
-	summary.merge(camp_transfer_summary, true)
-	summary.merge(deserter_summary, true)
-	summary.merge(_get_combat_summary(), true)
-	summary.merge(_get_corpse_debug_summary(), true)
-	return summary
+	var services := _get_troop_services()
+	if services and services.has_method("build_troop_summary"):
+		return services.call("build_troop_summary") as Dictionary
+	return {}
 
 
 func get_soldier_count() -> int:
@@ -1653,7 +1469,6 @@ func add_recruited_soldiers(count: int, spawn_world_position: Vector3 = Vector3(
 		var radius := maxf(formation_spacing * 0.45, 1.2)
 		soldier.global_position = _snap_world_point(spawn_origin + Vector3(cos(angle) * radius, 0.0, sin(angle) * radius))
 		soldier.rotation.y = rotation.y
-		soldier.scale = Vector3.ONE * soldier_scale
 		_configure_visual_soldier(soldier, soldier_index)
 		added += 1
 
@@ -1996,39 +1811,9 @@ func get_maximum_run_speed() -> float:
 
 
 func _ensure_scene_nodes() -> void:
-	_soldier_container = get_node_or_null(SOLDIER_CONTAINER_NAME) as Node3D
-	if not _soldier_container:
-		_soldier_container = Node3D.new()
-		_soldier_container.name = SOLDIER_CONTAINER_NAME
-		add_child(_soldier_container)
-		_soldier_container.owner = null
-
-	_soldier_batch_renderer = get_node_or_null(SOLDIER_BATCH_RENDERER_NAME)
-	if not _soldier_batch_renderer:
-		_soldier_batch_renderer = TroopSoldierBatchRendererScript.new()
-		_soldier_batch_renderer.name = SOLDIER_BATCH_RENDERER_NAME
-		add_child(_soldier_batch_renderer)
-		_soldier_batch_renderer.owner = null
-	_configure_soldier_batch_renderer()
-
-	_route_visual = get_node_or_null(ROUTE_VISUAL_NAME)
-	if not _route_visual:
-		_route_visual = TroopRouteVisualScript.new()
-		_route_visual.name = ROUTE_VISUAL_NAME
-		add_child(_route_visual)
-		_route_visual.owner = null
-	if _route_visual.has_method("configure_terrain"):
-		_route_visual.call("configure_terrain", _terrain)
-	_apply_route_visual_settings()
-
-	_carrier_container = get_node_or_null(CARRIER_CONTAINER_NAME) as Node3D
-	if not _carrier_container:
-		_carrier_container = Node3D.new()
-		_carrier_container.name = CARRIER_CONTAINER_NAME
-		add_child(_carrier_container)
-		_carrier_container.owner = null
-	_carrier_container.top_level = true
-	_carrier_container.global_transform = Transform3D.IDENTITY
+	var service = _get_presentation_service()
+	if service and service.has_method("ensure_scene_nodes"):
+		service.ensure_scene_nodes()
 
 
 func _configure_soldier_batch_renderer() -> void:
@@ -2749,19 +2534,31 @@ func _make_outfit_palette() -> Dictionary:
 
 
 func _formation_slot_to_world(slot: Vector3) -> Vector3:
-	return _get_formation_strategy().slot_to_world(self, slot)
+	var service = _get_formation_service()
+	if not service:
+		return global_transform * slot
+	return service.slot_to_world(self, slot)
 
 
 func _get_formation_position(index: int, columns: int, rows: int) -> Vector3:
-	return _get_formation_strategy().get_formation_position(self, index, columns, rows)
+	var service = _get_formation_service()
+	if not service:
+		return Vector3.ZERO
+	return service.get_formation_position(self, index, columns, rows)
 
 
 func _get_formation_slot_for_index(index: int, columns: int, rows: int) -> Vector3:
-	return _get_formation_strategy().get_slot_for_index(self, index, columns, rows)
+	var service = _get_formation_service()
+	if not service:
+		return Vector3.ZERO
+	return service.get_slot_for_index(self, index, columns, rows)
 
 
 func _get_formation_natural_offset(index: int, columns: int, rows: int) -> Vector3:
-	return _get_formation_strategy().get_natural_offset(self, index, columns, rows)
+	var service = _get_formation_service()
+	if not service:
+		return Vector3.ZERO
+	return service.get_natural_offset(self, index, columns, rows)
 
 
 func _refresh_formation_slot_metas() -> void:
@@ -2938,7 +2735,10 @@ func _set_formation_columns_preserving_soldiers(columns: int) -> void:
 
 func _get_formation_columns_for_width(width_m: float) -> int:
 	var active_count := maxi(get_active_soldier_count(), 1)
-	return _get_formation_strategy().get_columns_for_width(self, width_m, active_count)
+	var service = _get_formation_service()
+	if not service:
+		return active_count
+	return service.get_columns_for_width(self, width_m, active_count)
 
 
 func _get_yaw_for_formation_right_axis(right_axis: Vector3) -> float:
@@ -4090,46 +3890,9 @@ func _world_units_for_screen_pixels(
 
 
 func _follow_path(delta: float) -> void:
-	if _current_path_index >= _path_points.size():
-		_finish_movement()
-		return
-
-	var previous_transform := global_transform
-	_advance_reached_path_points()
-	if _current_path_index >= _path_points.size():
-		_finish_movement()
-		return
-
-	var target := _get_route_steering_target()
-	var to_target := target - global_position
-	to_target.y = 0.0
-	var distance := to_target.length()
-	if distance <= 0.001:
-		target = _path_points[_current_path_index]
-		to_target = target - global_position
-		to_target.y = 0.0
-		distance = to_target.length()
-		if distance <= 0.001:
-			return
-
-	var direction := to_target / distance
-	var turn_multiplier := 1.0
-	if _formation_destination_yaw_active:
-		rotation.y = _formation_destination_yaw
-		_last_turn_delta = 0.0
-		_last_turn_intensity = 0.0
-	else:
-		_last_turn_delta = 0.0
-		_last_turn_intensity = 0.0
-	var move_delta := minf(maxf(delta, 0.0), 0.05)
-	var current_speed := _get_current_movement_speed_mps()
-	global_position += direction * minf(current_speed * turn_multiplier * move_delta, distance)
-	_drain_soldier_endurance(_get_movement_endurance_loss_rate() * delta)
-	_snap_to_surface()
-	_carry_formation_soldiers_between_transforms(previous_transform, global_transform)
-	_advance_reached_path_points()
-	if _current_path_index >= _path_points.size():
-		_finish_movement()
+	var service = _get_movement_service()
+	if service and service.has_method("follow_path"):
+		service.follow_path(delta)
 
 
 func _advance_reached_path_points() -> void:
@@ -6021,9 +5784,10 @@ func _get_assigned_combat_target(
 
 
 func _get_soldier_engagement_position(attacker: Node3D, defender: Node3D, index: int, total: int) -> Vector3:
-	if not combat_positioning_logic:
-		_ensure_dependency_defaults()
-	return combat_positioning_logic.get_soldier_engagement_position(self, attacker, defender, index, total)
+	var service = _get_combat_service()
+	if not service:
+		return defender.global_position
+	return service.get_soldier_engagement_position(self, attacker, defender, index, total)
 
 
 func _clamp_combat_socket_position(defender: Node3D, desired_position: Vector3, y_position: float) -> Vector3:
@@ -6045,21 +5809,24 @@ func _clamp_combat_socket_position(defender: Node3D, desired_position: Vector3, 
 
 
 func _get_combat_socket_direction(attacker: Node3D, defender: Node3D, index: int, total: int) -> Vector3:
-	if not combat_positioning_logic:
-		_ensure_dependency_defaults()
-	return combat_positioning_logic.get_combat_socket_direction(self, attacker, defender, index, total)
+	var service = _get_combat_service()
+	if not service:
+		return Vector3.FORWARD
+	return service.get_combat_socket_direction(self, attacker, defender, index, total)
 
 
 func _make_combat_socket_direction(attacker: Node3D, defender: Node3D, socket_index: int, total: int) -> Vector3:
-	if not combat_positioning_logic:
-		_ensure_dependency_defaults()
-	return combat_positioning_logic.make_combat_socket_direction(self, attacker, defender, socket_index, total)
+	var service = _get_combat_service()
+	if not service:
+		return Vector3.FORWARD
+	return service.make_combat_socket_direction(self, attacker, defender, socket_index, total)
 
 
 func _get_combat_surround_slot_angle(slot: int, max_slots: int) -> float:
-	if not combat_positioning_logic:
-		_ensure_dependency_defaults()
-	return combat_positioning_logic.get_combat_surround_slot_angle(slot, max_slots)
+	var service = _get_combat_service()
+	if not service:
+		return 0.0
+	return service.get_combat_surround_slot_angle(slot, max_slots)
 
 
 func _is_combat_socket_reached(attacker: Node3D) -> bool:
@@ -6312,9 +6079,10 @@ func _get_budgeted_combat_desired_position(
 
 
 func _get_combat_offset_for_soldier(attacker: Node3D, index: int, total: int) -> Vector2:
-	if not combat_positioning_logic:
-		_ensure_dependency_defaults()
-	return combat_positioning_logic.get_combat_offset_for_soldier(self, attacker, index, total)
+	var service = _get_combat_service()
+	if not service:
+		return Vector2.ZERO
+	return service.get_combat_offset_for_soldier(self, attacker, index, total)
 
 
 func _get_soft_separation_offset(attacker: Node3D, attackers: Array[Node], defenders: Array[Node]) -> Vector3:
@@ -7906,33 +7674,38 @@ func _get_pending_stat_apply_result_count() -> int:
 
 
 func _get_current_movement_speed_mps() -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_current_movement_speed_mps(self)
+	var service = _get_movement_service()
+	if not service:
+		return maxf(movement_speed_mps, 0.1)
+	return service.get_current_movement_speed_mps(self)
 
 
 func _get_soldier_path_speed(soldier: Node) -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_soldier_path_speed(self, soldier)
+	var service = _get_movement_service()
+	if not service:
+		return maxf(movement_speed_mps, 0.1)
+	return service.get_soldier_path_speed(self, soldier)
 
 
 func _get_soldier_slot_follow_speed(soldier: Node) -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_soldier_slot_follow_speed(self, soldier)
+	var service = _get_movement_service()
+	if not service:
+		return maxf(formation_slot_follow_speed, 0.1)
+	return service.get_soldier_slot_follow_speed(self, soldier)
 
 
 func _get_formation_path_follow_speed() -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_formation_path_follow_speed(self)
+	var service = _get_movement_service()
+	if not service:
+		return maxf(movement_speed_mps, 0.1)
+	return service.get_formation_path_follow_speed(self)
 
 
 func _get_idle_formation_slot_speed(soldier: Node) -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_idle_formation_slot_speed(self, soldier)
+	var service = _get_movement_service()
+	if not service:
+		return maxf(formation_slot_follow_speed, 0.1)
+	return service.get_idle_formation_slot_speed(self, soldier)
 
 
 func _get_soldier_run_speed(soldier: Node) -> float:
@@ -7967,9 +7740,10 @@ func _get_maximum_active_run_speed_live() -> float:
 
 
 func _get_movement_endurance_loss_rate() -> float:
-	if not movement_logic:
-		_ensure_dependency_defaults()
-	return movement_logic.get_movement_endurance_loss_rate(self)
+	var service = _get_movement_service()
+	if not service:
+		return 0.0
+	return service.get_movement_endurance_loss_rate(self)
 
 
 func _get_mode_engagement_delay() -> float:
@@ -8277,7 +8051,10 @@ func _get_average_endurance_ratio() -> float:
 
 
 func _get_combat_summary() -> Dictionary:
-	return _get_summary_builder().build_combat_summary(self)
+	var services := _get_troop_services()
+	if services and services.has_method("build_combat_summary"):
+		return services.call("build_combat_summary") as Dictionary
+	return {}
 
 
 func _get_source_food_kg(village: Node) -> float:
@@ -8992,7 +8769,6 @@ func _adopt_transferred_soldier(soldier: Node3D, index: int, total: int) -> void
 	soldier.set_meta(&"troop_formation_index", index)
 	soldier.set_meta(&"troop_formation_slot", slot)
 	soldier.set_meta(&"troop_formation_phase", float(index) * 1.618)
-	soldier.scale = Vector3.ONE * soldier_scale
 	_set_troop_selectable_metadata(soldier)
 	_ensure_dependency_defaults()
 	if soldier.has_method("configure_behavior_set"):

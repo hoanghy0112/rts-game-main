@@ -14,7 +14,7 @@ const MAX_IDLE_STEP_M := 0.05
 const MAX_COMBAT_TRANSITION_STEP_M := 0.62
 const MAX_FACING_ERROR_RATIO := 0.12
 const FACING_ERROR_DEGREES := 80.0
-const MIN_WALK_POSE_RANGE := 0.08
+const MIN_ANIMATION_BONE_RANGE := 0.001
 
 var _original_max_fps := 0
 
@@ -41,11 +41,7 @@ func _run() -> void:
 		var moving_metrics := await _sample_motion(mover, MOVE_SAMPLE_FRAMES, true)
 		_print_metrics("moving", moving_metrics)
 		_assert_active_render_sync("moving", moving_metrics, failures)
-		if float(moving_metrics.get("walk_pose_range", 0.0)) < MIN_WALK_POSE_RANGE:
-			failures.append(
-				"moving soldiers did not animate walking pose; range %.3f below %.3f"
-				% [float(moving_metrics.get("walk_pose_range", 0.0)), MIN_WALK_POSE_RANGE]
-			)
+		_assert_animation_player_walk("moving", moving_metrics, failures)
 		if float(moving_metrics.get("max_step_m", 0.0)) > MAX_MOVING_STEP_M:
 			failures.append("moving soldier source step jumped %.3fm; budget %.3fm" % [float(moving_metrics["max_step_m"]), MAX_MOVING_STEP_M])
 		var facing_checks := int(moving_metrics.get("facing_checks", 0))
@@ -80,6 +76,7 @@ func _run() -> void:
 				var formation_drag_metrics := await _sample_motion(mover, MOVE_SAMPLE_FRAMES, true)
 				_print_metrics("formation_drag", formation_drag_metrics)
 				_assert_active_render_sync("formation_drag", formation_drag_metrics, failures)
+				_assert_animation_player_walk("formation_drag", formation_drag_metrics, failures)
 				if float(formation_drag_metrics.get("max_step_m", 0.0)) > MAX_MOVING_STEP_M:
 					failures.append(
 						"formation-drag soldier source step jumped %.3fm; budget %.3fm"
@@ -157,7 +154,7 @@ func _run() -> void:
 		)
 	var sampled_moving_frames := int(autonomous_metrics.get("sampled_moving_frames", 0))
 	var render_sync_count := int(autonomous_metrics.get("render_sync_count", 0))
-	if sampled_moving_frames > 0 and render_sync_count < int(float(sampled_moving_frames) * 0.75):
+	if bool(autonomous_metrics.get("render_batching_enabled", false)) and sampled_moving_frames > 0 and render_sync_count < int(float(sampled_moving_frames) * 0.75):
 		failures.append(
 			"autonomous enemy moving render sync was sparse (%d syncs over %d moving frames)"
 			% [render_sync_count, sampled_moving_frames]
@@ -467,12 +464,12 @@ func _run() -> void:
 		)
 	var regroup_frames := int(regroup_metrics.get("sampled_independent_frames", 0))
 	var regroup_sync_count := int(regroup_metrics.get("render_sync_count", 0))
-	if regroup_frames > 0 and regroup_sync_count < int(float(regroup_frames) * 0.75):
+	if bool(regroup_metrics.get("render_batching_enabled", false)) and regroup_frames > 0 and regroup_sync_count < int(float(regroup_frames) * 0.75):
 		failures.append(
 			"idle regroup render sync was sparse (%d syncs over %d independent-motion frames)"
 			% [regroup_sync_count, regroup_frames]
 		)
-	if int(regroup_metrics.get("render_sync_skips", 0)) > 0 and regroup_sync_count <= 0:
+	if bool(regroup_metrics.get("render_batching_enabled", false)) and int(regroup_metrics.get("render_sync_skips", 0)) > 0 and regroup_sync_count <= 0:
 		failures.append("idle regroup skipped all render syncs while soldiers were walking to formation")
 
 	Engine.max_fps = _original_max_fps
@@ -515,15 +512,25 @@ func _sample_motion(troop: Node, frame_count: int, check_facing: bool) -> Dictio
 	var max_step := 0.0
 	var facing_checks := 0
 	var facing_errors := 0
-	var min_walk_pose := INF
-	var max_walk_pose := -INF
+	var min_animation_bone := INF
+	var max_animation_bone := -INF
+	var saw_walk_animation := false
+	var primary_animation_name := ""
+	var primary_animation_playing := false
 	for _index: int in range(frame_count):
 		await _wait_frames(1)
 		var current_positions := _get_soldier_positions(troop)
-		var walk_pose: Variant = _get_primary_walk_pose_value(troop)
-		if walk_pose != null:
-			min_walk_pose = minf(min_walk_pose, float(walk_pose))
-			max_walk_pose = maxf(max_walk_pose, float(walk_pose))
+		var animation_sample := _get_primary_animation_sample(troop)
+		if not animation_sample.is_empty():
+			var animation_name := String(animation_sample.get("animation", ""))
+			if not animation_name.is_empty():
+				primary_animation_name = animation_name
+				saw_walk_animation = saw_walk_animation or animation_name.contains("Walk")
+			primary_animation_playing = primary_animation_playing or bool(animation_sample.get("playing", false))
+			var animation_bone_value: Variant = animation_sample.get("bone_value", null)
+			if animation_bone_value != null:
+				min_animation_bone = minf(min_animation_bone, float(animation_bone_value))
+				max_animation_bone = maxf(max_animation_bone, float(animation_bone_value))
 		for soldier: Node3D in current_positions.keys():
 			var previous_variant: Variant = previous_positions.get(soldier)
 			if not (previous_variant is Vector3):
@@ -540,19 +547,23 @@ func _sample_motion(troop: Node, frame_count: int, check_facing: bool) -> Dictio
 					facing_errors += 1
 		previous_positions = current_positions
 	var summary := _get_summary(troop)
-	var walk_pose_range := 0.0
-	if min_walk_pose < INF and max_walk_pose > -INF:
-		walk_pose_range = max_walk_pose - min_walk_pose
+	var animation_bone_range := 0.0
+	if min_animation_bone < INF and max_animation_bone > -INF:
+		animation_bone_range = max_animation_bone - min_animation_bone
 	return {
 		"max_step_m": max_step,
 		"facing_checks": facing_checks,
 		"facing_errors": facing_errors,
+		"render_batching_enabled": bool(summary.get("soldier_render_batching_enabled", false)),
 		"render_sync_count": int(summary.get("soldier_render_sync_count", 0)),
 		"render_sync_skips": int(summary.get("soldier_render_sync_skip_count", 0)),
 		"render_sync_max_ms": float(summary.get("soldier_render_max_sync_ms", 0.0)),
 		"render_writes": int(summary.get("soldier_render_max_transform_writes", 0)),
 		"independent_motions": _count_independent_motions(troop),
-		"walk_pose_range": walk_pose_range,
+		"animation": primary_animation_name,
+		"animation_bone_range": animation_bone_range,
+		"animation_playing": primary_animation_playing,
+		"saw_walk_animation": saw_walk_animation,
 		"state": String(summary.get("state", &"")),
 	}
 
@@ -564,7 +575,12 @@ func _sample_attack_transition(attacker: Node, defender: Node) -> Dictionary:
 	if defender.has_method("command_attack_troop"):
 		defender.call("command_attack_troop", attacker)
 	if not accepted:
-		return {"reached_fighting": false, "render_sync_count": 0, "render_sync_skips": 0}
+		return {
+			"reached_fighting": false,
+			"render_batching_enabled": _is_render_batching_enabled(attacker),
+			"render_sync_count": 0,
+			"render_sync_skips": 0,
+		}
 
 	var previous_positions := _get_soldier_positions(attacker)
 	var previous_state := _get_troop_state(attacker)
@@ -601,6 +617,7 @@ func _sample_attack_transition(attacker: Node, defender: Node) -> Dictionary:
 		"reached_fighting": reached_fighting,
 		"max_step_m": max_step,
 		"max_transition_step_m": max_transition_step,
+		"render_batching_enabled": bool(summary.get("soldier_render_batching_enabled", false)),
 		"render_sync_count": int(summary.get("soldier_render_sync_count", 0)),
 		"render_sync_skips": int(summary.get("soldier_render_sync_skip_count", 0)),
 		"render_sync_max_ms": float(summary.get("soldier_render_max_sync_ms", 0.0)),
@@ -653,6 +670,7 @@ func _sample_autonomous_enemy_chase(enemy: Node) -> Dictionary:
 		"max_step_m": max_step,
 		"max_moving_step_m": max_moving_step,
 		"max_fighting_step_m": max_fighting_step,
+		"render_batching_enabled": bool(final_summary.get("soldier_render_batching_enabled", false)),
 		"render_sync_count": int(final_summary.get("soldier_render_sync_count", 0)),
 		"render_sync_skips": int(final_summary.get("soldier_render_sync_skip_count", 0)),
 		"state": String(final_summary.get("state", &"")),
@@ -681,6 +699,7 @@ func _sample_idle_independent_regroup(troop: Node, frame_count: int) -> Dictiona
 	return {
 		"sampled_independent_frames": sampled_independent_frames,
 		"max_step_m": max_step,
+		"render_batching_enabled": bool(summary.get("soldier_render_batching_enabled", false)),
 		"render_sync_count": int(summary.get("soldier_render_sync_count", 0)),
 		"render_sync_skips": int(summary.get("soldier_render_sync_skip_count", 0)),
 		"state": String(summary.get("state", &"")),
@@ -740,12 +759,30 @@ func _sample_surround_combat_stability(
 
 
 func _assert_active_render_sync(label: String, metrics: Dictionary, failures: Array[String]) -> void:
+	if not bool(metrics.get("render_batching_enabled", false)):
+		return
 	var skips := int(metrics.get("render_sync_skips", 0))
 	if skips > 0 and label != "moving" and int(metrics.get("render_sync_count", 0)) <= 0:
 		failures.append("%s skipped all active soldier render syncs; visible movement will stutter" % label)
 	var sync_count := int(metrics.get("render_sync_count", 0))
 	if sync_count <= 0:
 		failures.append("%s did not sync batched soldier transforms while active" % label)
+
+
+func _assert_animation_player_walk(label: String, metrics: Dictionary, failures: Array[String]) -> void:
+	if not bool(metrics.get("animation_playing", false)):
+		failures.append("%s soldier AnimationPlayer was not playing" % label)
+	if not bool(metrics.get("saw_walk_animation", false)):
+		failures.append(
+			"%s soldier did not use the imported walk animation; current=%s"
+			% [label, String(metrics.get("animation", ""))]
+		)
+	var bone_range := float(metrics.get("animation_bone_range", 0.0))
+	if bone_range < MIN_ANIMATION_BONE_RANGE:
+		failures.append(
+			"%s imported skeleton did not move through AnimationPlayer; bone range %.6f below %.6f"
+			% [label, bone_range, MIN_ANIMATION_BONE_RANGE]
+		)
 
 
 func _wait_for_state(troop: Node, state: StringName, max_frames: int) -> bool:
@@ -796,6 +833,10 @@ func _get_summary(troop: Node) -> Dictionary:
 	if troop and troop.has_method("get_troop_summary"):
 		return troop.call("get_troop_summary") as Dictionary
 	return {}
+
+
+func _is_render_batching_enabled(troop: Node) -> bool:
+	return bool(_get_summary(troop).get("soldier_render_batching_enabled", false))
 
 
 func _get_troop_state(troop: Node) -> StringName:
@@ -888,18 +929,59 @@ func _get_yaw_error_degrees(yaw: float, direction: Vector3) -> float:
 	return rad_to_deg(absf(angle_difference(yaw, expected_yaw)))
 
 
-func _get_primary_walk_pose_value(troop: Node) -> Variant:
+func _get_primary_animation_sample(troop: Node) -> Dictionary:
 	var soldiers := troop.get_node_or_null("Soldiers") if troop else null
 	if not soldiers:
-		return null
+		return {}
 	for soldier_node: Node in soldiers.get_children():
 		if not (soldier_node is Node3D) or not _is_soldier_alive(soldier_node):
 			continue
-		var left_leg := soldier_node.get_node_or_null("VisualRoot/Armature/LeftLeg") as Node3D
-		var right_leg := soldier_node.get_node_or_null("VisualRoot/Armature/RightLeg") as Node3D
-		if left_leg and right_leg:
-			return left_leg.rotation.x - right_leg.rotation.x
-	return null
+		var player := soldier_node.get_node_or_null("VisualRoot/ExternalModelSocket/PersonAnimated/AnimationPlayer") as AnimationPlayer
+		var skeleton := soldier_node.get_node_or_null("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D") as Skeleton3D
+		if not player or not skeleton:
+			continue
+		return {
+			"animation": player.current_animation,
+			"playing": player.is_playing(),
+			"bone_value": _get_skeleton_animation_value(skeleton),
+		}
+	return {}
+
+
+func _get_skeleton_animation_value(skeleton: Skeleton3D) -> Variant:
+	var bone_names := [
+		"Hand.R",
+		"Hand.L",
+		"UpperLeg.R",
+		"UpperLeg.L",
+		"LowerLeg.R",
+		"LowerLeg.L",
+	]
+	var value := 0.0
+	var weight := 1.0
+	var found_bone := false
+	for bone_name: String in bone_names:
+		var bone_index := skeleton.find_bone(bone_name)
+		if bone_index < 0:
+			continue
+		var pose := skeleton.get_bone_global_pose(bone_index)
+		value += weight * (
+			pose.origin.x
+			+ pose.origin.y * 1.37
+			+ pose.origin.z * 1.91
+			+ pose.basis.x.x * 0.31
+			+ pose.basis.x.y * 0.37
+			+ pose.basis.x.z * 0.41
+			+ pose.basis.y.x * 0.43
+			+ pose.basis.y.y * 0.47
+			+ pose.basis.y.z * 0.53
+			+ pose.basis.z.x * 0.59
+			+ pose.basis.z.y * 0.61
+			+ pose.basis.z.z * 0.67
+		)
+		weight += 0.17
+		found_bone = true
+	return value if found_bone else null
 
 
 func _print_metrics(label: String, metrics: Dictionary) -> void:

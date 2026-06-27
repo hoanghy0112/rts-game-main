@@ -43,7 +43,6 @@ var _combat_focus_target: Node3D
 var _combat_in_range := false
 var _spear_thrust_remaining := 0.0
 var _spear_thrust_duration := 0.0
-var _spear_phase_seed := 0.0
 var _hit_reaction_remaining := 0.0
 var _hit_reaction_duration := 0.0
 var _outfit_palette: Dictionary = {}
@@ -75,8 +74,6 @@ var _perf_last_physics_usec := 0
 var _perf_max_physics_usec := 0
 var _perf_last_pose_usec := 0
 var _perf_max_pose_usec := 0
-var _idle_pose_elapsed := 0.0
-var _active_pose_elapsed := 0.0
 var _stationary_pose_applied := false
 var _combat_idle_pose_applied := false
 var _logic_sleeping := false
@@ -88,16 +85,22 @@ func _ready() -> void:
 	_ensure_behavior_dependencies()
 	_sync_combat_stats_to_human()
 	super._ready()
-	_spear_phase_seed = float(absi(hash(name)) % 1000) * 0.001 * TAU
-	_idle_pose_elapsed = idle_pose_update_interval * float(absi(hash("%s:pose" % name)) % 1000) / 1000.0
-	_active_pose_elapsed = active_pose_update_interval * float(absi(hash("%s:active_pose" % name)) % 1000) / 1000.0
-	_held_spear = get_node_or_null("VisualRoot/Armature/RightArm/RightHandSocket/LongSpear/LowPolySpear") as Node3D
+	_held_spear = _resolve_held_spear()
 	if not _outfit_palette.is_empty():
 		_apply_outfit_palette()
 	add_to_group(&"troop_soldiers")
 	if formation_visual_only:
 		_set_state(STATE_IDLE)
 		disable_formation_physics()
+
+
+func _resolve_held_spear() -> Node3D:
+	var socket := get_right_hand_socket()
+	if socket:
+		var socket_spear := socket.find_child("LowPolySpear", true, false) as Node3D
+		if socket_spear:
+			return socket_spear
+	return find_child("LowPolySpear", true, false) as Node3D
 
 
 func _ensure_behavior_dependencies() -> void:
@@ -156,7 +159,7 @@ func step_formation_logic(delta: float) -> void:
 		_formation_attacking = false
 		_independent_motion_active = false
 		_has_independent_target = false
-		_update_monitored_procedural_pose(delta)
+		_update_monitored_animation_pose(delta)
 		_has_visual_facing_position = false
 		_finish_perf_sample(perf_started)
 		return
@@ -305,6 +308,7 @@ func disable_formation_physics() -> void:
 func strip_formation_runtime_helpers() -> void:
 	if not formation_visual_only:
 		return
+	var removed_root_animation_player := false
 	for path: NodePath in [
 		^"CollisionShape3D",
 		^"NavigationAgent3D",
@@ -313,55 +317,35 @@ func strip_formation_runtime_helpers() -> void:
 	]:
 		var node := get_node_or_null(path)
 		if node:
+			if path == ^"AnimationPlayer":
+				removed_root_animation_player = true
 			node.get_parent().remove_child(node)
 			node.free()
-	_animation_player = null
+	if removed_root_animation_player:
+		_animation_player = null
 	_animation_tree = null
+	_resolve_animation_player()
+	_resolve_external_skeleton()
+	_sync_animation_player(true)
 
 
-func _update_monitored_procedural_pose(delta: float) -> void:
+func _update_monitored_animation_pose(delta: float) -> void:
 	if not soldier_perf_monitoring_enabled:
-		_update_procedural_pose(delta)
+		_update_animation_pose(delta)
 		return
 	var started := Time.get_ticks_usec()
-	_update_procedural_pose(delta)
+	_update_animation_pose(delta)
 	_perf_last_pose_usec = Time.get_ticks_usec() - started
 	_perf_max_pose_usec = maxi(_perf_max_pose_usec, _perf_last_pose_usec)
 
 
 func _update_formation_visual_pose(delta: float, moving_independently: bool) -> void:
-	var needs_full_rate := (
-		_formation_walking
-		or moving_independently
-		or _formation_attacking
-		or _spear_thrust_remaining > 0.0
-		or _hit_reaction_remaining > 0.0
+	_stationary_pose_applied = not (_formation_walking or moving_independently)
+	_combat_idle_pose_applied = not _formation_attacking or (
+		_spear_thrust_remaining <= 0.0
+		and _hit_reaction_remaining <= 0.0
 	)
-	if needs_full_rate:
-		_stationary_pose_applied = false
-		var force_full_rate := _spear_thrust_remaining > 0.0 or _hit_reaction_remaining > 0.0 or active_pose_update_interval <= 0.0
-		if force_full_rate:
-			_active_pose_elapsed = 0.0
-			_idle_pose_elapsed = 0.0
-			_update_monitored_procedural_pose(delta * formation_walk_animation_scale * _formation_speed_scale)
-			return
-		_active_pose_elapsed += delta
-		if _active_pose_elapsed < active_pose_update_interval:
-			if soldier_perf_monitoring_enabled:
-				_perf_last_pose_usec = 0
-			return
-		var pose_delta := _active_pose_elapsed * formation_walk_animation_scale * _formation_speed_scale
-		_active_pose_elapsed = 0.0
-		_idle_pose_elapsed = 0.0
-		_update_monitored_procedural_pose(pose_delta)
-		return
-
-	_active_pose_elapsed = 0.0
-	if not _stationary_pose_applied:
-		_update_monitored_procedural_pose(1.0)
-	_idle_pose_elapsed = 0.0
-	if soldier_perf_monitoring_enabled:
-		_perf_last_pose_usec = 0
+	_update_monitored_animation_pose(delta)
 
 
 func _apply_actual_visual_motion_facing(previous_position: Vector3, has_previous_position: bool, moving_independently: bool) -> void:
@@ -569,6 +553,10 @@ func get_combat_target() -> Node3D:
 func trigger_spear_thrust(target: Node3D = null, duration: float = -1.0) -> void:
 	_ensure_behavior_dependencies()
 	behavior_set.fight_logic.trigger_spear_thrust(self, target, duration)
+	if _uses_imported_animation_player():
+		_combat_idle_pose_applied = false
+		_set_state(STATE_TOOL_ACTION)
+		_sync_animation_player(true)
 
 
 func is_spear_thrust_active() -> bool:
@@ -882,123 +870,19 @@ func kill(reason: StringName = &"death") -> void:
 	_queue_combat_stats_changed(true)
 
 
-func _update_procedural_pose(delta: float) -> void:
+func _update_animation_pose(_delta: float) -> void:
 	if not formation_visual_only:
-		super._update_procedural_pose(delta)
+		super._update_animation_pose(_delta)
 		return
-	# Formation soldiers fully drive their own pose. Running the base human pose
-	# first writes the same limb transforms twice for every soldier.
-	if not is_alive():
-		return
-	if _formation_walking:
-		_combat_idle_pose_applied = false
-		_apply_walk_pose(delta)
-		return
-	if not _formation_attacking and _hit_reaction_remaining <= 0.0:
-		if not _stationary_pose_applied:
-			_stationary_pose_applied = true
-			_apply_static_stationary_pose(maxf(delta, 1.0))
-		return
-
-	var thrust_progress := 0.0
-	if _spear_thrust_duration > 0.0 and _spear_thrust_remaining > 0.0:
-		thrust_progress = 1.0 - clampf(_spear_thrust_remaining / _spear_thrust_duration, 0.0, 1.0)
-	var windup := 1.0 - clampf(thrust_progress / 0.24, 0.0, 1.0)
-	var drive := sin(clampf((thrust_progress - 0.12) / 0.56, 0.0, 1.0) * PI)
-	var recover := clampf((thrust_progress - 0.68) / 0.32, 0.0, 1.0)
-	var hit_ratio := 0.0
-	if _hit_reaction_duration > 0.0 and _hit_reaction_remaining > 0.0:
-		hit_ratio = clampf(_hit_reaction_remaining / _hit_reaction_duration, 0.0, 1.0)
-	var hit_kick := sin(hit_ratio * PI) * 0.28
-	var stance_step := 0.12 if _combat_in_range else 0.24
-
-	if _model_root:
-		_model_root.rotation.x = lerp_angle(_model_root.rotation.x, 0.0, clampf(delta * 10.0, 0.0, 1.0))
-		_model_root.rotation.z = lerp_angle(_model_root.rotation.z, hit_kick * 0.2, clampf(delta * 10.0, 0.0, 1.0))
-		_model_root.position.y = sin(_state_time * 1.4) * 0.025
-	if _torso:
-		var torso_pitch := -0.06 + windup * 0.08 - drive * 0.30 + recover * 0.06 + hit_kick
-		_torso.rotation.x = lerp_angle(_torso.rotation.x, torso_pitch, clampf(delta * 14.0, 0.0, 1.0))
-		_torso.rotation.y = lerp_angle(_torso.rotation.y, 0.0, clampf(delta * 14.0, 0.0, 1.0))
-		_torso.rotation.z = lerp_angle(_torso.rotation.z, 0.0, clampf(delta * 14.0, 0.0, 1.0))
-	if _right_arm:
-		var right_pitch := -0.58 - windup * 0.18 + drive * 0.72 - recover * 0.12 + hit_kick * 0.18
-		_right_arm.rotation.x = lerp_angle(_right_arm.rotation.x, right_pitch, clampf(delta * 16.0, 0.0, 1.0))
-	if _left_arm:
-		var left_pitch := -0.46 + drive * 0.22 - windup * 0.08 + hit_kick * 0.08
-		_left_arm.rotation.x = lerp_angle(_left_arm.rotation.x, left_pitch, clampf(delta * 16.0, 0.0, 1.0))
-	if _left_leg:
-		_left_leg.rotation.x = lerp_angle(_left_leg.rotation.x, stance_step + drive * 0.12 - hit_kick * 0.08, clampf(delta * 12.0, 0.0, 1.0))
-	if _right_leg:
-		_right_leg.rotation.x = lerp_angle(_right_leg.rotation.x, -stance_step - drive * 0.08 + hit_kick * 0.06, clampf(delta * 12.0, 0.0, 1.0))
-	if _right_hand_socket:
-		var hand_pitch := -0.18 + drive * 0.36 - windup * 0.10 + hit_kick * 0.08
-		_right_hand_socket.rotation.x = lerp_angle(_right_hand_socket.rotation.x, hand_pitch, clampf(delta * 18.0, 0.0, 1.0))
-		_right_hand_socket.rotation.y = lerp_angle(_right_hand_socket.rotation.y, 0.0, clampf(delta * 18.0, 0.0, 1.0))
-		_right_hand_socket.rotation.z = lerp_angle(_right_hand_socket.rotation.z, -0.06, clampf(delta * 18.0, 0.0, 1.0))
 	if _formation_attacking and _spear_thrust_remaining <= 0.0 and _hit_reaction_remaining <= 0.0:
 		_combat_idle_pose_applied = true
-
-
-func _apply_walk_pose(delta: float) -> void:
-	var speed_scale := clampf(_formation_speed_scale, 0.7, 2.4)
-	var phase := _state_time * lerpf(5.2, 8.4, clampf((speed_scale - 0.7) / 1.7, 0.0, 1.0)) + _spear_phase_seed
-	var stride := sin(phase)
-	var counter_stride := -stride
-	var lift := absf(sin(phase))
-	var weight := clampf(delta * 14.0, 0.0, 1.0)
-	if _model_root:
-		_model_root.rotation.x = lerp_angle(_model_root.rotation.x, -0.035, weight)
-		_model_root.rotation.z = lerp_angle(_model_root.rotation.z, stride * 0.018, weight)
-		_model_root.position.y = lerpf(_model_root.position.y, lift * 0.045, weight)
-	if _torso:
-		_torso.rotation.x = lerp_angle(_torso.rotation.x, -0.045 + lift * 0.025, weight)
-		_torso.rotation.y = lerp_angle(_torso.rotation.y, stride * 0.035, weight)
-		_torso.rotation.z = lerp_angle(_torso.rotation.z, counter_stride * 0.018, weight)
-	if _left_arm:
-		_left_arm.rotation.x = lerp_angle(_left_arm.rotation.x, -0.14 + counter_stride * 0.24, weight)
-	if _right_arm:
-		_right_arm.rotation.x = lerp_angle(_right_arm.rotation.x, -0.18 + stride * 0.22, weight)
-	if _left_leg:
-		_left_leg.rotation.x = lerp_angle(_left_leg.rotation.x, stride * 0.34, weight)
-	if _right_leg:
-		_right_leg.rotation.x = lerp_angle(_right_leg.rotation.x, counter_stride * 0.34, weight)
-	if _right_hand_socket:
-		_right_hand_socket.rotation.x = lerp_angle(_right_hand_socket.rotation.x, -0.03 + lift * 0.05, weight)
-		_right_hand_socket.rotation.y = lerp_angle(_right_hand_socket.rotation.y, stride * 0.025, weight)
-		_right_hand_socket.rotation.z = lerp_angle(_right_hand_socket.rotation.z, -0.045, weight)
+	elif _formation_attacking:
+		_combat_idle_pose_applied = false
+	_update_animation_player_driven_pose()
 
 
 func _update_activity_state(_delta: float) -> void:
 	_activity_variant = ACTIVITY_NONE
-
-
-func _apply_activity_pose(delta: float) -> void:
-	_apply_static_stationary_pose(delta)
-
-
-func _apply_static_stationary_pose(delta: float) -> void:
-	var weight := clampf(delta * 10.0, 0.0, 1.0)
-	if _model_root:
-		_model_root.rotation.x = lerp_angle(_model_root.rotation.x, 0.0, weight)
-		_model_root.rotation.z = lerp_angle(_model_root.rotation.z, 0.0, weight)
-		_model_root.position.y = 0.0
-	if _torso:
-		_torso.rotation.x = lerp_angle(_torso.rotation.x, 0.0, weight)
-		_torso.rotation.y = lerp_angle(_torso.rotation.y, 0.0, weight)
-		_torso.rotation.z = lerp_angle(_torso.rotation.z, 0.0, weight)
-	if _right_arm:
-		_right_arm.rotation.x = lerp_angle(_right_arm.rotation.x, -0.10, weight)
-	if _left_arm:
-		_left_arm.rotation.x = lerp_angle(_left_arm.rotation.x, -0.06, weight)
-	if _left_leg:
-		_left_leg.rotation.x = lerp_angle(_left_leg.rotation.x, 0.0, weight)
-	if _right_leg:
-		_right_leg.rotation.x = lerp_angle(_right_leg.rotation.x, 0.0, weight)
-	if _right_hand_socket:
-		_right_hand_socket.rotation.x = lerp_angle(_right_hand_socket.rotation.x, 0.02, weight)
-		_right_hand_socket.rotation.y = lerp_angle(_right_hand_socket.rotation.y, 0.0, weight)
-		_right_hand_socket.rotation.z = lerp_angle(_right_hand_socket.rotation.z, 0.0, weight)
 
 
 func _update_independent_motion(delta: float) -> bool:
@@ -1095,6 +979,14 @@ func _enter_inactive_dead_state() -> void:
 
 
 func _apply_corpse_pose() -> void:
+	if _uses_imported_animation_player():
+		if _model_root:
+			_model_root.rotation.x = 0.0
+			_model_root.rotation.z = _corpse_roll
+			_model_root.position.y = 0.03
+		_sync_compatibility_armature_to_external_skeleton()
+		return
+
 	if _model_root:
 		_model_root.rotation.x = 0.0
 		_model_root.rotation.z = _corpse_roll
@@ -1128,7 +1020,7 @@ func get_dropped_corpse_spear() -> Node3D:
 
 func _drop_corpse_spear() -> void:
 	if not is_instance_valid(_held_spear):
-		_held_spear = get_node_or_null("VisualRoot/Armature/RightArm/RightHandSocket/LongSpear/LowPolySpear") as Node3D
+		_held_spear = _resolve_held_spear()
 	if is_instance_valid(_held_spear):
 		_held_spear.visible = false
 	if is_instance_valid(_corpse_spear):
@@ -1188,11 +1080,16 @@ func _update_desertion_motion(delta: float) -> void:
 	_face_direction(_desert_direction, delta)
 
 
-func _relax_spear_socket(delta: float) -> void:
-	if not _right_hand_socket:
-		return
-	_right_hand_socket.rotation.y = lerp_angle(_right_hand_socket.rotation.y, 0.0, clampf(delta * 10.0, 0.0, 1.0))
-	_right_hand_socket.rotation.z = lerp_angle(_right_hand_socket.rotation.z, 0.0, clampf(delta * 10.0, 0.0, 1.0))
+func _get_animation_playback_speed_scale() -> float:
+	if formation_visual_only and _state == STATE_WALK:
+		return clampf(formation_walk_animation_scale * _formation_speed_scale, 0.2, 3.0)
+	if formation_visual_only and _state == STATE_TOOL_ACTION and _spear_thrust_duration > 0.0:
+		var animation_name := _get_animation_name_for_state(_state)
+		if animation_name != &"":
+			var animation := _animation_player.get_animation(String(animation_name))
+			if animation:
+				return clampf(animation.length / maxf(_spear_thrust_duration, 0.05), 0.2, 3.0)
+	return super._get_animation_playback_speed_scale()
 
 
 func _corpse_random_unit(label: String) -> float:
@@ -1216,13 +1113,9 @@ func _basis_from_local_y_axis(y_axis: Vector3, roll: float = 0.0) -> Basis:
 
 
 func _apply_outfit_palette() -> void:
-	_apply_palette_color("robe", ["OuterRobe", "RightRobePanel"])
-	_apply_palette_color("robe_shadow", ["LeftLapel", "RightLapel"])
-	_apply_palette_color("trim", ["WaistSash", "FrontRobePanel"])
-	_apply_palette_color("pants", ["LeftPantsOverlay", "RightPantsOverlay"])
-	_apply_palette_color("wraps", ["LeftLegWrap", "RightLegWrap", "LeftFootWrap", "RightFootWrap"])
+	_apply_palette_color("robe", ["MinimalTunic"])
+	_apply_palette_color("trim", ["WaistBelt"])
 	_apply_palette_color("hat", ["WideHatBrim", "HatCap"])
-	_apply_palette_color("accent", ["RedPlume", "TopKnot"])
 
 
 func _apply_palette_color(key: String, node_names: Array[String]) -> void:

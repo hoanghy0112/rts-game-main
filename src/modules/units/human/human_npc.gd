@@ -12,6 +12,7 @@ const STATE_RUN := &"run"
 const STATE_FIELD_TASK := &"field_task"
 const STATE_TOOL_ACTION := &"tool_action"
 const STATE_DEAD := &"dead"
+const INITIAL_EXTERNAL_SKELETON_SYNC_FRAMES := 4
 
 @export_group("Stats")
 @export_range(1.0, 1000.0, 1.0, "or_greater") var max_health: float = 40.0
@@ -36,7 +37,10 @@ const STATE_DEAD := &"dead"
 
 @export_group("Node Paths")
 @export_node_path("Node3D") var model_root_path: NodePath = ^"VisualRoot"
+@export_node_path("Node3D") var external_model_root_path: NodePath = ^"VisualRoot/ExternalModelSocket"
+@export_node_path("Skeleton3D") var external_skeleton_path: NodePath = ^"VisualRoot/ExternalModelSocket/AnimatedHumanoid/PersonAnimated/Armature/Skeleton3D"
 @export_node_path("Node3D") var torso_path: NodePath = ^"VisualRoot/Armature/Torso"
+@export_node_path("Node3D") var head_path: NodePath = ^"VisualRoot/Armature/Head"
 @export_node_path("Node3D") var left_arm_path: NodePath = ^"VisualRoot/Armature/LeftArm"
 @export_node_path("Node3D") var right_arm_path: NodePath = ^"VisualRoot/Armature/RightArm"
 @export_node_path("Node3D") var left_leg_path: NodePath = ^"VisualRoot/Armature/LeftLeg"
@@ -44,6 +48,10 @@ const STATE_DEAD := &"dead"
 @export_node_path("Node3D") var right_hand_socket_path: NodePath = ^"VisualRoot/Armature/RightArm/RightHandSocket"
 @export_node_path("AnimationPlayer") var animation_player_path: NodePath = ^"AnimationPlayer"
 @export_node_path("AnimationTree") var animation_tree_path: NodePath = ^"AnimationTree"
+
+@export_group("Imported Skeleton")
+@export var sync_compatibility_armature_to_external_skeleton := true
+@export var continuous_compatibility_skeleton_sync := true
 
 var _health: float
 var _state: StringName = STATE_IDLE
@@ -53,15 +61,21 @@ var _move_run := false
 var _timed_state_remaining := 0.0
 var _timed_state_duration := 0.0
 var _state_time := 0.0
-var _animation_phase := 0.0
 var _surface_height_source: Node3D
 var _move_last_distance := INF
 var _move_stall_timer := 0.0
 var _move_stall_notified := false
 var _move_recovery_side := 1.0
+var _compatibility_bone_nodes: Array[Node3D] = []
+var _compatibility_bone_indices: Array[int] = []
+var _compatibility_bone_basis_offsets: Array[Basis] = []
+var _compatibility_skeleton_sync_frames_remaining := 0
 
 @onready var _model_root := get_node_or_null(model_root_path) as Node3D
+@onready var _external_model_root := get_node_or_null(external_model_root_path) as Node3D
+@onready var _external_skeleton := get_node_or_null(external_skeleton_path) as Skeleton3D
 @onready var _torso := get_node_or_null(torso_path) as Node3D
+@onready var _head := get_node_or_null(head_path) as Node3D
 @onready var _left_arm := get_node_or_null(left_arm_path) as Node3D
 @onready var _right_arm := get_node_or_null(right_arm_path) as Node3D
 @onready var _left_leg := get_node_or_null(left_leg_path) as Node3D
@@ -76,19 +90,39 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	set_process(false)
 	_health = clampf(_health, 0.0, maxf(max_health, 1.0))
 	if _health <= 0.0:
 		_health = maxf(max_health, 1.0)
+	_resolve_animation_player()
+	_resolve_external_skeleton()
+	_configure_compatibility_bone_targets()
+	_disable_external_scene_helpers()
 	add_to_group(&"human_npcs")
 	_set_state(STATE_IDLE)
 	_sync_animation_player()
+	_sync_compatibility_armature_to_external_skeleton()
+	_schedule_compatibility_skeleton_sync()
+
+
+func _process(_delta: float) -> void:
+	if not sync_compatibility_armature_to_external_skeleton or not _external_skeleton:
+		set_process(false)
+		return
+
+	_sync_compatibility_armature_to_external_skeleton()
+	call_deferred("_sync_compatibility_armature_to_external_skeleton")
+	if _compatibility_skeleton_sync_frames_remaining > 0:
+		_compatibility_skeleton_sync_frames_remaining -= 1
+	if _compatibility_skeleton_sync_frames_remaining <= 0 and not continuous_compatibility_skeleton_sync:
+		set_process(false)
 
 
 func _physics_process(delta: float) -> void:
 	_state_time += delta
 	_update_timed_state(delta)
 	_update_movement(delta)
-	_update_procedural_pose(delta)
+	_update_animation_pose(delta)
 
 
 func configure_surface_height_source(source: Node3D) -> void:
@@ -149,7 +183,10 @@ func use_tool(target: Node3D = null, duration: float = -1.0) -> void:
 	_reset_move_progress_tracking()
 	_timed_state_duration = maxf(duration if duration > 0.0 else attack_cooldown, 0.05)
 	_timed_state_remaining = _timed_state_duration
+	var was_tool_action := _state == STATE_TOOL_ACTION
 	_set_state(STATE_TOOL_ACTION)
+	if was_tool_action:
+		_sync_animation_player(true)
 
 
 func attack_target(target: Node3D = null) -> void:
@@ -343,70 +380,9 @@ func _get_surface_height(world_position: Vector3) -> Variant:
 	return null
 
 
-func _update_procedural_pose(delta: float) -> void:
-	var locomotion_speed := 0.0
-	var locomotion_amplitude := 0.0
-	if _state == STATE_WALK:
-		locomotion_speed = 6.0
-		locomotion_amplitude = 0.44
-	elif _state == STATE_RUN:
-		locomotion_speed = 9.5
-		locomotion_amplitude = 0.72
-
-	if locomotion_speed > 0.0:
-		_animation_phase += delta * locomotion_speed
-	else:
-		_animation_phase = lerpf(_animation_phase, 0.0, clampf(delta * 5.0, 0.0, 1.0))
-
-	var swing := sin(_animation_phase) * locomotion_amplitude
-	var idle_bob := sin(_state_time * 1.4) * 0.025
-	var torso_pitch := 0.0
-	var torso_roll := 0.0
-	var left_arm_pitch := -swing * 0.75
-	var right_arm_pitch := swing * 0.45
-	var left_leg_pitch := swing
-	var right_leg_pitch := -swing
-	var hand_pitch := 0.0
-	var root_roll := 0.0
-
-	if _state == STATE_FIELD_TASK:
-		var task_wave := sin(_state_time * 7.0)
-		torso_pitch = -0.34
-		left_arm_pitch = -0.95 + task_wave * 0.16
-		right_arm_pitch = -0.9 - task_wave * 0.12
-		left_leg_pitch = 0.12
-		right_leg_pitch = -0.12
-	elif _state == STATE_TOOL_ACTION:
-		var progress := 1.0 - clampf(_timed_state_remaining / maxf(_timed_state_duration, 0.05), 0.0, 1.0)
-		var thrust := sin(progress * PI)
-		torso_pitch = -0.18 * thrust
-		right_arm_pitch = -1.45 * thrust
-		left_arm_pitch = -0.28 * thrust
-		hand_pitch = -0.35 * thrust
-	elif _state == STATE_DEAD:
-		root_roll = 1.45
-		torso_pitch = 0.15
-		left_arm_pitch = -0.25
-		right_arm_pitch = 0.3
-		left_leg_pitch = 0.2
-		right_leg_pitch = -0.18
-
-	if _model_root:
-		_model_root.rotation.z = lerp_angle(_model_root.rotation.z, root_roll, clampf(delta * 7.0, 0.0, 1.0))
-		_model_root.position.y = idle_bob if is_alive() else 0.0
-	if _torso:
-		_torso.rotation.x = lerp_angle(_torso.rotation.x, torso_pitch, clampf(delta * 10.0, 0.0, 1.0))
-		_torso.rotation.z = lerp_angle(_torso.rotation.z, torso_roll, clampf(delta * 10.0, 0.0, 1.0))
-	if _left_arm:
-		_left_arm.rotation.x = lerp_angle(_left_arm.rotation.x, left_arm_pitch, clampf(delta * 12.0, 0.0, 1.0))
-	if _right_arm:
-		_right_arm.rotation.x = lerp_angle(_right_arm.rotation.x, right_arm_pitch, clampf(delta * 12.0, 0.0, 1.0))
-	if _left_leg:
-		_left_leg.rotation.x = lerp_angle(_left_leg.rotation.x, left_leg_pitch, clampf(delta * 12.0, 0.0, 1.0))
-	if _right_leg:
-		_right_leg.rotation.x = lerp_angle(_right_leg.rotation.x, right_leg_pitch, clampf(delta * 12.0, 0.0, 1.0))
-	if _right_hand_socket:
-		_right_hand_socket.rotation.x = lerp_angle(_right_hand_socket.rotation.x, hand_pitch, clampf(delta * 12.0, 0.0, 1.0))
+func _update_animation_pose(_delta: float) -> void:
+	if _uses_imported_animation_player():
+		_update_animation_player_driven_pose()
 
 
 func _set_state(next_state: StringName) -> void:
@@ -419,11 +395,223 @@ func _set_state(next_state: StringName) -> void:
 	_sync_animation_player()
 
 
-func _sync_animation_player() -> void:
+func _resolve_animation_player() -> void:
+	if _animation_player and _animation_player.get_animation_list().size() > 0:
+		return
+
+	var search_roots: Array[Node] = []
+	if _external_model_root:
+		search_roots.append(_external_model_root)
+	if _model_root and _model_root != _external_model_root:
+		search_roots.append(_model_root)
+
+	for root in search_roots:
+		var found := _find_animation_player_with_clips(root)
+		if found:
+			_animation_player = found
+			return
+
+
+func _find_animation_player_with_clips(root: Node) -> AnimationPlayer:
+	if root is AnimationPlayer:
+		var player := root as AnimationPlayer
+		if player.get_animation_list().size() > 0:
+			return player
+
+	for child in root.get_children():
+		var found := _find_animation_player_with_clips(child)
+		if found:
+			return found
+
+	return null
+
+
+func _resolve_external_skeleton() -> void:
+	if _external_skeleton:
+		return
+	if _external_model_root:
+		_external_skeleton = _find_external_skeleton(_external_model_root)
+
+
+func _find_external_skeleton(root: Node) -> Skeleton3D:
+	if root is Skeleton3D:
+		return root as Skeleton3D
+
+	for child in root.get_children():
+		var found := _find_external_skeleton(child)
+		if found:
+			return found
+
+	return null
+
+
+func _configure_compatibility_bone_targets() -> void:
+	_compatibility_bone_nodes.clear()
+	_compatibility_bone_indices.clear()
+	_compatibility_bone_basis_offsets.clear()
+	if not _external_skeleton:
+		return
+
+	_register_compatibility_bone_target(_torso, &"Chest")
+	_register_compatibility_bone_target(_head, &"Head")
+	_register_compatibility_bone_target(_left_arm, &"UpperArm.L")
+	_register_compatibility_bone_target(_right_arm, &"UpperArm.R")
+	_register_compatibility_bone_target(_left_leg, &"UpperLeg.L")
+	_register_compatibility_bone_target(_right_leg, &"UpperLeg.R")
+	_register_compatibility_bone_target(_right_hand_socket, &"Hand.R")
+
+
+func _register_compatibility_bone_target(target: Node3D, bone_name: StringName) -> void:
+	if not target:
+		return
+
+	var bone_index := _external_skeleton.find_bone(String(bone_name))
+	if bone_index < 0:
+		push_warning("Missing imported humanoid bone '%s' for %s" % [String(bone_name), target.get_path()])
+		return
+
+	var bone_rest_transform := _external_skeleton.global_transform * _external_skeleton.get_bone_global_rest(bone_index)
+	var bone_rest_basis := bone_rest_transform.basis.orthonormalized()
+	var target_basis := target.global_transform.basis.orthonormalized()
+	_compatibility_bone_nodes.append(target)
+	_compatibility_bone_indices.append(bone_index)
+	_compatibility_bone_basis_offsets.append(bone_rest_basis.inverse() * target_basis)
+
+
+func _sync_compatibility_armature_to_external_skeleton() -> void:
+	if not sync_compatibility_armature_to_external_skeleton or not _external_skeleton:
+		return
+
+	for index in range(_compatibility_bone_nodes.size()):
+		var target := _compatibility_bone_nodes[index]
+		if not is_instance_valid(target):
+			continue
+		var bone_index := _compatibility_bone_indices[index]
+		var bone_global_transform := _external_skeleton.global_transform * _external_skeleton.get_bone_global_pose(bone_index)
+		var corrected_basis := bone_global_transform.basis.orthonormalized()
+		if index < _compatibility_bone_basis_offsets.size():
+			corrected_basis *= _compatibility_bone_basis_offsets[index]
+		target.global_transform = Transform3D(
+			corrected_basis,
+			bone_global_transform.origin
+		)
+
+
+func _uses_imported_animation_player() -> bool:
+	if not _external_skeleton:
+		_resolve_external_skeleton()
+	if not _animation_player:
+		_resolve_animation_player()
+	return _external_skeleton != null and _animation_player != null and _animation_player.get_animation_list().size() > 0
+
+
+func _update_animation_player_driven_pose() -> void:
+	_sync_animation_playback_speed()
+	_sync_compatibility_armature_to_external_skeleton()
+
+
+func _sync_animation_playback_speed() -> void:
 	if not _animation_player:
 		return
-	if not _animation_player.has_animation(String(_state)):
+
+	var target_speed := _get_animation_playback_speed_scale()
+	if absf(_animation_player.speed_scale - target_speed) <= 0.001:
 		return
-	if _animation_player.current_animation == String(_state):
+	_animation_player.speed_scale = target_speed
+
+
+func _get_animation_playback_speed_scale() -> float:
+	match _state:
+		STATE_RUN:
+			return clampf(run_speed / maxf(walk_speed, 0.1), 1.0, 2.4)
+		STATE_TOOL_ACTION:
+			var animation_name := _get_animation_name_for_state(_state)
+			if animation_name != &"":
+				var animation := _animation_player.get_animation(String(animation_name))
+				if animation and _timed_state_duration > 0.0:
+					return clampf(animation.length / maxf(_timed_state_duration, 0.05), 0.2, 2.5)
+			return 1.0
+		_:
+			return 1.0
+
+
+func _schedule_compatibility_skeleton_sync(frames: int = INITIAL_EXTERNAL_SKELETON_SYNC_FRAMES) -> void:
+	if not sync_compatibility_armature_to_external_skeleton or not _external_skeleton:
 		return
-	_animation_player.play(String(_state))
+
+	if not continuous_compatibility_skeleton_sync:
+		_compatibility_skeleton_sync_frames_remaining = maxi(
+			_compatibility_skeleton_sync_frames_remaining,
+			maxi(frames, 1)
+		)
+	set_process(true)
+	call_deferred("_sync_compatibility_armature_to_external_skeleton")
+
+
+func _disable_external_scene_helpers() -> void:
+	if _external_model_root:
+		_disable_external_scene_helpers_recursive(_external_model_root)
+
+
+func _disable_external_scene_helpers_recursive(root: Node) -> void:
+	if root is Camera3D:
+		var camera := root as Camera3D
+		camera.current = false
+		camera.visible = false
+	elif root is Light3D:
+		var light := root as Light3D
+		light.visible = false
+		light.light_energy = 0.0
+
+	for child in root.get_children():
+		_disable_external_scene_helpers_recursive(child)
+
+
+func _sync_animation_player(force_restart: bool = false) -> void:
+	if not _animation_player:
+		_resolve_animation_player()
+	if not _animation_player:
+		return
+
+	var animation_name := _get_animation_name_for_state(_state)
+	if animation_name == &"":
+		if _state == STATE_DEAD:
+			_animation_player.stop(false)
+		return
+
+	var animation_name_string := String(animation_name)
+	var animation := _animation_player.get_animation(animation_name_string)
+	if animation:
+		animation.loop_mode = Animation.LOOP_LINEAR if _should_loop_animation(_state) else Animation.LOOP_NONE
+	_sync_animation_playback_speed()
+	if not force_restart and _animation_player.current_animation == animation_name_string and _animation_player.is_playing():
+		return
+
+	_animation_player.play(animation_name_string)
+
+
+func _get_animation_name_for_state(state: StringName) -> StringName:
+	for animation_name in _get_animation_candidates_for_state(state):
+		if _animation_player.has_animation(String(animation_name)):
+			return animation_name
+	return &""
+
+
+func _get_animation_candidates_for_state(state: StringName) -> Array[StringName]:
+	match state:
+		STATE_IDLE:
+			return [&"Armature|Standing", &"Standing", &"Armature|_Default", &"_Default"]
+		STATE_WALK:
+			return [&"Armature|Walk", &"Walk"]
+		STATE_RUN:
+			return [&"Armature|Run", &"Run"]
+		STATE_FIELD_TASK:
+			return [&"spear-soldier/Training", &"Training", &"Armature|CrouchSwing", &"CrouchSwing", &"Armature|CrouchIdle", &"CrouchIdle"]
+		STATE_TOOL_ACTION:
+			return [&"spear-soldier/Fight", &"spear-soldier/Fighting", &"Fight", &"Fighting", &"Armature|Swing", &"Swing", &"Armature|Punch", &"Punch"]
+		_:
+			return []
+
+
+func _should_loop_animation(state: StringName) -> bool:
+	return state == STATE_IDLE or state == STATE_WALK or state == STATE_RUN or state == STATE_FIELD_TASK

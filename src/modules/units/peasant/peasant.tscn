@@ -1,20 +1,24 @@
-[gd_scene format=3 uid="uid://23wwcdcwsj0a"]
+[gd_scene load_steps=10 format=3 uid="uid://23wwcdcwsj0a"]
 
-[ext_resource type="PackedScene" path="res://modules/units/human/human.tscn" id="1_human"]
-[ext_resource type="Script" uid="uid://bhoey8ait0jqf" path="res://modules/units/peasant/peasant_npc.gd" id="2_peasant_script"]
+[ext_resource type="Script" uid="uid://bhoey8ait0jqf" path="res://modules/units/peasant/peasant_npc.gd" id="1_peasant_script"]
+[ext_resource type="PackedScene" uid="uid://sqw8p7drfmqo" path="res://modules/units/human/person_animated.tscn" id="2_person"]
 [ext_resource type="PackedScene" path="res://modules/units/human/low_poly_hoe.tscn" id="3_hoe"]
 
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.32
+height = 1.45
+
 [sub_resource type="BoxMesh" id="BoxMesh_sash"]
-size = Vector3(0.46, 0.08, 0.035)
+size = Vector3(0.01095, 0.0019, 0.0009)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_sash"]
 albedo_color = Color(0.62, 0.34, 0.18, 1)
 roughness = 0.88
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_hat_brim"]
-top_radius = 0.36
-bottom_radius = 0.42
-height = 0.035
+top_radius = 0.0076
+bottom_radius = 0.0088
+height = 0.00085
 radial_segments = 10
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_straw"]
@@ -22,13 +26,13 @@ albedo_color = Color(0.78, 0.62, 0.27, 1)
 roughness = 0.92
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_hat_cap"]
-top_radius = 0.08
-bottom_radius = 0.28
-height = 0.18
+top_radius = 0.002
+bottom_radius = 0.0063
+height = 0.0042
 radial_segments = 10
 
-[node name="Peasant" unique_id=1128011371 instance=ExtResource("1_human")]
-script = ExtResource("2_peasant_script")
+[node name="Peasant" type="CharacterBody3D" unique_id=1128011371]
+script = ExtResource("1_peasant_script")
 behavior_enabled = true
 min_idle_seconds = 1.0
 max_idle_seconds = 3.5
@@ -46,21 +50,80 @@ walk_speed = 1.35
 run_speed = 2.85
 attack_damage = 6.0
 attack_cooldown = 1.15
+external_skeleton_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D")
+torso_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/ChestAttachment")
+head_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/HeadAttachment")
+left_arm_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/LeftArmAttachment")
+right_arm_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/RightArmAttachment")
+left_leg_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/LeftLegAttachment")
+right_leg_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/RightLegAttachment")
+right_hand_socket_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/RightHandAttachment/RightHandSocket")
+animation_player_path = NodePath("VisualRoot/ExternalModelSocket/PersonAnimated/AnimationPlayer")
+sync_compatibility_armature_to_external_skeleton = false
+continuous_compatibility_skeleton_sync = false
 
-[node name="Sash" type="MeshInstance3D" parent="VisualRoot/Armature/Torso" index="1" unique_id=931238857]
-transform = Transform3D(0.866025, -0.5, 0, 0.5, 0.866025, 0, 0, 0, 1, 0, -0.08, -0.145)
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.72, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="VisualRoot" type="Node3D" parent="."]
+
+[node name="ExternalModelSocket" type="Node3D" parent="VisualRoot"]
+
+[node name="PersonAnimated" parent="VisualRoot/ExternalModelSocket" instance=ExtResource("2_person")]
+transform = Transform3D(0.42, 0, 0, 0, 0.42, 0, 0, 0, 0.42, 0, 0.597, 0)
+
+[node name="Lamp" parent="VisualRoot/ExternalModelSocket/PersonAnimated" index="1"]
+visible = false
+light_energy = 0.0
+
+[node name="Camera" parent="VisualRoot/ExternalModelSocket/PersonAnimated" index="2"]
+visible = false
+current = false
+
+[node name="AnimationPlayer" parent="VisualRoot/ExternalModelSocket/PersonAnimated" index="3"]
+autoplay = "Armature|Standing"
+
+[node name="ChestAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "Chest"
+
+[node name="Sash" type="MeshInstance3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/ChestAttachment" unique_id=931238857]
+transform = Transform3D(0.866025, -0.5, 0, 0.5, 0.866025, 0, 0, 0, 1, 0, -0.004, -0.0032)
 mesh = SubResource("BoxMesh_sash")
 surface_material_override/0 = SubResource("StandardMaterial3D_sash")
 
-[node name="HatBrim" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="2" unique_id=1713046094]
-transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.2, 0)
+[node name="HeadAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "Head"
+
+[node name="HatBrim" type="MeshInstance3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/HeadAttachment" unique_id=1713046094]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.0055, 0)
 mesh = SubResource("CylinderMesh_hat_brim")
 surface_material_override/0 = SubResource("StandardMaterial3D_straw")
 
-[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/Armature/Head" index="3" unique_id=2121534040]
-transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.29, 0)
+[node name="HatCap" type="MeshInstance3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/HeadAttachment" unique_id=2121534040]
+transform = Transform3D(1, 0, 0, 0, 0.984808, -0.173648, 0, 0.173648, 0.984808, 0, 0.0081, 0)
 mesh = SubResource("CylinderMesh_hat_cap")
 surface_material_override/0 = SubResource("StandardMaterial3D_straw")
 
-[node name="LowPolyHoe" parent="VisualRoot/Armature/RightArm/RightHandSocket" index="0" unique_id=519742723 instance=ExtResource("3_hoe")]
-transform = Transform3D(-0.09122348, 0, -0.9958302, 0, 1, 0, 0.9958302, 0, -0.09122348, 0.03000006, 0.027826637, -0.020000007)
+[node name="LeftArmAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "UpperArm.L"
+
+[node name="RightArmAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "UpperArm.R"
+
+[node name="RightHandAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "Hand.R"
+
+[node name="RightHandSocket" type="Node3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/RightHandAttachment"]
+transform = Transform3D(-0.0325249, 0.995543, 0.0885227, 0.12956, -0.0836226, 0.988039, 0.991038, 0.0436049, -0.126263, 0, 0, 0)
+
+[node name="LowPolyHoe" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D/RightHandAttachment/RightHandSocket" unique_id=519742723 instance=ExtResource("3_hoe")]
+transform = Transform3D(0, -0.021, 0, 0.021, 0, 0, 0, 0, 0.021, 0, 0, 0)
+
+[node name="LeftLegAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "UpperLeg.L"
+
+[node name="RightLegAttachment" type="BoneAttachment3D" parent="VisualRoot/ExternalModelSocket/PersonAnimated/Armature/Skeleton3D"]
+bone_name = "UpperLeg.R"
+
+[editable path="VisualRoot/ExternalModelSocket/PersonAnimated"]
