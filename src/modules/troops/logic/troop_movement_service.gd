@@ -4,6 +4,7 @@ class_name TroopMovementService
 const MovementMapPathfinderScript = preload("res://modules/troops/movement_map_pathfinder.gd")
 
 var movement_logic: Resource
+var _pending_soldier_move_commands: Array[Dictionary] = []
 
 
 func set_movement_logic(logic: Resource) -> void:
@@ -15,6 +16,7 @@ func physics_tick(delta: float) -> void:
 	if not troop:
 		return
 	if troop._state == troop.STATE_MOVING:
+		_process_pending_soldier_move_commands(troop)
 		follow_path(delta)
 		troop._route_refresh_remaining -= delta
 		if troop._route_refresh_remaining <= 0.0:
@@ -29,7 +31,7 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 	var troop = _troop()
 	if not troop:
 		return false
-	var was_moving_with_destination: bool = troop._state == troop.STATE_MOVING and troop._has_destination and not troop._path_points.is_empty()
+	_pending_soldier_move_commands.clear()
 	var should_regroup_scattered_positions: bool = manual_command and troop._hold_scattered_positions_after_combat
 	if manual_command:
 		if troop.is_mission_troop and troop._is_mission_active() and not troop._mission_internal_command:
@@ -46,6 +48,7 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 		if not troop._explicit_formation_destination_yaw_for_next_move:
 			troop._formation_destination_yaw_active = false
 		troop._manual_move_override_active = false
+		troop._clear_formation_motion_commands()
 		troop._emit_destination_changed()
 		return false
 
@@ -69,6 +72,7 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 		troop._clear_route_visual()
 		troop._set_state(troop.STATE_BLOCKED)
 		troop._manual_move_override_active = false
+		troop._clear_formation_motion_commands()
 		troop._emit_destination_changed()
 		return false
 
@@ -93,12 +97,14 @@ func set_move_destination(world_position: Vector3, manual_command: bool = true) 
 		troop._formation_destination_yaw_active = false
 	troop._has_destination = true
 	troop._route_refresh_remaining = 0.0
+	troop._route_visual_command_id += 1
 	troop._manual_move_override_active = manual_command
-	troop._update_route_visual()
 	troop._set_state(troop.STATE_MOVING)
 	troop._hold_scattered_positions_after_combat = false
 	troop._regroup_scattered_positions_on_move = should_regroup_scattered_positions
-	troop._issue_formation_path_to_soldiers(was_moving_with_destination)
+	_queue_soldier_move_commands(troop)
+	_process_pending_soldier_move_commands(troop)
+	troop._update_route_visual()
 	troop._prime_formation_motion_facing(troop._get_formation_path_direction(troop._get_moving_retarget_formation_path_index()))
 	troop._emit_destination_changed()
 	return true
@@ -108,6 +114,7 @@ func stop_movement() -> void:
 	var troop = _troop()
 	if not troop:
 		return
+	_pending_soldier_move_commands.clear()
 	if troop.is_mission_troop and troop._is_mission_active() and not troop._mission_internal_command:
 		troop._mission_paused = true
 	troop._manual_attack_target = null
@@ -158,30 +165,10 @@ func follow_path(delta: float) -> void:
 	var troop = _troop()
 	if not troop:
 		return
-	if troop._current_path_index >= troop._path_points.size():
-		troop._finish_movement()
+	if not troop._has_destination:
 		return
-
-	var previous_transform: Transform3D = troop.global_transform
+	troop._sync_movement_anchor_to_flag_point()
 	troop._advance_reached_path_points()
-	if troop._current_path_index >= troop._path_points.size():
-		troop._finish_movement()
-		return
-
-	var target: Vector3 = troop._get_route_steering_target()
-	var to_target: Vector3 = target - troop.global_position
-	to_target.y = 0.0
-	var distance: float = to_target.length()
-	if distance <= 0.001:
-		target = troop._path_points[troop._current_path_index]
-		to_target = target - troop.global_position
-		to_target.y = 0.0
-		distance = to_target.length()
-		if distance <= 0.001:
-			return
-
-	var direction: Vector3 = to_target / distance
-	var turn_multiplier := 1.0
 	if troop._formation_destination_yaw_active:
 		troop.rotation.y = troop._formation_destination_yaw
 		troop._last_turn_delta = 0.0
@@ -189,15 +176,85 @@ func follow_path(delta: float) -> void:
 	else:
 		troop._last_turn_delta = 0.0
 		troop._last_turn_intensity = 0.0
-	var move_delta := minf(maxf(delta, 0.0), 0.05)
-	var current_speed: float = troop._get_current_movement_speed_mps()
-	troop.global_position += direction * minf(current_speed * turn_multiplier * move_delta, distance)
 	troop._drain_soldier_endurance(troop._get_movement_endurance_loss_rate() * delta)
 	troop._snap_to_surface()
-	troop._carry_formation_soldiers_between_transforms(previous_transform, troop.global_transform)
-	troop._advance_reached_path_points()
-	if troop._current_path_index >= troop._path_points.size():
+	if _pending_soldier_move_commands.is_empty() and not _any_soldier_has_independent_motion(troop):
 		troop._finish_movement()
+
+
+func _queue_soldier_move_commands(troop: Node) -> void:
+	_pending_soldier_move_commands.clear()
+	var soldiers: Array = troop._get_active_soldiers()
+	if soldiers.is_empty():
+		return
+	var yaw := float(troop.rotation.y)
+	if troop._formation_destination_yaw_active:
+		yaw = float(troop._formation_destination_yaw)
+	var basis := Basis(Vector3.UP, yaw)
+	var arrival := maxf(float(troop.arrival_radius) * 0.32, 0.18)
+	for soldier_node: Node in soldiers:
+		if not (soldier_node is Node3D):
+			continue
+		if soldier_node.has_meta(&"troop_carrier_active"):
+			continue
+		if soldier_node.has_method("clear_independent_motion"):
+			soldier_node.call("clear_independent_motion")
+		var soldier := soldier_node as Node3D
+		var slot: Vector3 = soldier.get_meta(&"troop_formation_slot", Vector3.ZERO)
+		var destination: Vector3 = troop._snap_world_point(troop._destination + basis * slot)
+		_pending_soldier_move_commands.append({
+			"soldier": soldier,
+			"destination": destination,
+			"speed": troop._get_soldier_slot_follow_speed(soldier),
+			"arrival": arrival,
+		})
+
+
+func _process_pending_soldier_move_commands(troop: Node) -> void:
+	if _pending_soldier_move_commands.is_empty():
+		return
+	var budget := _get_soldier_path_query_budget(troop)
+	var processed := 0
+	while processed < budget and not _pending_soldier_move_commands.is_empty():
+		processed += 1
+		var command: Dictionary = _pending_soldier_move_commands.pop_front()
+		var soldier := command.get("soldier") as Node
+		if not is_instance_valid(soldier) or not troop._is_soldier_active(soldier):
+			continue
+		if soldier.has_meta(&"troop_carrier_active"):
+			continue
+		var destination: Vector3 = command.get("destination", Vector3.ZERO)
+		var speed := maxf(float(command.get("speed", 1.0)), 0.1)
+		var arrival := maxf(float(command.get("arrival", 0.24)), 0.05)
+		if soldier.has_method("set_independent_path_target"):
+			soldier.call(
+				"set_independent_path_target",
+				destination,
+				troop._movement_map,
+				speed,
+				arrival,
+				troop.nearest_walkable_search_radius_cells,
+				troop.path_smoothing_enabled,
+				troop.path_corner_radius_cells,
+				troop.path_corner_samples
+			)
+		elif soldier.has_method("set_independent_move_target"):
+			soldier.call("set_independent_move_target", destination, speed, arrival)
+
+
+func _get_soldier_path_query_budget(troop: Node) -> int:
+	if troop and troop.has_method("_get_soldier_path_queries_per_tick"):
+		return maxi(int(troop.call("_get_soldier_path_queries_per_tick")), 1)
+	if troop and troop.get("soldier_path_queries_per_tick") != null:
+		return maxi(int(troop.get("soldier_path_queries_per_tick")), 1)
+	return 64
+
+
+func _any_soldier_has_independent_motion(troop: Node) -> bool:
+	for soldier: Node in troop._get_active_soldiers():
+		if soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion")):
+			return true
+	return false
 
 
 func get_current_movement_speed_mps(troop: Node) -> float:

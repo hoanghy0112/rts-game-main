@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://bsr8go36t5ns3" path="res://modules/units/troop_soldier/troop_soldier.gd" id="1_troop_soldier"]
 [ext_resource type="PackedScene" uid="uid://sqw8p7drfmqo" path="res://modules/units/human/person_animated.tscn" id="2_person"]
 [ext_resource type="PackedScene" uid="uid://cay0jcqir1y1s" path="res://modules/units/human/low_poly_spear.tscn" id="3_spear"]
+[ext_resource type="AnimationLibrary" path="res://modules/units/troop_soldier/spear_soldier_transition_animations.tres" id="4_transitions"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
 radius = 0.32
@@ -1305,6 +1306,7 @@ visible = false
 
 [node name="AnimationPlayer" parent="VisualRoot/ExternalModelSocket/PersonAnimated" index="3" unique_id=183040778]
 libraries/spear-soldier = SubResource("AnimationLibrary_y2882")
+libraries/spear-soldier-transitions = ExtResource("4_transitions")
 autoplay = &"Armature|Standing"
 speed_scale = 0.572
 

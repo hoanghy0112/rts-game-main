@@ -96,6 +96,7 @@ time_system_path = NodePath("../GameTimeSystem")
 force_visible = true
 movement_map_overlay_enabled = true
 route_visuals_enabled = true
+individual_route_paths_enabled = false
 tile_grid_enabled = true
 
 [node name="TroopSelectionController" type="Node" parent="."]

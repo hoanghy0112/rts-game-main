@@ -2,6 +2,7 @@ extends Node3D
 class_name TroopCorpseManager
 
 const CUSTOM_AABB_MARGIN_M := 8.0
+const LIVE_CORPSE_NODE_META := &"troop_live_corpse_node"
 
 @export_range(0, 4096, 1, "or_greater") var max_visible_corpse_count: int = 0
 @export_range(0, 32768, 1, "or_greater") var max_visible_mesh_part_count: int = 0
@@ -13,6 +14,7 @@ const CUSTOM_AABB_MARGIN_M := 8.0
 var _batches: Dictionary = {}
 var _transforms_by_key: Dictionary = {}
 var _capacities_by_key: Dictionary = {}
+var _live_corpses: Array[Node3D] = []
 var _corpse_count := 0
 var _mesh_part_count := 0
 var _skipped_corpse_count := 0
@@ -38,6 +40,8 @@ func register_soldier_corpse(soldier: Node3D) -> bool:
 		return false
 	if soldier.has_method("_enter_corpse_state"):
 		soldier.call("_enter_corpse_state")
+	if _should_preserve_as_live_corpse(soldier):
+		return _register_live_soldier_corpse(soldier)
 
 	var captured := 0
 	var mesh_nodes := soldier.find_children("*", "MeshInstance3D", true, false)
@@ -69,6 +73,10 @@ func get_batch_count() -> int:
 	return _batches.size()
 
 
+func get_live_corpse_count() -> int:
+	return _live_corpses.size()
+
+
 func get_mesh_part_count() -> int:
 	return _mesh_part_count
 
@@ -80,6 +88,7 @@ func clear_all_corpses() -> void:
 	_batches.clear()
 	_transforms_by_key.clear()
 	_capacities_by_key.clear()
+	_live_corpses.clear()
 	_corpse_count = 0
 	_mesh_part_count = 0
 	_skipped_corpse_count = 0
@@ -90,6 +99,7 @@ func get_debug_summary() -> Dictionary:
 	return {
 		"corpse_count": _corpse_count,
 		"corpse_batch_count": _batches.size(),
+		"corpse_live_count": _live_corpses.size(),
 		"corpse_mesh_part_count": _mesh_part_count,
 		"corpse_skipped_count": _skipped_corpse_count,
 		"corpse_skipped_mesh_part_count": _skipped_mesh_part_count,
@@ -97,6 +107,76 @@ func get_debug_summary() -> Dictionary:
 		"corpse_max_visible_mesh_part_count": max_visible_mesh_part_count,
 		"corpse_max_visible_batch_count": max_visible_batch_count,
 	}
+
+
+func _should_preserve_as_live_corpse(soldier: Node3D) -> bool:
+	for node: Node in soldier.find_children("*", "MeshInstance3D", true, false):
+		var source := node as MeshInstance3D
+		if not source or not source.mesh or not source.visible:
+			continue
+		var skin: Variant = source.get("skin")
+		if skin is Skin:
+			return true
+		var skeleton_path := NodePath(source.get("skeleton"))
+		if not skeleton_path.is_empty():
+			return true
+	return false
+
+
+func _register_live_soldier_corpse(soldier: Node3D) -> bool:
+	var captured := _count_visible_mesh_parts(soldier)
+	if captured <= 0:
+		_skipped_corpse_count += 1
+		return false
+	if max_visible_mesh_part_count > 0 and _mesh_part_count + captured > max_visible_mesh_part_count:
+		_skipped_corpse_count += 1
+		return false
+	var previous_global_transform := soldier.global_transform
+	var previous_parent := soldier.get_parent()
+	if previous_parent:
+		previous_parent.remove_child(soldier)
+	add_child(soldier)
+	soldier.owner = null
+	soldier.top_level = true
+	soldier.global_transform = previous_global_transform
+	soldier.set_meta(LIVE_CORPSE_NODE_META, true)
+	if soldier.has_meta(&"troop_pending_combat_removal"):
+		soldier.remove_meta(&"troop_pending_combat_removal")
+	if soldier.has_meta(&"troop_live_animation_source"):
+		soldier.remove_meta(&"troop_live_animation_source")
+	_freeze_live_corpse_tree(soldier)
+	_live_corpses.append(soldier)
+	_corpse_count += 1
+	_mesh_part_count += captured
+	return true
+
+
+func _count_visible_mesh_parts(root_node: Node) -> int:
+	var count := 0
+	for node: Node in root_node.find_children("*", "MeshInstance3D", true, false):
+		var source := node as MeshInstance3D
+		if source and source.mesh and source.visible:
+			count += 1
+	return count
+
+
+func _freeze_live_corpse_tree(node: Node) -> void:
+	node.process_mode = Node.PROCESS_MODE_DISABLED
+	node.set_process(false)
+	node.set_physics_process(false)
+	if node is AnimationPlayer:
+		var animation_player := node as AnimationPlayer
+		animation_player.pause()
+		animation_player.active = false
+	if node is CollisionObject3D:
+		var collision := node as CollisionObject3D
+		collision.collision_layer = 0
+		collision.collision_mask = 0
+		collision.input_ray_pickable = false
+	if node is CollisionShape3D:
+		(node as CollisionShape3D).disabled = true
+	for child: Node in node.get_children():
+		_freeze_live_corpse_tree(child)
 
 
 func _append_source_mesh(source: MeshInstance3D) -> void:

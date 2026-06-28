@@ -96,7 +96,7 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_moving_retarget_skips_startup_reform(failures)
 	await _check_moving_compacts_missing_formation_slots(failures)
 	await _check_formation_drag_command(failures)
-	await _check_enemy_route_visuals_are_hidden(failures)
+	await _check_enemy_route_visuals_use_enemy_color(failures)
 	await _check_troop_modes_and_combat_stats(failures)
 	await _check_large_troop_stat_worker_path(failures)
 	await _check_endurance_running_and_noncombat_recovery(failures)
@@ -388,12 +388,16 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	_expect(accepted, "troop should accept a reachable movement order", failures)
 	_expect(bool(troop.call("has_destination")), "troop should store a destination after a move order", failures)
 	_expect(int(troop.call("get_route_dash_count")) > 0, "troop should draw dashed route visuals", failures)
+	_expect(_route_dash_color_matches(troop, Color(0.12, 0.42, 1.0, 0.88), 0.02), "ally route dashes should use blue debug color", failures)
 	_expect(bool(troop.call("has_destination_marker")), "troop should draw a destination flag", failures)
 	_expect(_flag_uses_unshaded_materials(troop, "TroopDestinationFlag"), "destination flag should ignore scene lighting", failures)
 	var moving_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
 	if moving_soldier and moving_soldier.has_method("is_formation_walking"):
 		_expect(bool(moving_soldier.call("is_formation_walking")), "troop soldier should play walking animation while troop moves", failures)
-	_expect(_all_soldier_route_paths_empty(troop), "moving troops should not issue per-soldier route paths", failures)
+	_expect(_any_soldier_route_path_nonempty(troop), "moving troops should issue per-soldier route paths", failures)
+	troop.set("individual_route_debug_visuals_enabled", true)
+	_expect(int(troop.call("get_route_dash_count")) > 0, "individual route mode should draw per-soldier route dashes", failures)
+	troop.set("individual_route_debug_visuals_enabled", false)
 	if moving_soldier is Node3D:
 		var before_anchor_shift := (moving_soldier as Node3D).global_position
 		troop.global_position += Vector3(2.0, 0.0, 0.0)
@@ -427,6 +431,23 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 
 	root.remove_child(troop)
 	troop.free()
+
+	var trim_troop := TroopScene.instantiate()
+	trim_troop.set("movement_map", _make_map(8, 8))
+	trim_troop.set("position", Vector3(0.5, 0.0, 0.5))
+	root.add_child(trim_troop)
+	await process_frame
+	_expect(bool(trim_troop.call("set_move_destination", Vector3(6.5, 0.0, 0.5))), "route trim troop should accept a reachable movement order", failures)
+	var trim_initial_dash_count := int(trim_troop.call("get_route_dash_count"))
+	for _route_step: int in range(12):
+		_step_troop_with_soldiers(trim_troop, 0.2)
+	_expect(
+		int(trim_troop.call("get_route_dash_count")) < trim_initial_dash_count,
+		"route visuals should trim completed dash sections instead of repainting the whole path",
+		failures
+	)
+	root.remove_child(trim_troop)
+	trim_troop.free()
 
 
 func _check_destination_arrival_settles_soldiers(failures: Array[String]) -> void:
@@ -512,7 +533,7 @@ func _check_moving_retarget_skips_startup_reform(failures: Array[String]) -> voi
 	_expect(bool(troop.call("set_move_destination", Vector3(12.5, 0.0, 44.5))), "moving retarget should accept an opposite-direction destination", failures)
 	if first_soldier:
 		var path_points: Array = first_soldier.get("_independent_path_points")
-		_expect(path_points.is_empty(), "moving retarget should not issue a per-soldier route path", failures)
+		_expect(not path_points.is_empty(), "moving retarget should issue a fresh per-soldier route path", failures)
 		if first_soldier is Node3D:
 			_expect((first_soldier as Node3D).has_meta(&"troop_formation_slot"), "opposite-direction retarget should keep a live formation slot", failures)
 	var changed_retarget_slots := 0
@@ -525,7 +546,7 @@ func _check_moving_retarget_skips_startup_reform(failures: Array[String]) -> voi
 			changed_retarget_slots += 1
 	_expect(changed_retarget_slots == 0, "ordinary moving retarget should preserve soldier formation slots", failures)
 	_step_troop_with_soldiers(troop, 0.1)
-	_expect(_all_soldier_route_paths_empty(troop), "moving retarget should continue using the formation anchor instead of soldier route paths", failures)
+	_expect(_any_soldier_route_path_nonempty(troop), "moving retarget should keep soldiers on independent command routes", failures)
 
 	root.remove_child(troop)
 	troop.free()
@@ -562,7 +583,7 @@ func _check_simple_move_preserves_formation_slots(failures: Array[String]) -> vo
 		if before_slot.distance_to(assigned_slot) > 0.05:
 			changed_slots += 1
 	_expect(changed_slots == 0, "ordinary move should preserve soldier formation slots", failures)
-	_expect(_all_soldier_route_paths_empty(troop), "ordinary move should use the formation anchor instead of per-soldier route paths", failures)
+	_expect(_any_soldier_route_path_nonempty(troop), "ordinary move should issue per-soldier route paths", failures)
 
 	_step_troop_with_soldiers(troop, 0.25)
 	for soldier: Node in _get_active_soldier_nodes(troop):
@@ -656,7 +677,7 @@ func _check_formation_drag_command(failures: Array[String]) -> void:
 	controller.free()
 
 
-func _check_enemy_route_visuals_are_hidden(failures: Array[String]) -> void:
+func _check_enemy_route_visuals_use_enemy_color(failures: Array[String]) -> void:
 	var enemy := TroopScene.instantiate()
 	enemy.set("team_id", &"enemy")
 	enemy.set("controllable", false)
@@ -668,8 +689,9 @@ func _check_enemy_route_visuals_are_hidden(failures: Array[String]) -> void:
 	var accepted: bool = bool(enemy.call("set_move_destination", Vector3(12.5, 0.0, 12.5)))
 	_expect(accepted, "enemy troop should still accept internal movement orders", failures)
 	_expect(bool(enemy.call("has_destination")), "enemy internal movement should store a destination", failures)
-	_expect(int(enemy.call("get_route_dash_count")) == 0, "enemy troops should not draw route dashes", failures)
-	_expect(not bool(enemy.call("has_destination_marker")), "enemy troops should not draw destination flags", failures)
+	_expect(int(enemy.call("get_route_dash_count")) > 0, "enemy troops should draw route dashes", failures)
+	_expect(_route_dash_color_matches(enemy, Color(1.0, 0.12, 0.08, 0.88), 0.02), "enemy route dashes should use red debug color", failures)
+	_expect(bool(enemy.call("has_destination_marker")), "enemy troops should draw destination flags", failures)
 
 	var player := TroopScene.instantiate()
 	player.set("team_id", &"player")
@@ -683,8 +705,10 @@ func _check_enemy_route_visuals_are_hidden(failures: Array[String]) -> void:
 	enemy.set("combat_range_m", 3.0)
 	enemy.set("chase_repath_interval", 0.05)
 	enemy.call("_physics_process", 0.2)
-	_expect(int(enemy.call("get_route_dash_count")) == 0, "enemy auto-chase should not draw route dashes", failures)
-	_expect(not bool(enemy.call("has_destination_marker")), "enemy auto-chase should not draw a destination flag", failures)
+	if bool(enemy.call("has_destination")):
+		_expect(int(enemy.call("get_route_dash_count")) > 0, "enemy auto-chase should draw route dashes", failures)
+		_expect(_route_dash_color_matches(enemy, Color(1.0, 0.12, 0.08, 0.88), 0.02), "enemy auto-chase route dashes should stay red", failures)
+		_expect(bool(enemy.call("has_destination_marker")), "enemy auto-chase should draw a destination flag", failures)
 
 	root.remove_child(player)
 	player.free()
@@ -809,14 +833,14 @@ func _check_endurance_running_and_noncombat_recovery(failures: Array[String]) ->
 	_expect(bool(troop.call("set_move_destination", Vector3(5.0, 0.0, 1.0))), "walking speed model should accept a destination", failures)
 	if speed_soldiers.size() >= 2:
 		_expect(_approx(float(troop.call("_get_formation_path_follow_speed")), 2.0, 0.001), "walking formation anchor should use the shared formation speed", failures)
-		_expect(_all_soldier_route_paths_empty(troop), "walking soldiers should not own per-soldier command routes", failures)
+		_expect(_any_soldier_route_path_nonempty(troop), "walking soldiers should own per-soldier command routes", failures)
 	troop.call("clear_destination")
 	troop.call("set_movement_mode", &"running")
 	_expect(_approx(float(troop.call("_get_current_movement_speed_mps")), 6.0, 0.001), "running troop anchor speed should use 3x the slowest active soldier run speed", failures)
 	_expect(bool(troop.call("set_move_destination", Vector3(7.0, 0.0, 1.0))), "running speed model should accept a destination", failures)
 	if speed_soldiers.size() >= 2:
 		_expect(_approx(float(troop.call("_get_formation_path_follow_speed")), 6.0, 0.001), "running formation anchor should use the shared running formation speed", failures)
-		_expect(_all_soldier_route_paths_empty(troop), "running soldiers should not own per-soldier command routes", failures)
+		_expect(_any_soldier_route_path_nonempty(troop), "running soldiers should own per-soldier command routes", failures)
 	troop.call("clear_destination")
 
 	for soldier: Node in _get_soldier_nodes(troop):
@@ -2364,6 +2388,7 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	_expect(panel.find_child("AggregateLabel", true, false) != null, "background jobs debug panel should show aggregate metrics", failures)
 	_expect(panel.find_child("SelectedLabel", true, false) != null, "background jobs debug panel should show selected troop metrics", failures)
 	_expect(panel.find_child("SoldierPerfCheckBox", true, false) != null, "background jobs debug panel should expose soldier profiling toggle", failures)
+	_expect(panel.find_child("IndividualRoutePathsCheckBox", true, false) != null, "background jobs debug panel should expose individual route path toggle", failures)
 
 	var controller := TroopSelectionControllerScript.new()
 	controller.background_jobs_debug_panel_path = panel.get_path()
@@ -2381,6 +2406,11 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	_expect(summary.has("spatial_grid_rebuilds") and summary.has("combat_socket_clamp_count"), "troop should expose spatial/socket profiling fields", failures)
 	_expect(summary.has("logic_sleeping_soldier_count"), "troop should expose sleeping soldier count", failures)
 	_expect(troop.has_method("reset_perf_debug_counters"), "troop should reset runtime profiling counters", failures)
+	var individual_paths_check_box := panel.find_child("IndividualRoutePathsCheckBox", true, false) as CheckBox
+	if individual_paths_check_box:
+		individual_paths_check_box.button_pressed = true
+		panel.call("refresh")
+		_expect(bool(troop.get("individual_route_debug_visuals_enabled")), "individual route path toggle should propagate to selected troops", failures)
 
 	for node: Node in [troop, controller, panel]:
 		if is_instance_valid(node) and node.get_parent():
@@ -2612,6 +2642,19 @@ func _color_close(actual: Color, expected: Color, tolerance: float = 0.01) -> bo
 		and absf(actual.b - expected.b) <= tolerance
 		and absf(actual.a - expected.a) <= tolerance
 	)
+
+
+func _route_dash_color_matches(root_node: Node, expected: Color, tolerance: float = 0.01) -> bool:
+	var route_visual := root_node.find_child("TroopRouteVisual", true, false)
+	if not route_visual:
+		return false
+	for child: Node in route_visual.get_children():
+		var dash := child as MeshInstance3D
+		if not dash or not String(dash.name).begins_with("RouteDash"):
+			continue
+		var material := dash.material_override as StandardMaterial3D
+		return material != null and _color_close(material.albedo_color, expected, tolerance)
+	return false
 
 
 func _flag_uses_unshaded_materials(root_node: Node, flag_name: String) -> bool:
@@ -2869,6 +2912,10 @@ func _all_soldier_route_paths_empty(troop: Node) -> bool:
 		if not path_points.is_empty():
 			return false
 	return true
+
+
+func _any_soldier_route_path_nonempty(troop: Node) -> bool:
+	return not _all_soldier_route_paths_empty(troop)
 
 
 func _combat_target_ids(troop: Node) -> Dictionary:

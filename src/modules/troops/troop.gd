@@ -40,6 +40,8 @@ const MOVEMENT_RUNNING := &"running"
 const TEAM_PLAYER := &"player"
 const TEAM_ENEMY := &"enemy"
 const TEAM_DESERTER := &"deserter"
+const ALLY_ROUTE_LINE_COLOR := Color(0.12, 0.42, 1.0, 0.88)
+const ENEMY_ROUTE_LINE_COLOR := Color(1.0, 0.12, 0.08, 0.88)
 
 const SELECTABLE_TYPE_META := &"troop_selectable_type"
 const SELECTABLE_NODE_PATH_META := &"troop_node_path"
@@ -59,6 +61,8 @@ const UNIT_SELECTION_MARKER_NAME := "TroopUnitSelectionMarker"
 const UNIT_SELECTION_PROXY_NAME := "TroopUnitClickProxy"
 const ROUTE_VISUAL_NAME := "TroopRouteVisual"
 const SOLDIER_BATCH_RENDERER_NAME := "TroopSoldierBatchRenderer"
+const LIVE_ANIMATION_SOURCE_META := &"troop_live_animation_source"
+const LIVE_CORPSE_NODE_META := &"troop_live_corpse_node"
 const COMBAT_DEBUG_LINES_NODE_NAME := "TroopCombatDebugLines"
 const CARRIER_CONTAINER_NAME := "CarrierTasks"
 const CAMP_NODE_NAME := "TroopCamp"
@@ -384,10 +388,10 @@ const MISSION_COMPLETE := &"complete"
 		if is_inside_tree():
 			_refresh_formation_slot_metas()
 @export_range(0.0, 4.0, 0.05, "or_greater") var formation_walkout_stagger: float = 0.75
-@export_range(0.0, 2.0, 0.01, "or_greater") var formation_finish_carry_max_snap_m: float = 0.20
 @export_range(0.0, 8.0, 0.05, "or_greater") var formation_collision_distance: float = 2.64
 @export_range(0.0, 16.0, 0.05, "or_greater") var formation_collision_push_speed: float = 3.2
 @export_range(0.05, 2.0, 0.05, "or_greater") var route_refresh_interval: float = 0.25
+@export_range(1, 512, 1, "or_greater") var soldier_path_queries_per_tick: int = 64
 @export var route_debug_visuals_enabled: bool = true:
 	set(value):
 		route_debug_visuals_enabled = value
@@ -396,6 +400,11 @@ const MISSION_COMPLETE := &"complete"
 				_update_route_visual()
 			else:
 				_clear_route_visual()
+@export var individual_route_debug_visuals_enabled: bool = false:
+	set(value):
+		individual_route_debug_visuals_enabled = value
+		if is_inside_tree():
+			_update_route_visual()
 
 @export_group("Combat Debug")
 @export var combat_debug_lines_enabled: bool = false:
@@ -646,13 +655,13 @@ const MISSION_COMPLETE := &"complete"
 		if is_inside_tree():
 			_apply_route_visual_settings()
 			_update_route_visual()
-@export_range(0.25, 32.0, 0.25, "or_greater") var route_dash_length: float = 5.0:
+@export_range(0.25, 32.0, 0.25, "or_greater") var route_dash_length: float = 1.25:
 	set(value):
 		route_dash_length = maxf(value, 0.25)
 		if is_inside_tree():
 			_apply_route_visual_settings()
 			_update_route_visual()
-@export_range(0.0, 32.0, 0.25, "or_greater") var route_dash_gap: float = 3.0:
+@export_range(0.0, 32.0, 0.25, "or_greater") var route_dash_gap: float = 0.5:
 	set(value):
 		route_dash_gap = maxf(value, 0.0)
 		if is_inside_tree():
@@ -712,6 +721,7 @@ var _has_destination := false
 var _destination := Vector3.ZERO
 var _last_path_result: Dictionary = {}
 var _route_refresh_remaining := 0.0
+var _route_visual_command_id := 0
 var _last_ring_world_width := -1.0
 var _last_turn_delta := 0.0
 var _last_turn_intensity := 0.0
@@ -763,6 +773,8 @@ var _combat_soldier_socket_positions: Dictionary = {}
 var _combat_soldier_socket_directions: Dictionary = {}
 var _combat_soldier_move_targets: Dictionary = {}
 var _combat_touched_soldiers: Dictionary = {}
+var _combat_animation_drain_soldiers: Dictionary = {}
+var _combat_visual_stepped_soldiers: Dictionary = {}
 var _combat_render_dirty_soldiers: Dictionary = {}
 var _combat_assignment_cursor := 0
 var _combat_update_cursor := 0
@@ -2002,7 +2014,11 @@ func _update_soldier_logic_sleeping(delta: float) -> void:
 func _step_formation_soldier_logic(delta: float) -> void:
 	if not _soldier_container:
 		return
+	if _state == STATE_FIGHTING and not _combat_touched_soldiers.is_empty():
+		_step_combat_animation_drain_soldiers(delta, _combat_visual_stepped_soldiers)
+		return
 	var soldiers: Array = _get_combat_touched_soldier_nodes() if _state == STATE_FIGHTING and not _combat_touched_soldiers.is_empty() else _get_formation_soldiers()
+	var stepped_soldier_ids := {}
 	for soldier: Node in soldiers:
 		if not is_instance_valid(soldier):
 			continue
@@ -2016,11 +2032,36 @@ func _step_formation_soldier_logic(delta: float) -> void:
 			continue
 		if soldier.has_method("step_formation_logic"):
 			soldier.call("step_formation_logic", delta)
+			stepped_soldier_ids[soldier.get_instance_id()] = true
+			_update_soldier_live_animation_source_after_step(soldier)
 			if _state == STATE_FIGHTING:
 				_mark_soldier_render_dirty(soldier)
+	_step_combat_animation_drain_soldiers(delta, stepped_soldier_ids)
+
+
+func _step_combat_animation_drain_soldiers(delta: float, stepped_soldier_ids: Dictionary) -> void:
+	if _combat_animation_drain_soldiers.is_empty():
+		return
+	for key: Variant in _combat_animation_drain_soldiers.keys():
+		if stepped_soldier_ids.has(key):
+			continue
+		var soldier := _get_node_from_instance_id_key(key)
+		if not soldier or not _is_soldier_active(soldier) or soldier.has_meta(&"troop_carrier_active"):
+			_combat_animation_drain_soldiers.erase(key)
+			continue
+		if soldier.has_method("set_logic_sleeping"):
+			soldier.call("set_logic_sleeping", false)
+		if soldier.has_method("step_formation_logic"):
+			soldier.call("step_formation_logic", delta)
+			_update_soldier_live_animation_source_after_step(soldier)
+		if _soldier_should_use_live_animation_source(soldier):
+			_mark_soldier_render_dirty(soldier)
+		else:
+			_combat_animation_drain_soldiers.erase(key)
 
 
 func _step_combat_soldier_visual_logic(delta: float) -> void:
+	_combat_visual_stepped_soldiers.clear()
 	var soldiers := _get_combat_touched_soldier_nodes()
 	var soldier_count := soldiers.size()
 	if soldier_count <= 0:
@@ -2038,6 +2079,7 @@ func _step_combat_soldier_visual_logic(delta: float) -> void:
 		if soldier.has_method("needs_full_rate_combat_visual") and bool(soldier.call("needs_full_rate_combat_visual")):
 			_step_visual_soldier(soldier, delta)
 			stepped_ids[soldier.get_instance_id()] = true
+			_combat_visual_stepped_soldiers[soldier.get_instance_id()] = true
 			priority_budget -= 1
 
 	var standard_budget := mini(maxi(combat_visual_logic_updates_per_tick, 1), soldier_count)
@@ -2051,6 +2093,7 @@ func _step_combat_soldier_visual_logic(delta: float) -> void:
 		if stepped_ids.has(soldier.get_instance_id()):
 			continue
 		_step_visual_soldier(soldier, delta)
+		_combat_visual_stepped_soldiers[soldier.get_instance_id()] = true
 		stepped += 1
 	_combat_visual_logic_cursor = (start + maxi(scanned, 1)) % soldier_count
 
@@ -2073,6 +2116,7 @@ func _step_visual_soldier(soldier: Node, delta: float) -> void:
 	if not soldier.has_method("step_formation_logic"):
 		return
 	soldier.call("step_formation_logic", delta)
+	_update_soldier_live_animation_source_after_step(soldier)
 	if _state == STATE_FIGHTING or (_state == STATE_MOVING and not _combat_scatter_active):
 		_mark_soldier_render_dirty(soldier)
 
@@ -2471,9 +2515,18 @@ func _queue_departed_soldier_removal(soldier: Node) -> void:
 		return
 	_pending_departed_soldier_ids[soldier_id] = true
 	_pending_departed_soldiers.append(soldier)
-	if not _departed_soldier_removal_queued:
-		_departed_soldier_removal_queued = true
+	_schedule_pending_departed_soldier_removal()
+
+
+func _schedule_pending_departed_soldier_removal(delay_seconds: float = 0.0) -> void:
+	if _departed_soldier_removal_queued:
+		return
+	_departed_soldier_removal_queued = true
+	if delay_seconds <= 0.0 or not is_inside_tree():
 		call_deferred("_process_pending_departed_soldier_removals")
+		return
+	var timer := get_tree().create_timer(delay_seconds, false)
+	timer.timeout.connect(Callable(self, "_process_pending_departed_soldier_removals"), CONNECT_ONE_SHOT)
 
 
 func _process_pending_departed_soldier_removals() -> void:
@@ -2482,9 +2535,14 @@ func _process_pending_departed_soldier_removals() -> void:
 		return
 	var budget := maxi(departed_soldier_removal_budget_per_frame, 1)
 	var soldiers_to_remove: Array[Node] = []
+	var soldiers_to_wait: Array[Node] = []
 	while budget > 0 and not _pending_departed_soldiers.is_empty():
 		var soldier: Node = _pending_departed_soldiers.pop_front()
 		if is_instance_valid(soldier):
+			if _should_wait_for_soldier_departure_pose(soldier):
+				soldiers_to_wait.append(soldier)
+				_set_soldier_live_animation_source(soldier, true)
+				continue
 			_pending_departed_soldier_ids.erase(soldier.get_instance_id())
 			if _should_remove_from_current_soldiers(soldier):
 				soldiers_to_remove.append(soldier)
@@ -2493,11 +2551,13 @@ func _process_pending_departed_soldier_removals() -> void:
 			for key: Variant in _pending_departed_soldier_ids.keys():
 				if not is_instance_id_valid(int(key)):
 					_pending_departed_soldier_ids.erase(key)
+	for soldier: Node in soldiers_to_wait:
+		if is_instance_valid(soldier):
+			_pending_departed_soldiers.append(soldier)
 	if not soldiers_to_remove.is_empty():
 		_remove_departed_soldiers(soldiers_to_remove)
-	if not _pending_departed_soldiers.is_empty() and not _departed_soldier_removal_queued:
-		_departed_soldier_removal_queued = true
-		call_deferred("_process_pending_departed_soldier_removals")
+	if not _pending_departed_soldiers.is_empty():
+		_schedule_pending_departed_soldier_removal(0.08)
 
 
 func _extract_membership_changed_soldier(a: Variant, b: Variant, c: Variant) -> Node:
@@ -2514,6 +2574,16 @@ func _should_remove_from_current_soldiers(soldier: Node) -> bool:
 		return true
 	if soldier.has_method("is_deserted") and bool(soldier.call("is_deserted")):
 		return true
+	return false
+
+
+func _should_wait_for_soldier_departure_pose(soldier: Node) -> bool:
+	if not is_instance_valid(soldier):
+		return false
+	if not soldier.has_method("is_alive") or bool(soldier.call("is_alive")):
+		return false
+	if soldier.has_method("is_death_pose_finalized"):
+		return not bool(soldier.call("is_death_pose_finalized"))
 	return false
 
 
@@ -3956,7 +4026,6 @@ func _get_route_steering_target() -> Vector3:
 
 
 func _finish_movement() -> void:
-	var previous_transform := global_transform
 	if _has_destination:
 		global_position.x = _destination.x
 		global_position.z = _destination.z
@@ -3964,11 +4033,6 @@ func _finish_movement() -> void:
 	if _formation_destination_yaw_active:
 		rotation.y = _formation_destination_yaw
 		_formation_destination_yaw_active = false
-	var final_snap := global_position - previous_transform.origin
-	final_snap.y = 0.0
-	var max_carried_snap := maxf(formation_finish_carry_max_snap_m, 0.0)
-	if final_snap.length_squared() <= max_carried_snap * max_carried_snap:
-		_carry_formation_soldiers_between_transforms(previous_transform, global_transform)
 	if _should_gate_movement_completion_for_formation() and not _formation_soldiers_ready_for_arrival():
 		_issue_final_formation_targets_if_needed()
 		_current_path_index = _path_points.size()
@@ -4032,41 +4096,6 @@ func _issue_final_formation_targets_if_needed() -> void:
 			continue
 		if soldier.has_method("set_independent_move_target"):
 			soldier.call("set_independent_move_target", desired, _get_idle_formation_slot_speed(soldier), arrival)
-
-
-func _carry_formation_soldiers_between_transforms(previous_transform: Transform3D, next_transform: Transform3D) -> void:
-	if not _soldier_container:
-		return
-	var inverse := previous_transform.affine_inverse()
-	var movement_direction := next_transform.origin - previous_transform.origin
-	movement_direction.y = 0.0
-	var has_movement_direction := _state == STATE_MOVING and movement_direction.length_squared() > 0.0001
-	var movement_yaw := rotation.y
-	if has_movement_direction:
-		movement_direction = movement_direction.normalized()
-		movement_yaw = atan2(-movement_direction.x, -movement_direction.z)
-	var turn_weight := clampf(get_physics_process_delta_time() * 14.0, 0.0, 1.0)
-	for soldier_node: Node in _get_active_soldiers():
-		if not (soldier_node is Node3D):
-			continue
-		if soldier_node.has_meta(&"troop_carrier_active"):
-			continue
-		var soldier := soldier_node as Node3D
-		if has_movement_direction:
-			if soldier.has_method("set_formation_frame_motion"):
-				soldier.call("set_formation_frame_motion", next_transform.origin - previous_transform.origin)
-			if soldier.has_method("set_formation_facing_direction"):
-				soldier.call("set_formation_facing_direction", movement_direction)
-		var local_position := inverse * soldier.global_position
-		var carried_position := next_transform * local_position
-		if _state == STATE_MOVING:
-			soldier.global_position = carried_position
-		else:
-			soldier.global_position = _snap_world_point(carried_position)
-		if has_movement_direction:
-			soldier.rotation.y = movement_yaw
-		elif not (soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion"))):
-			soldier.rotation.y = rotation.y
 
 
 func _face_soldiers_to_yaw(yaw: float) -> void:
@@ -4171,9 +4200,27 @@ func _update_route_visual() -> void:
 		_clear_route_visual()
 		return
 	_apply_route_visual_settings()
+	if individual_route_debug_visuals_enabled and _route_visual.has_method("set_routes"):
+		_route_visual.call(
+			"set_routes",
+			_get_individual_route_records(),
+			troop_flag_color,
+			team_flag_color,
+			_get_route_visual_line_color(),
+			_get_route_visual_key(&"individual")
+		)
+		return
 	var points := _get_remaining_route_points()
 	if _route_visual.has_method("set_route"):
-		_route_visual.call("set_route", points, _destination, troop_flag_color, team_flag_color)
+		_route_visual.call(
+			"set_route",
+			points,
+			_destination,
+			troop_flag_color,
+			team_flag_color,
+			_get_route_visual_line_color(),
+			_get_route_visual_key(&"shared")
+		)
 
 
 func _clear_route_visual() -> void:
@@ -4369,7 +4416,17 @@ func _clear_combat_debug_lines() -> void:
 
 
 func _can_show_route_visual() -> bool:
-	return route_debug_visuals_enabled and controllable and team_id != TEAM_ENEMY and _state != STATE_FIGHTING and not is_defeated()
+	return route_debug_visuals_enabled and _state != STATE_FIGHTING and not is_defeated()
+
+
+func _get_route_visual_line_color() -> Color:
+	if team_id == TEAM_ENEMY:
+		return ENEMY_ROUTE_LINE_COLOR
+	return ALLY_ROUTE_LINE_COLOR
+
+
+func _get_route_visual_key(mode: StringName) -> StringName:
+	return StringName("%s:%d" % [String(mode), _route_visual_command_id])
 
 
 func _apply_route_visual_settings() -> void:
@@ -4400,6 +4457,25 @@ func _get_remaining_route_points() -> Array[Vector3]:
 	if points.back().distance_squared_to(_destination) > 0.01:
 		points.append(_destination)
 	return points
+
+
+func _get_individual_route_records() -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	for soldier_node: Node in _get_active_soldiers():
+		if soldier_node.has_meta(&"troop_carrier_active"):
+			continue
+		if not soldier_node.has_method("get_independent_route_points"):
+			continue
+		var route_points: Array = soldier_node.call("get_independent_route_points", true) as Array
+		if route_points.size() < 2:
+			continue
+		records.append({
+			"id": soldier_node.get_instance_id(),
+			"points": route_points,
+			"current_position": route_points[0],
+			"destination": route_points.back(),
+		})
+	return records
 
 
 func _set_state(next_state: StringName) -> void:
@@ -4461,22 +4537,10 @@ func _update_formation_soldier_slots(delta: float) -> void:
 
 	if _state == STATE_MOVING:
 		_formation_motion_time += delta * maxf(_get_current_movement_speed_mps(), 0.1)
-		var moving_slot_correction_enabled := formation_moving_slot_correction_enabled or _formation_destination_yaw_active or _regroup_scattered_positions_on_move
 		var moving_separation_enabled := formation_moving_separation_enabled or _formation_destination_yaw_active
-		if moving_slot_correction_enabled:
-			_formation_slot_target_refresh_remaining -= delta
-			var yaw_delta := absf(wrapf(rotation.y - _formation_slot_last_target_yaw, -PI, PI))
-			var turn_refresh := deg_to_rad(maxf(formation_turn_target_refresh_degrees, 0.0))
-			var should_refresh_targets := (
-				_moving_formation_targets_dirty
-				or _formation_slot_target_refresh_remaining <= 0.0
-				or (turn_refresh > 0.0 and yaw_delta >= turn_refresh)
-			)
-			if should_refresh_targets:
-				_issue_moving_formation_slot_targets(_moving_formation_targets_dirty)
-				_moving_formation_targets_dirty = false
-				_formation_slot_last_target_yaw = rotation.y
-				_formation_slot_target_refresh_remaining = maxf(formation_slot_refresh_interval, 0.02)
+		_moving_formation_targets_dirty = false
+		_formation_slot_last_target_yaw = rotation.y
+		_formation_slot_target_refresh_remaining = maxf(formation_slot_refresh_interval, 0.02)
 		if moving_separation_enabled:
 			_formation_separation_refresh_remaining -= delta
 			if _formation_separation_refresh_remaining <= 0.0:
@@ -5084,10 +5148,15 @@ func _resolve_combat_tick(enemy: Node, delta: float) -> void:
 		_face_soldier_toward(attacker_spatial, defender, delta)
 		_set_combat_relation_status(attacker_spatial, defender, _get_combat_relation_status_for_pair(attacker_spatial, defender))
 		var settled_in_combat := _is_combat_pair_actively_fighting(attacker_spatial, defender)
+		var keep_combat_animation := settled_in_combat or _should_hold_soldier_combat_animation(attacker_spatial, defender)
+		if keep_combat_animation:
+			_set_soldier_live_animation_source(attacker_spatial, true)
 		if attacker_spatial.has_method("set_independent_combat"):
-			attacker_spatial.call("set_independent_combat", settled_in_combat, defender if settled_in_combat else null, settled_in_combat)
+			attacker_spatial.call("set_independent_combat", keep_combat_animation, defender if keep_combat_animation else null, settled_in_combat)
 		elif attacker_spatial.has_method("set_formation_attacking"):
-			attacker_spatial.call("set_formation_attacking", settled_in_combat, defender if settled_in_combat else null)
+			attacker_spatial.call("set_formation_attacking", keep_combat_animation, defender if keep_combat_animation else null)
+		if not keep_combat_animation and _soldier_should_use_live_animation_source(attacker_spatial):
+			_mark_soldier_combat_animation_drain(attacker_spatial)
 		_mark_soldier_combat_touched(attacker_spatial)
 
 		if locked or settled_in_combat:
@@ -6336,6 +6405,17 @@ func _is_combat_pair_actively_fighting(attacker: Node3D, defender: Node3D) -> bo
 	return _get_combat_relation_status_for_pair(attacker, defender) == COMBAT_RELATION_FIGHTING
 
 
+func _should_hold_soldier_combat_animation(attacker: Node3D, defender: Node3D) -> bool:
+	if not is_instance_valid(attacker) or not is_instance_valid(defender):
+		return false
+	if not _is_combat_pair_in_break_range(attacker, defender):
+		return false
+	if not attacker.has_method("get_state"):
+		return false
+	var state := StringName(attacker.call("get_state"))
+	return state == &"standing_fighting" or state == &"fighting"
+
+
 func _is_combat_pair_in_fight_range(attacker: Node3D, defender: Node3D) -> bool:
 	if not is_instance_valid(attacker) or not is_instance_valid(defender):
 		return false
@@ -6781,13 +6861,16 @@ func _update_combat_soldier_animation(delta: float = 0.0) -> void:
 				_clear_soldier_combat_visual(soldier)
 				_forget_combat_soldier_key(key, true)
 		_update_assigned_combat_visuals(delta)
+		_step_combat_soldier_visual_logic(delta)
 		return
+	_combat_visual_stepped_soldiers.clear()
 	for key: Variant in _combat_touched_soldiers.keys():
 		var soldier := _get_node_from_instance_id_key(key)
 		if soldier:
 			_clear_soldier_combat_visual(soldier)
 	_combat_touched_soldiers.clear()
-	_combat_render_dirty_soldiers.clear()
+	if _combat_animation_drain_soldiers.is_empty():
+		_combat_render_dirty_soldiers.clear()
 
 
 func _update_assigned_combat_visuals(delta: float) -> void:
@@ -6819,23 +6902,30 @@ func _update_assigned_combat_visuals(delta: float) -> void:
 		var visual_in_range := _is_combat_pair_actively_fighting(soldier, defender)
 		if moving_to_socket and not visual_in_range:
 			if soldier.has_method("is_formation_attacking") and bool(soldier.call("is_formation_attacking")):
-				changed_for_render = true
-				if soldier.has_method("set_independent_combat"):
-					soldier.call("set_independent_combat", false)
-				elif soldier.has_method("set_formation_attacking"):
-					soldier.call("set_formation_attacking", false)
+				if _should_hold_soldier_combat_animation(soldier, defender):
+					_set_soldier_live_animation_source(soldier, true)
+				else:
+					changed_for_render = true
+					if soldier.has_method("set_independent_combat"):
+						soldier.call("set_independent_combat", false)
+					elif soldier.has_method("set_formation_attacking"):
+						soldier.call("set_formation_attacking", false)
 			if soldier.has_method("set_combat_focus_target"):
 				soldier.call("set_combat_focus_target", defender)
 		if visual_in_range and soldier.has_method("set_independent_combat"):
 			if soldier.has_method("is_formation_attacking") and not bool(soldier.call("is_formation_attacking")):
 				changed_for_render = true
+			_set_soldier_live_animation_source(soldier, true)
 			soldier.call("set_independent_combat", true, defender, true)
 		elif visual_in_range and soldier.has_method("set_formation_attacking"):
 			if soldier.has_method("is_formation_attacking") and not bool(soldier.call("is_formation_attacking")):
 				changed_for_render = true
+			_set_soldier_live_animation_source(soldier, true)
 			soldier.call("set_formation_attacking", true, defender)
 		elif soldier.has_method("set_combat_focus_target"):
 			soldier.call("set_combat_focus_target", defender)
+			if not _soldier_should_use_live_animation_source(soldier):
+				_set_soldier_live_animation_source(soldier, false)
 		if visual_in_range:
 			changed_for_render = _maybe_trigger_visual_soldier_thrust(soldier, defender, key, delta) or changed_for_render
 		if changed_for_render:
@@ -6854,6 +6944,7 @@ func _maybe_trigger_visual_soldier_thrust(soldier: Node, defender: Node3D, key: 
 	if remaining > 0.0:
 		_combat_visual_thrust_timers[key] = remaining
 		return false
+	_set_soldier_live_animation_source(soldier, true)
 	soldier.call("trigger_spear_thrust", defender, maxf(combat_visual_thrust_duration, 0.05))
 	_combat_visual_thrust_timers[key] = _get_visual_thrust_interval(soldier)
 	_combat_visual_thrust_count += 1
@@ -6876,9 +6967,59 @@ func _mark_soldier_combat_touched(soldier: Node) -> void:
 		_mark_soldier_render_dirty(soldier)
 
 
+func _mark_soldier_combat_animation_drain(soldier: Node) -> void:
+	if not _is_live_combat_node(soldier):
+		return
+	var key := soldier.get_instance_id()
+	_combat_animation_drain_soldiers[key] = true
+	if soldier.has_method("set_logic_sleeping"):
+		soldier.call("set_logic_sleeping", false)
+	_set_soldier_live_animation_source(soldier, true)
+
+
 func _mark_soldier_render_dirty(soldier: Node) -> void:
 	if _is_live_combat_node(soldier):
 		_combat_render_dirty_soldiers[soldier.get_instance_id()] = true
+
+
+func _set_soldier_live_animation_source(soldier: Node, enabled: bool) -> void:
+	if not (soldier is Node3D) or not is_instance_valid(soldier):
+		return
+	var soldier_spatial := soldier as Node3D
+	if enabled:
+		soldier_spatial.set_meta(LIVE_ANIMATION_SOURCE_META, true)
+		if _soldier_batch_renderer and _soldier_batch_renderer.has_method("restore_sources_for_soldier"):
+			_soldier_batch_renderer.call("restore_sources_for_soldier", soldier_spatial)
+	else:
+		if soldier_spatial.has_meta(LIVE_ANIMATION_SOURCE_META):
+			soldier_spatial.remove_meta(LIVE_ANIMATION_SOURCE_META)
+		if soldier_render_batching_enabled and _soldier_batch_renderer and _soldier_batch_renderer.has_method("hide_sources_for_soldier"):
+			_soldier_batch_renderer.call("hide_sources_for_soldier", soldier_spatial)
+	_soldier_render_sync_remaining = 0.0
+	_soldier_render_sync_frame_cursor = 0
+	_mark_soldier_render_dirty(soldier_spatial)
+
+
+func _update_soldier_live_animation_source_after_step(soldier: Node) -> void:
+	if not is_instance_valid(soldier):
+		return
+	var key := soldier.get_instance_id()
+	if _soldier_should_use_live_animation_source(soldier):
+		if not soldier.has_meta(LIVE_ANIMATION_SOURCE_META):
+			_set_soldier_live_animation_source(soldier, true)
+		return
+	_combat_animation_drain_soldiers.erase(key)
+	if soldier.has_meta(LIVE_ANIMATION_SOURCE_META):
+		_set_soldier_live_animation_source(soldier, false)
+
+
+func _soldier_should_use_live_animation_source(soldier: Node) -> bool:
+	if _should_wait_for_soldier_departure_pose(soldier):
+		return true
+	if not soldier.has_method("get_state"):
+		return false
+	var state := StringName(soldier.call("get_state"))
+	return state == &"standing_fighting" or state == &"fighting"
 
 
 func _is_live_combat_node(value: Variant) -> bool:
@@ -6908,9 +7049,13 @@ func _get_combat_touched_soldier_nodes() -> Array[Node]:
 
 
 func _forget_combat_soldier_key(key: Variant, forget_offset: bool = false) -> void:
+	var soldier := _get_node_from_instance_id_key(key)
+	if soldier:
+		_clear_soldier_combat_visual(soldier)
 	_release_combat_assignment(key, forget_offset)
 	_combat_touched_soldiers.erase(key)
-	_combat_render_dirty_soldiers.erase(key)
+	if not _combat_animation_drain_soldiers.has(key):
+		_combat_render_dirty_soldiers.erase(key)
 
 
 func _clear_soldier_combat_visual(soldier: Node) -> void:
@@ -6920,6 +7065,11 @@ func _clear_soldier_combat_visual(soldier: Node) -> void:
 		soldier.call("set_independent_combat", false)
 	elif soldier.has_method("set_formation_attacking"):
 		soldier.call("set_formation_attacking", false)
+	if _soldier_should_use_live_animation_source(soldier):
+		_mark_soldier_combat_animation_drain(soldier)
+	else:
+		_combat_animation_drain_soldiers.erase(soldier.get_instance_id())
+		_set_soldier_live_animation_source(soldier, false)
 
 
 func _update_soldier_activity_modes() -> void:
@@ -6959,6 +7109,7 @@ func _clear_independent_combat(regroup: bool) -> void:
 	_combat_assignment_cursor = 0
 	_combat_update_cursor = 0
 	_combat_visual_stance_cursor = 0
+	_combat_visual_stepped_soldiers.clear()
 	_combat_logic_accumulator = 0.0
 	_combat_target_reassign_remaining = 0.0
 	_combat_attacker_spatial_rebuild_remaining = 0.0
@@ -6977,7 +7128,8 @@ func _clear_independent_combat(regroup: bool) -> void:
 			if regroup and soldier.has_method("clear_independent_motion"):
 				soldier.call("clear_independent_motion")
 	_combat_touched_soldiers.clear()
-	_combat_render_dirty_soldiers.clear()
+	if _combat_animation_drain_soldiers.is_empty():
+		_combat_render_dirty_soldiers.clear()
 	if regroup:
 		_cleanup_deferred_dead_soldiers_after_combat()
 
@@ -7686,6 +7838,10 @@ func _get_current_movement_speed_mps() -> float:
 	if not service:
 		return maxf(movement_speed_mps, 0.1)
 	return service.get_current_movement_speed_mps(self)
+
+
+func _get_soldier_path_queries_per_tick() -> int:
+	return maxi(soldier_path_queries_per_tick, 1)
 
 
 func _get_soldier_path_speed(soldier: Node) -> float:
@@ -8622,10 +8778,17 @@ func _remove_departed_soldiers(soldiers: Array) -> int:
 		_clear_carrier_decoration(soldier)
 		_remove_hand_flags_from_soldier(soldier)
 		var dead_soldier := soldier.has_method("is_alive") and not bool(soldier.call("is_alive"))
+		if dead_soldier and _should_wait_for_soldier_departure_pose(soldier):
+			_set_soldier_live_animation_source(soldier, true)
+			_queue_departed_soldier_removal(soldier)
+			continue
 		if dead_soldier:
 			if _soldier_batch_renderer and _soldier_batch_renderer.has_method("restore_sources_for_soldier"):
 				_soldier_batch_renderer.call("restore_sources_for_soldier", soldier)
-			_register_soldier_corpse_if_dead(soldier)
+			var registered_corpse := _register_soldier_corpse_if_dead(soldier)
+			if registered_corpse and (soldier.get_parent() != _soldier_container or soldier.has_meta(LIVE_CORPSE_NODE_META)):
+				removed += 1
+				continue
 		var can_defer_dead_removal := (
 			not structural_removal
 			and dead_soldier
@@ -8687,6 +8850,8 @@ func _can_capture_soldier_corpse(soldier: Node3D) -> bool:
 		return false
 	if soldier.has_method("is_alive") and bool(soldier.call("is_alive")):
 		return false
+	if _should_wait_for_soldier_departure_pose(soldier):
+		return false
 	var manager := _get_or_create_corpse_manager()
 	if not manager or not manager.has_method("register_soldier_corpse"):
 		return false
@@ -8699,6 +8864,8 @@ func _register_soldier_corpse_if_dead(soldier: Node3D) -> bool:
 	if not is_instance_valid(soldier):
 		return false
 	if soldier.has_method("is_alive") and bool(soldier.call("is_alive")):
+		return false
+	if _should_wait_for_soldier_departure_pose(soldier):
 		return false
 	var manager := _get_or_create_corpse_manager()
 	if not manager or not manager.has_method("register_soldier_corpse"):
@@ -8731,6 +8898,7 @@ func _get_corpse_debug_summary() -> Dictionary:
 		return {
 			"corpse_count": 0,
 			"corpse_batch_count": 0,
+			"corpse_live_count": 0,
 			"corpse_mesh_part_count": 0,
 			"corpse_skipped_count": 0,
 			"corpse_skipped_mesh_part_count": 0,
@@ -8744,6 +8912,7 @@ func _get_corpse_debug_summary() -> Dictionary:
 	return {
 		"corpse_count": 0,
 		"corpse_batch_count": 0,
+		"corpse_live_count": 0,
 		"corpse_mesh_part_count": 0,
 		"corpse_skipped_count": 0,
 		"corpse_skipped_mesh_part_count": 0,

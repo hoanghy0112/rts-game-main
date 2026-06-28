@@ -5,6 +5,7 @@ class_name TroopBackgroundJobsDebugPanel
 @export_range(0.05, 2.0, 0.05, "or_greater") var refresh_interval_seconds: float = 0.25
 @export var movement_map_overlay_enabled := false
 @export var route_visuals_enabled := true
+@export var individual_route_paths_enabled := false
 @export var tile_grid_enabled := true
 
 @onready var _root_control: Control = %Root
@@ -19,6 +20,7 @@ class_name TroopBackgroundJobsDebugPanel
 @onready var _combat_lines_check_box: CheckBox = %CombatLinesCheckBox
 @onready var _movement_map_check_box: CheckBox = %MovementMapCheckBox
 @onready var _route_visuals_check_box: CheckBox = %RouteVisualsCheckBox
+@onready var _individual_route_paths_check_box: CheckBox = %IndividualRoutePathsCheckBox
 @onready var _tile_grid_check_box: CheckBox = %TileGridCheckBox
 
 var _selected_troop: Node
@@ -28,6 +30,7 @@ var _soldier_perf_enabled := false
 var _combat_lines_enabled := false
 var _movement_map_overlay_enabled := false
 var _route_visuals_enabled := true
+var _individual_route_paths_enabled := false
 var _tile_grid_enabled := true
 
 
@@ -64,6 +67,12 @@ func _ready() -> void:
 		if not _route_visuals_check_box.toggled.is_connected(_on_route_visuals_toggled):
 			_route_visuals_check_box.toggled.connect(_on_route_visuals_toggled)
 		_sync_route_visuals()
+	if _individual_route_paths_check_box:
+		_individual_route_paths_check_box.button_pressed = individual_route_paths_enabled
+		_individual_route_paths_enabled = _individual_route_paths_check_box.button_pressed
+		if not _individual_route_paths_check_box.toggled.is_connected(_on_individual_route_paths_toggled):
+			_individual_route_paths_check_box.toggled.connect(_on_individual_route_paths_toggled)
+		_sync_individual_route_paths()
 	if _tile_grid_check_box:
 		_tile_grid_check_box.button_pressed = tile_grid_enabled
 		_tile_grid_enabled = _tile_grid_check_box.button_pressed
@@ -107,6 +116,7 @@ func _collect_summaries() -> Array[Dictionary]:
 	_sync_soldier_perf_monitoring()
 	_sync_combat_debug_lines()
 	_sync_route_visuals()
+	_sync_individual_route_paths()
 	_sync_movement_map_overlay()
 	_sync_tile_grid()
 	var summaries: Array[Dictionary] = []
@@ -422,6 +432,12 @@ func _on_route_visuals_toggled(enabled: bool) -> void:
 	refresh()
 
 
+func _on_individual_route_paths_toggled(enabled: bool) -> void:
+	_individual_route_paths_enabled = enabled
+	_sync_individual_route_paths()
+	refresh()
+
+
 func _on_tile_grid_toggled(enabled: bool) -> void:
 	_tile_grid_enabled = enabled
 	_sync_tile_grid()
@@ -493,6 +509,17 @@ func _sync_route_visuals() -> void:
 				node.set("route_debug_visuals_enabled", _route_visuals_enabled)
 
 
+func _sync_individual_route_paths() -> void:
+	var tree := get_tree()
+	if not tree or not _individual_route_paths_check_box:
+		return
+	_individual_route_paths_enabled = _individual_route_paths_check_box.button_pressed
+	for node: Node in tree.get_nodes_in_group(&"troops"):
+		if _object_has_property(node, &"individual_route_debug_visuals_enabled"):
+			if bool(node.get("individual_route_debug_visuals_enabled")) != _individual_route_paths_enabled:
+				node.set("individual_route_debug_visuals_enabled", _individual_route_paths_enabled)
+
+
 func _sync_tile_grid() -> void:
 	var tree := get_tree()
 	if not tree or not _tile_grid_check_box:
@@ -538,6 +565,8 @@ func _cache_nodes() -> bool:
 		_movement_map_check_box = get_node_or_null("Root/Panel/Margin/Rows/MovementMapCheckBox") as CheckBox
 	if not _route_visuals_check_box:
 		_route_visuals_check_box = get_node_or_null("Root/Panel/Margin/Rows/RouteVisualsCheckBox") as CheckBox
+	if not _individual_route_paths_check_box:
+		_individual_route_paths_check_box = get_node_or_null("Root/Panel/Margin/Rows/IndividualRoutePathsCheckBox") as CheckBox
 	if not _tile_grid_check_box:
 		_tile_grid_check_box = get_node_or_null("Root/Panel/Margin/Rows/TileGridCheckBox") as CheckBox
 	return _root_control != null and _title_label != null and _frame_label != null and _aggregate_label != null and _selected_label != null

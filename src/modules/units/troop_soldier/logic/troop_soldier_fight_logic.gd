@@ -3,7 +3,8 @@ class_name TroopSoldierFightLogic
 
 const STATE_IDLE := &"idle"
 const STATE_WALK := &"walk"
-const STATE_TOOL_ACTION := &"tool_action"
+const STATE_STANDING_FIGHTING := &"standing_fighting"
+const STATE_FIGHTING := &"fighting"
 
 
 func set_independent_combat(soldier, active: bool, target: Node3D = null, in_range: bool = false) -> void:
@@ -11,6 +12,13 @@ func set_independent_combat(soldier, active: bool, target: Node3D = null, in_ran
 	var next_target: Node3D = target if next_attacking and is_instance_valid(target) else null
 	var next_in_range: bool = next_attacking and in_range
 	if soldier._formation_attacking == next_attacking and soldier._combat_target == next_target and soldier._combat_in_range == next_in_range:
+		var needs_state_refresh: bool = (
+			next_attacking
+			or soldier.get_state() == STATE_STANDING_FIGHTING
+			or soldier.get_state() == STATE_FIGHTING
+		)
+		if soldier.formation_visual_only and needs_state_refresh and soldier.has_method("_update_formation_animation_state"):
+			soldier.call("_update_formation_animation_state", 0.0, false)
 		return
 	if next_attacking or soldier._logic_sleeping:
 		soldier._wake_logic()
@@ -32,8 +40,8 @@ func set_independent_combat(soldier, active: bool, target: Node3D = null, in_ran
 		to_target.y = 0.0
 		if to_target.length_squared() > 0.0001:
 			soldier._face_direction(to_target.normalized(), 1.0)
-	if soldier.formation_visual_only:
-		soldier._set_state(STATE_TOOL_ACTION if soldier._formation_attacking else (STATE_WALK if soldier._formation_walking else STATE_IDLE))
+	if soldier.formation_visual_only and soldier.has_method("_update_formation_animation_state"):
+		soldier.call("_update_formation_animation_state", 0.0, false)
 
 
 func trigger_spear_thrust(soldier, target: Node3D = null, duration: float = -1.0) -> void:
@@ -53,9 +61,11 @@ func trigger_spear_thrust(soldier, target: Node3D = null, duration: float = -1.0
 	soldier._stationary_pose_applied = false
 	soldier._combat_idle_pose_applied = false
 	if soldier.formation_visual_only:
-		soldier._timed_state_duration = soldier._spear_thrust_duration
-		soldier._timed_state_remaining = soldier._spear_thrust_remaining
-		soldier._set_state(STATE_TOOL_ACTION)
+		if soldier.get_state() == STATE_FIGHTING:
+			soldier._timed_state_duration = soldier._spear_thrust_duration
+			soldier._timed_state_remaining = soldier._spear_thrust_remaining
+		elif soldier.has_method("_update_formation_animation_state"):
+			soldier.call("_update_formation_animation_state", 0.0, false)
 
 
 func is_spear_thrust_active(soldier) -> bool:
@@ -65,6 +75,8 @@ func is_spear_thrust_active(soldier) -> bool:
 func needs_full_rate_combat_visual(soldier) -> bool:
 	return (
 		soldier._independent_motion_active
+		or soldier.get_state() == STATE_STANDING_FIGHTING
+		or (soldier.get_state() == STATE_FIGHTING and soldier._formation_attacking)
 		or soldier._spear_thrust_remaining > 0.0
 		or soldier._hit_reaction_remaining > 0.0
 	)

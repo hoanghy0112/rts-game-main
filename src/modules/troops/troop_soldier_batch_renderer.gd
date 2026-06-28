@@ -2,6 +2,7 @@ extends Node3D
 class_name TroopSoldierBatchRenderer
 
 const CUSTOM_AABB_MARGIN_M := 8.0
+const LIVE_ANIMATION_SOURCE_META := &"troop_live_animation_source"
 
 var _enabled := true
 var _soldiers: Array = []
@@ -99,6 +100,19 @@ func restore_sources_for_soldier(soldier: Node3D) -> void:
 			source.visible = bool(_source_visibility[source_id])
 
 
+func hide_sources_for_soldier(soldier: Node3D) -> void:
+	if not is_instance_valid(soldier):
+		return
+	_rebuild_source_cache_if_needed()
+	for path: NodePath in _mesh_paths:
+		var source := soldier.get_node_or_null(path) as MeshInstance3D
+		if not is_instance_valid(source):
+			continue
+		var source_id := source.get_instance_id()
+		if bool(_source_visibility.get(source_id, true)):
+			source.visible = false
+
+
 func set_local_space_enabled(enabled: bool) -> void:
 	if _local_space_enabled == enabled:
 		return
@@ -159,7 +173,7 @@ func sync(force_dirty_transforms: bool = false) -> void:
 			var soldier: Node3D = null
 			if index < source_soldiers.size():
 				soldier = _get_valid_node3d(source_soldiers[index])
-			if not soldier or not soldier.is_inside_tree() or not source.is_inside_tree() or not soldier.visible or soldier.has_meta(&"troop_pending_combat_removal"):
+			if not soldier or not soldier.is_inside_tree() or not source.is_inside_tree() or not soldier.visible or soldier.has_meta(&"troop_pending_combat_removal") or soldier.has_meta(LIVE_ANIMATION_SOURCE_META):
 				path_source_visibility[source.get_instance_id()] = false
 				continue
 			var source_id := source.get_instance_id()
@@ -254,6 +268,7 @@ func sync_dirty_soldiers(dirty_soldier_ids: Dictionary) -> void:
 			var should_draw_source := (
 				soldier.visible
 				and not soldier.has_meta(&"troop_pending_combat_removal")
+				and not soldier.has_meta(LIVE_ANIMATION_SOURCE_META)
 				and bool(_source_visibility.get(source_id, true))
 			)
 			if bool(path_source_visibility.get(source_id, should_draw_source)) != should_draw_source:
@@ -334,7 +349,7 @@ func _sync_path_buffer(
 		var soldier: Node3D = null
 		if index < source_soldiers.size():
 			soldier = _get_valid_node3d(source_soldiers[index])
-		if not soldier or not soldier.is_inside_tree() or not source.is_inside_tree() or not soldier.visible or soldier.has_meta(&"troop_pending_combat_removal"):
+		if not soldier or not soldier.is_inside_tree() or not source.is_inside_tree() or not soldier.visible or soldier.has_meta(&"troop_pending_combat_removal") or soldier.has_meta(LIVE_ANIMATION_SOURCE_META):
 			path_source_visibility[source.get_instance_id()] = false
 			continue
 		var source_id := source.get_instance_id()
@@ -608,6 +623,8 @@ func _hide_source_meshes() -> void:
 		var mesh_instance := _get_valid_mesh_instance(mesh_variant)
 		if not mesh_instance:
 			continue
+		if _source_uses_live_animation(mesh_instance):
+			continue
 		var id := mesh_instance.get_instance_id()
 		if bool(_source_visibility.get(id, true)):
 			_hidden_source_mesh_count += 1
@@ -633,6 +650,16 @@ func _get_first_valid_soldier() -> Node3D:
 		if soldier:
 			return soldier
 	return null
+
+
+func _source_uses_live_animation(source: MeshInstance3D) -> bool:
+	for soldier_variant: Variant in _soldiers:
+		var soldier := _get_valid_node3d(soldier_variant)
+		if not soldier or not soldier.has_meta(LIVE_ANIMATION_SOURCE_META):
+			continue
+		if soldier == source or soldier.is_ancestor_of(source):
+			return true
+	return false
 
 
 func _make_batch_name(path: NodePath) -> String:
