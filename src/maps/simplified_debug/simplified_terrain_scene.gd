@@ -16,6 +16,10 @@ const DEBUG_GROUP := &"simplified_terrain_debug"
 @export var walkable_tile_color: Color = Color(0.24, 0.39, 0.27, 1.0)
 @export var non_walkable_tile_color: Color = Color(0.32, 0.11, 0.09, 1.0)
 @export var grid_line_color: Color = Color(0.70, 0.86, 0.88, 0.28)
+@export var terrain_visible := true:
+	set(value):
+		terrain_visible = value
+		_update_debug_visibility()
 @export var show_tile_grid := true:
 	set(value):
 		show_tile_grid = value
@@ -46,6 +50,14 @@ func _exit_tree() -> void:
 
 func get_movement_map() -> MovementMapData:
 	return _movement_map
+
+
+func set_terrain_visible(enabled: bool) -> void:
+	terrain_visible = enabled
+
+
+func is_terrain_visible() -> bool:
+	return terrain_visible
 
 
 func get_debug_summary() -> Dictionary:
@@ -143,6 +155,7 @@ func _rebuild_flat_terrain() -> void:
 	_grid_lines = _make_grid_lines()
 	_terrain_visuals.add_child(_grid_lines)
 	_create_ground_collision()
+	_update_debug_visibility()
 
 
 func _make_tile_multimesh(name: String, transforms: Array[Transform3D], color: Color) -> MultiMeshInstance3D:
@@ -257,6 +270,13 @@ func _center_camera() -> void:
 
 
 func _update_debug_visibility() -> void:
+	if is_instance_valid(_terrain_visuals):
+		_terrain_visuals.visible = true
+		for child: Node in _terrain_visuals.get_children():
+			if child == _grid_lines:
+				continue
+			if child is Node3D:
+				(child as Node3D).visible = terrain_visible
 	if is_instance_valid(_grid_lines):
 		_grid_lines.visible = show_tile_grid
 

@@ -97,6 +97,7 @@ force_visible = true
 movement_map_overlay_enabled = true
 route_visuals_enabled = true
 individual_route_paths_enabled = false
+terrain_visible = true
 tile_grid_enabled = true
 
 [node name="TroopSelectionController" type="Node" parent="."]

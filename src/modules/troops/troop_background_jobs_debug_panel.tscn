@@ -113,6 +113,12 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Individual paths"
 
+[node name="TerrainCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+text = "Terrain"
+
 [node name="TileGridCheckBox" type="CheckBox" parent="Root/Panel/Margin/Rows"]
 unique_name_in_owner = true
 layout_mode = 2

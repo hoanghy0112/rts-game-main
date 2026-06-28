@@ -42,6 +42,27 @@ const TEAM_ENEMY := &"enemy"
 const TEAM_DESERTER := &"deserter"
 const ALLY_ROUTE_LINE_COLOR := Color(0.12, 0.42, 1.0, 0.88)
 const ENEMY_ROUTE_LINE_COLOR := Color(1.0, 0.12, 0.08, 0.88)
+const ALLY_SOLDIER_ROBE_COLOR := Color(0.10, 0.26, 0.72, 1.0)
+const ALLY_SOLDIER_ROBE_SHADOW_COLOR := Color(0.03, 0.08, 0.24, 1.0)
+const ALLY_SOLDIER_TRIM_COLOR := Color(0.52, 0.70, 1.0, 1.0)
+const ALLY_SOLDIER_PANTS_COLOR := Color(0.08, 0.12, 0.20, 1.0)
+const ALLY_SOLDIER_WRAP_COLOR := Color(0.72, 0.78, 0.86, 1.0)
+const ALLY_SOLDIER_HAT_COLOR := Color(0.03, 0.05, 0.10, 1.0)
+const ALLY_SOLDIER_ACCENT_COLOR := Color(0.23, 0.52, 1.0, 1.0)
+const ENEMY_SOLDIER_ROBE_COLOR := Color(0.42, 0.05, 0.04, 1.0)
+const ENEMY_SOLDIER_ROBE_SHADOW_COLOR := Color(0.16, 0.02, 0.02, 1.0)
+const ENEMY_SOLDIER_TRIM_COLOR := Color(0.94, 0.52, 0.24, 1.0)
+const ENEMY_SOLDIER_PANTS_COLOR := Color(0.16, 0.12, 0.11, 1.0)
+const ENEMY_SOLDIER_WRAP_COLOR := Color(0.56, 0.47, 0.39, 1.0)
+const ENEMY_SOLDIER_HAT_COLOR := Color(0.05, 0.04, 0.035, 1.0)
+const ENEMY_SOLDIER_ACCENT_COLOR := Color(0.98, 0.18, 0.08, 1.0)
+const DESERTER_SOLDIER_ROBE_COLOR := Color(0.34, 0.52, 0.54, 1.0)
+const DESERTER_SOLDIER_ROBE_SHADOW_COLOR := Color(0.08, 0.24, 0.28, 1.0)
+const DESERTER_SOLDIER_TRIM_COLOR := Color(0.76, 0.56, 0.38, 1.0)
+const DESERTER_SOLDIER_PANTS_COLOR := Color(0.78, 0.34, 0.18, 1.0)
+const DESERTER_SOLDIER_WRAP_COLOR := Color(0.86, 0.82, 0.74, 1.0)
+const DESERTER_SOLDIER_HAT_COLOR := Color(0.05, 0.09, 0.13, 1.0)
+const DESERTER_SOLDIER_ACCENT_COLOR := Color(0.7, 0.12, 0.08, 1.0)
 
 const SELECTABLE_TYPE_META := &"troop_selectable_type"
 const SELECTABLE_NODE_PATH_META := &"troop_node_path"
@@ -87,7 +108,12 @@ const MISSION_COMPLETE := &"complete"
 @export_group("Identity")
 @export var troop_id: StringName = &"troop_01"
 @export var display_name := "Troop"
-@export var team_id: StringName = TEAM_PLAYER
+@export var team_id: StringName = TEAM_PLAYER:
+	set(value):
+		team_id = StringName(value)
+		_apply_team_outfit_defaults()
+		if is_inside_tree():
+			_apply_outfit_to_soldiers()
 @export var controllable := true
 
 @export_group("Mode")
@@ -141,37 +167,37 @@ const MISSION_COMPLETE := &"complete"
 @export var service_set: Resource
 
 @export_group("Soldier Outfit")
-@export var soldier_robe_color: Color = Color(0.34, 0.52, 0.54, 1.0):
+@export var soldier_robe_color: Color = ALLY_SOLDIER_ROBE_COLOR:
 	set(value):
 		soldier_robe_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_robe_shadow_color: Color = Color(0.08, 0.24, 0.28, 1.0):
+@export var soldier_robe_shadow_color: Color = ALLY_SOLDIER_ROBE_SHADOW_COLOR:
 	set(value):
 		soldier_robe_shadow_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_trim_color: Color = Color(0.76, 0.56, 0.38, 1.0):
+@export var soldier_trim_color: Color = ALLY_SOLDIER_TRIM_COLOR:
 	set(value):
 		soldier_trim_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_pants_color: Color = Color(0.78, 0.34, 0.18, 1.0):
+@export var soldier_pants_color: Color = ALLY_SOLDIER_PANTS_COLOR:
 	set(value):
 		soldier_pants_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_wrap_color: Color = Color(0.86, 0.82, 0.74, 1.0):
+@export var soldier_wrap_color: Color = ALLY_SOLDIER_WRAP_COLOR:
 	set(value):
 		soldier_wrap_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_hat_color: Color = Color(0.05, 0.09, 0.13, 1.0):
+@export var soldier_hat_color: Color = ALLY_SOLDIER_HAT_COLOR:
 	set(value):
 		soldier_hat_color = value
 		if is_inside_tree():
 			_apply_outfit_to_soldiers()
-@export var soldier_accent_color: Color = Color(0.7, 0.12, 0.08, 1.0):
+@export var soldier_accent_color: Color = ALLY_SOLDIER_ACCENT_COLOR:
 	set(value):
 		soldier_accent_color = value
 		if is_inside_tree():
@@ -2599,6 +2625,33 @@ func _apply_outfit_to_soldiers() -> void:
 	_soldier_render_has_synced = false
 
 
+func _apply_team_outfit_defaults() -> void:
+	if team_id == TEAM_ENEMY:
+		soldier_robe_color = ENEMY_SOLDIER_ROBE_COLOR
+		soldier_robe_shadow_color = ENEMY_SOLDIER_ROBE_SHADOW_COLOR
+		soldier_trim_color = ENEMY_SOLDIER_TRIM_COLOR
+		soldier_pants_color = ENEMY_SOLDIER_PANTS_COLOR
+		soldier_wrap_color = ENEMY_SOLDIER_WRAP_COLOR
+		soldier_hat_color = ENEMY_SOLDIER_HAT_COLOR
+		soldier_accent_color = ENEMY_SOLDIER_ACCENT_COLOR
+	elif team_id == TEAM_DESERTER:
+		soldier_robe_color = DESERTER_SOLDIER_ROBE_COLOR
+		soldier_robe_shadow_color = DESERTER_SOLDIER_ROBE_SHADOW_COLOR
+		soldier_trim_color = DESERTER_SOLDIER_TRIM_COLOR
+		soldier_pants_color = DESERTER_SOLDIER_PANTS_COLOR
+		soldier_wrap_color = DESERTER_SOLDIER_WRAP_COLOR
+		soldier_hat_color = DESERTER_SOLDIER_HAT_COLOR
+		soldier_accent_color = DESERTER_SOLDIER_ACCENT_COLOR
+	else:
+		soldier_robe_color = ALLY_SOLDIER_ROBE_COLOR
+		soldier_robe_shadow_color = ALLY_SOLDIER_ROBE_SHADOW_COLOR
+		soldier_trim_color = ALLY_SOLDIER_TRIM_COLOR
+		soldier_pants_color = ALLY_SOLDIER_PANTS_COLOR
+		soldier_wrap_color = ALLY_SOLDIER_WRAP_COLOR
+		soldier_hat_color = ALLY_SOLDIER_HAT_COLOR
+		soldier_accent_color = ALLY_SOLDIER_ACCENT_COLOR
+
+
 func _make_outfit_palette() -> Dictionary:
 	return {
 		"robe": soldier_robe_color,
@@ -4069,7 +4122,8 @@ func _formation_soldiers_ready_for_arrival() -> bool:
 		var slot: Vector3 = soldier.get_meta(&"troop_formation_slot", Vector3.ZERO)
 		var desired := _snap_world_point(_formation_slot_to_world(slot))
 		desired.y = soldier.global_position.y
-		var offset := soldier.global_position - desired
+		var arrival_target := _get_cached_soldier_arrival_target(soldier, desired)
+		var offset := soldier.global_position - arrival_target
 		offset.y = 0.0
 		if offset.length_squared() > tolerance_squared:
 			return false
@@ -4094,8 +4148,49 @@ func _issue_final_formation_targets_if_needed() -> void:
 		offset.y = 0.0
 		if offset.length_squared() <= arrival_squared:
 			continue
-		if soldier.has_method("set_independent_move_target"):
-			soldier.call("set_independent_move_target", desired, _get_idle_formation_slot_speed(soldier), arrival)
+		var speed := _get_idle_formation_slot_speed(soldier)
+		var command_result := _command_soldier_path_target(soldier, desired, speed, arrival)
+		_cache_formation_soldier_target_result(soldier.get_instance_id(), desired, speed, arrival, command_result)
+
+
+func _get_cached_soldier_arrival_target(soldier: Node3D, desired: Vector3) -> Vector3:
+	var soldier_id := soldier.get_instance_id()
+	var cached_variant: Variant = _formation_slot_target_cache.get(soldier_id)
+	if not (cached_variant is Dictionary):
+		return desired
+	var cached := cached_variant as Dictionary
+	if not cached.has("target"):
+		return desired
+	var cached_target: Vector3 = cached.get("target", desired)
+	var target_delta := cached_target - desired
+	target_delta.y = 0.0
+	var epsilon := maxf(formation_slot_target_epsilon_m, 0.05)
+	if target_delta.length_squared() > epsilon * epsilon:
+		return desired
+	if cached.has("reachable") and not bool(cached.get("reachable", true)):
+		return soldier.global_position
+	if cached.has("resolved_destination"):
+		var resolved: Vector3 = cached.get("resolved_destination", desired)
+		resolved.y = soldier.global_position.y
+		return resolved
+	return desired
+
+
+func _cache_formation_soldier_target_result(
+	soldier_id: int,
+	desired: Vector3,
+	speed: float,
+	arrival: float,
+	command_result: Dictionary
+) -> void:
+	_formation_slot_target_cache[soldier_id] = {
+		"target": desired,
+		"resolved_destination": command_result.get("resolved_destination", desired),
+		"speed": speed,
+		"arrival": arrival,
+		"reachable": bool(command_result.get("reachable", false)),
+		"failure_reason": command_result.get("failure_reason", &""),
+	}
 
 
 func _face_soldiers_to_yaw(yaw: float) -> void:
@@ -4166,6 +4261,50 @@ func _snap_world_point(point: Vector3) -> Vector3:
 	if height != null:
 		result.y = float(height)
 	return result
+
+
+func _command_soldier_path_target(
+	soldier: Node,
+	world_position: Vector3,
+	speed_mps: float,
+	arrival_radius_m: float
+) -> Dictionary:
+	var spatial := soldier as Node3D
+	var destination := _snap_world_point(world_position)
+	if spatial:
+		destination.y = spatial.global_position.y
+
+	_load_movement_map()
+	if _movement_map and soldier.has_method("set_independent_path_target"):
+		return soldier.call(
+			"set_independent_path_target",
+			destination,
+			_movement_map,
+			maxf(speed_mps, 0.1),
+			maxf(arrival_radius_m, 0.05),
+			nearest_walkable_search_radius_cells,
+			path_smoothing_enabled,
+			path_corner_radius_cells,
+			path_corner_samples
+		) as Dictionary
+
+	if soldier.has_method("set_independent_move_target"):
+		soldier.call("set_independent_move_target", destination, maxf(speed_mps, 0.1), maxf(arrival_radius_m, 0.05))
+		return {
+			"reachable": true,
+			"failure_reason": &"",
+			"points": [spatial.global_position if spatial else destination, destination],
+			"requested_destination": destination,
+			"resolved_destination": destination,
+		}
+
+	return {
+		"reachable": false,
+		"failure_reason": &"missing_soldier_move_api",
+		"points": [spatial.global_position if spatial else destination],
+		"requested_destination": destination,
+		"resolved_destination": destination,
+	}
 
 
 func _snap_to_surface() -> void:
@@ -4622,6 +4761,7 @@ func _issue_moving_formation_slot_targets(force_refresh: bool = false) -> void:
 		var cached_variant: Variant = _formation_slot_target_cache.get(soldier_id)
 		var cached := cached_variant as Dictionary if cached_variant is Dictionary else {}
 		var target_changed := true
+		var cached_unreachable := cached.has("reachable") and not bool(cached.get("reachable", true))
 		if cached.has("target"):
 			var cached_target: Vector3 = cached.get("target", desired)
 			var target_delta := cached_target - desired
@@ -4631,16 +4771,13 @@ func _issue_moving_formation_slot_targets(force_refresh: bool = false) -> void:
 				or absf(float(cached.get("speed", speed)) - speed) > 0.02
 				or absf(float(cached.get("arrival", arrival)) - arrival) > 0.01
 			)
-		if not force_refresh and not target_changed and has_motion:
+		if not force_refresh and not target_changed and (has_motion or cached_unreachable):
 			_formation_target_skip_count += 1
 			continue
-		if soldier.has_method("set_independent_move_target"):
-			soldier.call("set_independent_move_target", desired, speed, arrival)
-			_formation_slot_target_cache[soldier_id] = {
-				"target": desired,
-				"speed": speed,
-				"arrival": arrival,
-			}
+		var command_result := _command_soldier_path_target(soldier, desired, speed, arrival)
+		var reachable := bool(command_result.get("reachable", false))
+		_cache_formation_soldier_target_result(soldier_id, desired, speed, arrival, command_result)
+		if reachable:
 			_formation_target_write_count += 1
 		else:
 			_formation_target_skip_count += 1
@@ -4705,13 +4842,14 @@ func _issue_idle_formation_targets() -> void:
 		if to_base.length_squared() <= arrival_squared:
 			if soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion")) and soldier.has_method("clear_independent_motion"):
 				soldier.call("clear_independent_motion")
+			_formation_slot_target_cache.erase(soldier.get_instance_id())
 			continue
 
 		var speed := _get_idle_formation_slot_speed(soldier)
 		var desired := base_desired
-		if soldier.has_method("set_independent_move_target"):
-			soldier.call("set_independent_move_target", desired, speed, arrival)
-		else:
+		var command_result := _command_soldier_path_target(soldier, desired, speed, arrival)
+		_cache_formation_soldier_target_result(soldier.get_instance_id(), desired, speed, arrival, command_result)
+		if not bool(command_result.get("reachable", false)) and not (soldier.has_method("set_independent_path_target") or soldier.has_method("set_independent_move_target")):
 			var to_desired := desired - soldier.global_position
 			to_desired.y = 0.0
 			if to_desired.length() > arrival:
@@ -4750,7 +4888,9 @@ func _idle_formation_needs_refresh() -> bool:
 		var soldier := soldier_node as Node3D
 		var slot: Vector3 = soldier.get_meta(&"troop_formation_slot", Vector3.ZERO)
 		var desired := _snap_world_point(_formation_slot_to_world(slot))
-		var offset := soldier.global_position - desired
+		desired.y = soldier.global_position.y
+		var arrival_target := _get_cached_soldier_arrival_target(soldier, desired)
+		var offset := soldier.global_position - arrival_target
 		offset.y = 0.0
 		if offset.length_squared() > 0.09:
 			return true
@@ -6339,7 +6479,7 @@ func _move_combat_soldier_toward(soldier: Node3D, defender: Node3D, desired_glob
 	var to_desired := desired - current
 	to_desired.y = 0.0
 	var distance := to_desired.length()
-	if soldier.has_method("set_independent_move_target"):
+	if soldier.has_method("set_independent_path_target") or soldier.has_method("set_independent_move_target"):
 		var arrival := clampf(maxf(combat_socket_arrival_radius, 0.05) * 0.55, 0.18, maxf(combat_socket_arrival_radius, 0.05))
 		var speed := _get_combat_slot_follow_speed_for_frame()
 		var key := soldier.get_instance_id()
@@ -6353,21 +6493,26 @@ func _move_combat_soldier_toward(soldier: Node3D, defender: Node3D, desired_glob
 			delta_to_cached.y = 0.0
 			var epsilon := maxf(arrival * 0.45, 0.12)
 			var has_motion := soldier.has_method("has_independent_motion") and bool(soldier.call("has_independent_motion"))
+			var cached_unreachable := cached.has("reachable") and not bool(cached.get("reachable", true))
 			should_write = (
 				delta_to_cached.length_squared() > epsilon * epsilon
 				or absf(float(cached.get("speed", speed)) - speed) > 0.02
 				or absf(float(cached.get("arrival", arrival)) - arrival) > 0.01
-				or (not has_motion and distance > arrival)
+				or (not has_motion and not cached_unreachable and distance > arrival)
 			)
 		if should_write:
-			soldier.call("set_independent_move_target", desired, speed, arrival)
+			var command_result := _command_soldier_path_target(soldier, desired, speed, arrival)
+			var reachable := bool(command_result.get("reachable", false))
 			_combat_soldier_move_targets[key] = {
 				"target": desired,
+				"resolved_destination": command_result.get("resolved_destination", desired),
 				"speed": speed,
 				"arrival": arrival,
 				"target_id": target_id,
+				"reachable": reachable,
+				"failure_reason": command_result.get("failure_reason", &""),
 			}
-			if soldier.has_method("set_combat_focus_target"):
+			if reachable and soldier.has_method("set_combat_focus_target"):
 				soldier.call("set_combat_focus_target", defender)
 	elif distance > 0.001:
 		var max_step := _get_combat_slot_follow_speed_for_frame() * minf(maxf(delta, 0.0), 0.05)
@@ -9443,9 +9588,20 @@ func _return_carrier_soldier_to_formation(soldier: Node3D) -> void:
 	soldier.top_level = true
 	soldier.global_transform = previous_transform
 	var slot: Vector3 = soldier.get_meta(&"troop_formation_slot", Vector3.ZERO)
-	if soldier.has_method("set_independent_move_target"):
-		soldier.call("set_independent_move_target", _formation_slot_to_world(slot), _get_idle_formation_slot_speed(soldier), maxf(arrival_radius * 0.32, 0.18))
-	else:
+	var return_result := _command_soldier_path_target(
+		soldier,
+		_formation_slot_to_world(slot),
+		_get_idle_formation_slot_speed(soldier),
+		maxf(arrival_radius * 0.32, 0.18)
+	)
+	_cache_formation_soldier_target_result(
+		soldier.get_instance_id(),
+		_formation_slot_to_world(slot),
+		_get_idle_formation_slot_speed(soldier),
+		maxf(arrival_radius * 0.32, 0.18),
+		return_result
+	)
+	if not bool(return_result.get("reachable", false)):
 		_update_formation_soldier_slots(0.0)
 	_track_soldier_mutation_signals(soldier)
 	_invalidate_soldier_cache()

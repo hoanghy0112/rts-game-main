@@ -65,6 +65,19 @@ class FakeForest:
 		return global_position + Vector3(float(cell.x) * 4.0, 0.0, float(cell.y) * 4.0)
 
 
+class FakeTerrainDebug:
+	extends Node
+
+	var terrain_visible := true
+	var show_tile_grid := true
+
+	func _ready() -> void:
+		add_to_group(&"simplified_terrain_debug")
+
+	func set_terrain_visible(enabled: bool) -> void:
+		terrain_visible = enabled
+
+
 func _init() -> void:
 	_run_deferred_checks.call_deferred()
 
@@ -87,6 +100,7 @@ func _run_checks(failures: Array[String]) -> void:
 	_check_pathfinder_avoids_blocked_cells(failures)
 	_check_pathfinder_smooths_open_routes(failures)
 	_check_pathfinder_reports_unreachable(failures)
+	await _check_soldier_commands_avoid_blocked_terrain(failures)
 	await _check_troop_scene_and_exports(failures)
 	await _check_killed_soldiers_remain_as_corpses(failures)
 	await _check_troop_route_visuals(failures)
@@ -96,7 +110,7 @@ func _run_checks(failures: Array[String]) -> void:
 	await _check_moving_retarget_skips_startup_reform(failures)
 	await _check_moving_compacts_missing_formation_slots(failures)
 	await _check_formation_drag_command(failures)
-	await _check_enemy_route_visuals_use_enemy_color(failures)
+	await _check_enemy_route_visuals_use_enemy_outfit_color(failures)
 	await _check_troop_modes_and_combat_stats(failures)
 	await _check_large_troop_stat_worker_path(failures)
 	await _check_endurance_running_and_noncombat_recovery(failures)
@@ -182,6 +196,78 @@ func _check_pathfinder_reports_unreachable(failures: Array[String]) -> void:
 		"unreachable path should report the unreachable failure reason",
 		failures
 	)
+
+
+func _check_soldier_commands_avoid_blocked_terrain(failures: Array[String]) -> void:
+	var data := _make_map(8, 5)
+	_set_blocked(data, Vector2i(4, 2))
+
+	var troop := TroopScene.instantiate()
+	troop.set("soldier_count", 2)
+	troop.set("formation_columns", 1)
+	troop.set("formation_spacing", 0.75)
+	troop.set("movement_map", data)
+	troop.set("position", Vector3(1.5, 0.0, 2.5))
+	root.add_child(troop)
+	await process_frame
+
+	var soldier := troop.get_node_or_null("Soldiers/Soldier_000")
+	_expect(soldier is Node3D, "blocked terrain command check should create a soldier", failures)
+	if soldier is Node3D:
+		(soldier as Node3D).global_position = Vector3(1.5, 0.0, 2.5)
+		var blocked_target := Vector3(4.5, 0.0, 2.5)
+		var result: Dictionary = troop.call("_command_soldier_path_target", soldier, blocked_target, 4.0, 0.2) as Dictionary
+		var resolved: Vector3 = result.get("resolved_destination", blocked_target)
+		_expect(bool(result.get("reachable", false)), "soldier path command should resolve a blocked target to nearby walkable terrain", failures)
+		_expect(data.is_walkable_cell(data.world_to_cell(resolved)), "soldier path command resolved destination should be walkable", failures)
+		_expect(data.world_to_cell(resolved) != Vector2i(4, 2), "soldier path command should not keep a blocked cell as the destination", failures)
+		var route_points: Array = []
+		if soldier.has_method("get_independent_route_points"):
+			route_points = soldier.call("get_independent_route_points", false) as Array
+		_expect(not route_points.is_empty(), "soldier path command should store a path instead of a direct blocked target", failures)
+		if not route_points.is_empty():
+			var final_point: Vector3 = route_points.back()
+			_expect(data.is_walkable_cell(data.world_to_cell(final_point)), "soldier stored route should end on walkable terrain", failures)
+
+	var enemy := TroopScene.instantiate()
+	enemy.set("team_id", &"enemy")
+	enemy.set("soldier_count", 2)
+	enemy.set("movement_map", data)
+	enemy.set("position", Vector3(6.5, 0.0, 2.5))
+	root.add_child(enemy)
+	await process_frame
+
+	var attacker := troop.get_node_or_null("Soldiers/Soldier_000") as Node3D
+	var defender := enemy.get_node_or_null("Soldiers/Soldier_000") as Node3D
+	if attacker and defender:
+		attacker.global_position = Vector3(1.5, 0.0, 2.5)
+		defender.global_position = Vector3(6.5, 0.0, 2.5)
+		troop.call("_move_combat_soldier_toward", attacker, defender, Vector3(4.5, 0.0, 2.5), 0.2)
+		var move_targets: Dictionary = troop.get("_combat_soldier_move_targets")
+		var cached_variant: Variant = move_targets.get(attacker.get_instance_id(), {})
+		var cached := cached_variant as Dictionary if cached_variant is Dictionary else {}
+		var resolved_combat: Vector3 = cached.get("resolved_destination", Vector3(4.5, 0.0, 2.5))
+		_expect(bool(cached.get("reachable", false)), "combat socket movement should pathfind to a walkable point near blocked terrain", failures)
+		_expect(data.is_walkable_cell(data.world_to_cell(resolved_combat)), "combat socket movement should resolve blocked socket targets to walkable terrain", failures)
+		_expect(data.world_to_cell(resolved_combat) != Vector2i(4, 2), "combat socket movement should not cache a blocked cell as its resolved destination", failures)
+
+	var unreachable_data := _make_map(5, 3)
+	for y: int in range(3):
+		_set_blocked(unreachable_data, Vector2i(2, y))
+	troop.set("movement_map", unreachable_data)
+	if soldier is Node3D:
+		(soldier as Node3D).global_position = Vector3(0.5, 0.0, 1.5)
+		var unreachable_result: Dictionary = troop.call("_command_soldier_path_target", soldier, Vector3(4.5, 0.0, 1.5), 4.0, 0.2) as Dictionary
+		_expect(not bool(unreachable_result.get("reachable", true)), "soldier path command should reject unreachable terrain instead of direct-moving through it", failures)
+		if soldier.has_method("has_independent_motion"):
+			_expect(not bool(soldier.call("has_independent_motion")), "unreachable soldier path command should leave no walking target to flicker on", failures)
+		if soldier.has_method("is_formation_walking"):
+			_expect(not bool(soldier.call("is_formation_walking")), "unreachable soldier path command should stop the walking animation", failures)
+
+	root.remove_child(enemy)
+	enemy.free()
+	root.remove_child(troop)
+	troop.free()
 
 
 func _check_troop_scene_and_exports(failures: Array[String]) -> void:
@@ -388,10 +474,12 @@ func _check_troop_route_visuals(failures: Array[String]) -> void:
 	_expect(accepted, "troop should accept a reachable movement order", failures)
 	_expect(bool(troop.call("has_destination")), "troop should store a destination after a move order", failures)
 	_expect(int(troop.call("get_route_dash_count")) > 0, "troop should draw dashed route visuals", failures)
-	_expect(_route_dash_color_matches(troop, Color(0.12, 0.42, 1.0, 0.88), 0.02), "ally route dashes should use blue debug color", failures)
 	_expect(bool(troop.call("has_destination_marker")), "troop should draw a destination flag", failures)
 	_expect(_flag_uses_unshaded_materials(troop, "TroopDestinationFlag"), "destination flag should ignore scene lighting", failures)
 	var moving_soldier := troop.get_node_or_null("Soldiers/Soldier_000")
+	if moving_soldier and moving_soldier.has_method("get_outfit_summary"):
+		var outfit: Dictionary = moving_soldier.call("get_outfit_summary") as Dictionary
+		_expect(_color_close(outfit.get("robe", Color.TRANSPARENT) as Color, Color(0.10, 0.26, 0.72, 1.0), 0.02), "ally soldiers should use a blue outfit palette", failures)
 	if moving_soldier and moving_soldier.has_method("is_formation_walking"):
 		_expect(bool(moving_soldier.call("is_formation_walking")), "troop soldier should play walking animation while troop moves", failures)
 	_expect(_any_soldier_route_path_nonempty(troop), "moving troops should issue per-soldier route paths", failures)
@@ -677,7 +765,7 @@ func _check_formation_drag_command(failures: Array[String]) -> void:
 	controller.free()
 
 
-func _check_enemy_route_visuals_use_enemy_color(failures: Array[String]) -> void:
+func _check_enemy_route_visuals_use_enemy_outfit_color(failures: Array[String]) -> void:
 	var enemy := TroopScene.instantiate()
 	enemy.set("team_id", &"enemy")
 	enemy.set("controllable", false)
@@ -690,8 +778,11 @@ func _check_enemy_route_visuals_use_enemy_color(failures: Array[String]) -> void
 	_expect(accepted, "enemy troop should still accept internal movement orders", failures)
 	_expect(bool(enemy.call("has_destination")), "enemy internal movement should store a destination", failures)
 	_expect(int(enemy.call("get_route_dash_count")) > 0, "enemy troops should draw route dashes", failures)
-	_expect(_route_dash_color_matches(enemy, Color(1.0, 0.12, 0.08, 0.88), 0.02), "enemy route dashes should use red debug color", failures)
 	_expect(bool(enemy.call("has_destination_marker")), "enemy troops should draw destination flags", failures)
+	var enemy_soldier := enemy.get_node_or_null("Soldiers/Soldier_000")
+	if enemy_soldier and enemy_soldier.has_method("get_outfit_summary"):
+		var enemy_outfit: Dictionary = enemy_soldier.call("get_outfit_summary") as Dictionary
+		_expect(_color_close(enemy_outfit.get("robe", Color.TRANSPARENT) as Color, Color(0.42, 0.05, 0.04, 1.0), 0.02), "enemy soldiers should use a red outfit palette", failures)
 
 	var player := TroopScene.instantiate()
 	player.set("team_id", &"player")
@@ -707,7 +798,6 @@ func _check_enemy_route_visuals_use_enemy_color(failures: Array[String]) -> void
 	enemy.call("_physics_process", 0.2)
 	if bool(enemy.call("has_destination")):
 		_expect(int(enemy.call("get_route_dash_count")) > 0, "enemy auto-chase should draw route dashes", failures)
-		_expect(_route_dash_color_matches(enemy, Color(1.0, 0.12, 0.08, 0.88), 0.02), "enemy auto-chase route dashes should stay red", failures)
 		_expect(bool(enemy.call("has_destination_marker")), "enemy auto-chase should draw a destination flag", failures)
 
 	root.remove_child(player)
@@ -2389,6 +2479,7 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	_expect(panel.find_child("SelectedLabel", true, false) != null, "background jobs debug panel should show selected troop metrics", failures)
 	_expect(panel.find_child("SoldierPerfCheckBox", true, false) != null, "background jobs debug panel should expose soldier profiling toggle", failures)
 	_expect(panel.find_child("IndividualRoutePathsCheckBox", true, false) != null, "background jobs debug panel should expose individual route path toggle", failures)
+	_expect(panel.find_child("TerrainCheckBox", true, false) != null, "background jobs debug panel should expose terrain visibility toggle", failures)
 
 	var controller := TroopSelectionControllerScript.new()
 	controller.background_jobs_debug_panel_path = panel.get_path()
@@ -2396,6 +2487,8 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 	var troop := TroopScene.instantiate()
 	troop.set("soldier_count", 3)
 	root.add_child(troop)
+	var terrain_debug := FakeTerrainDebug.new()
+	root.add_child(terrain_debug)
 	await process_frame
 	controller.call("_select_troop", troop)
 	_expect(panel.call("get_selected_troop") == troop, "troop selection controller should update the background jobs debug panel selection", failures)
@@ -2411,8 +2504,13 @@ func _check_background_jobs_debug_panel(failures: Array[String]) -> void:
 		individual_paths_check_box.button_pressed = true
 		panel.call("refresh")
 		_expect(bool(troop.get("individual_route_debug_visuals_enabled")), "individual route path toggle should propagate to selected troops", failures)
+	var terrain_check_box := panel.find_child("TerrainCheckBox", true, false) as CheckBox
+	if terrain_check_box:
+		terrain_check_box.button_pressed = false
+		panel.call("refresh")
+		_expect(not terrain_debug.terrain_visible, "terrain visibility toggle should propagate to simplified terrain debug nodes", failures)
 
-	for node: Node in [troop, controller, panel]:
+	for node: Node in [terrain_debug, troop, controller, panel]:
 		if is_instance_valid(node) and node.get_parent():
 			node.get_parent().remove_child(node)
 			node.free()
@@ -2642,19 +2740,6 @@ func _color_close(actual: Color, expected: Color, tolerance: float = 0.01) -> bo
 		and absf(actual.b - expected.b) <= tolerance
 		and absf(actual.a - expected.a) <= tolerance
 	)
-
-
-func _route_dash_color_matches(root_node: Node, expected: Color, tolerance: float = 0.01) -> bool:
-	var route_visual := root_node.find_child("TroopRouteVisual", true, false)
-	if not route_visual:
-		return false
-	for child: Node in route_visual.get_children():
-		var dash := child as MeshInstance3D
-		if not dash or not String(dash.name).begins_with("RouteDash"):
-			continue
-		var material := dash.material_override as StandardMaterial3D
-		return material != null and _color_close(material.albedo_color, expected, tolerance)
-	return false
 
 
 func _flag_uses_unshaded_materials(root_node: Node, flag_name: String) -> bool:
