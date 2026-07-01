@@ -21,7 +21,7 @@ const CORPSE_SPEAR_SCALE := Vector3(1.25, 1.0, 1.25)
 
 @export_group("Formation Visual")
 @export var formation_visual_only := true
-@export_range(0.1, 4.0, 0.05, "or_greater") var formation_walk_animation_scale: float = 1.0
+@export_range(0.1, 4.0, 0.05, "or_greater") var formation_walk_animation_scale: float = 0.6666667
 @export_range(0.05, 1.5, 0.01, "or_greater") var standing_fighting_transition_seconds: float = 0.16
 @export_range(0.1, 3.0, 0.01, "or_greater") var standing_dead_transition_seconds: float = 1.42
 @export_range(0.0, 2.0, 0.01) var death_spear_release_seconds: float = 0.0

@@ -1,4 +1,4 @@
-[gd_resource type="AnimationLibrary" format=3]
+[gd_resource type="AnimationLibrary" format=3 uid="uid://cid0r2oetvm64"]
 
 [sub_resource type="Animation" id="Animation_xpfwt"]
 resource_name = "Standing-Dead"
@@ -244,7 +244,7 @@ tracks/33/keys = {
 "times": PackedFloat32Array(0, 0.16, 0.34, 0.58, 0.86, 1.12, 1.42),
 "transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1),
 "update": 0,
-"values": [Vector3(0, 0.05, 0), Vector3(-0.014, 0.055, -0.012), Vector3(0.028, 0.10, -0.055), Vector3(0.045, 0.24, -0.18), Vector3(0.032, 0.42, -0.34), Vector3(0.018, 0.515, -0.43), Vector3(0.012, 0.515, -0.45)]
+"values": [Vector3(0, 0.05, 0), Vector3(-0.014, 0.055, -0.012), Vector3(0.028, 0.1, -0.055), Vector3(0.045, 0.24, -0.18), Vector3(0.032, 0.42, -0.34), Vector3(0.018, 0.515, -0.43), Vector3(0.012, 0.515, -0.45)]
 }
 tracks/34/type = "value"
 tracks/34/imported = false
